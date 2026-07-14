@@ -1,0 +1,76 @@
+Method,Dataset,Setting,K,Metric,Mean ± SD,95% CI Low,95% CI High,Median,Min,Max,n,Seeds
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Mean Seen Accuracy,75.76 ± 1.40,74.03,77.50,75.86,73.90,77.41,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Min Seen Accuracy,70.80 ± 0.78,69.83,71.76,71.10,69.43,71.33,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Final Taskwise Accuracy,74.31 ± 1.24,72.78,75.85,74.75,72.84,75.89,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Forgetting,8.43 ± 0.94,7.26,9.61,8.19,7.50,9.87,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Macro-F1,67.48 ± 0.74,66.57,68.39,67.81,66.38,68.19,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Weighted-F1,71.32 ± 0.72,70.43,72.21,71.44,70.15,72.02,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Balanced Accuracy,83.48 ± 0.60,82.74,84.22,83.38,82.86,84.45,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Old-Class Accuracy,70.94 ± 0.16,70.74,71.14,70.88,70.82,71.22,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,New-Class Accuracy,73.11 ± 18.36,50.32,95.90,79.96,42.36,90.04,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Plasticity-Stability Gap,2.17 ± 18.29,-20.54,24.87,9.14,-28.52,18.81,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,MMD,0.0013 ± 0.0005,0.0007,0.0020,0.0012,0.0008,0.0022,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Wasserstein,0.0383 ± 0.0052,0.0318,0.0447,0.0361,0.0340,0.0465,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Memory MB,637.1 ± 0.0,637.1,637.1,637.1,637.1,637.1,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,GPU Peak MB,3065.9 ± 83.1,2962.7,3169.2,3085.3,2927.3,3146.4,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final best performance,200,Elapsed Minutes,22.4 ± 0.3,22.0227,22.6872,22.2456,22.1341,22.8122,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Mean Seen Accuracy,68.92 ± 0.54,68.24,69.59,68.91,68.24,69.73,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Min Seen Accuracy,58.95 ± 1.46,57.14,60.76,59.80,56.70,60.14,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Final Taskwise Accuracy,64.22 ± 2.84,60.69,67.76,65.16,60.97,67.13,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Forgetting,19.94 ± 3.14,16.04,23.83,19.77,17.05,25.04,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Macro-F1,56.85 ± 0.51,56.22,57.47,57.03,56.15,57.45,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Weighted-F1,58.54 ± 1.41,56.80,60.29,59.17,56.38,59.95,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Balanced Accuracy,76.01 ± 1.37,74.32,77.71,76.06,73.99,77.72,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Old-Class Accuracy,58.34 ± 1.30,56.73,59.95,58.56,56.73,59.60,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,New-Class Accuracy,73.60 ± 16.97,52.52,94.67,77.68,45.87,90.80,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Plasticity-Stability Gap,15.26 ± 16.38,-5.08,35.60,20.95,-11.41,31.29,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,MMD,0.0043 ± 0.0032,0.0003,0.0084,0.0029,0.0023,0.0101,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Wasserstein,0.0480 ± 0.0101,0.0354,0.0606,0.0459,0.0404,0.0656,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Memory MB,544.4 ± 0.0,544.4,544.4,544.4,544.4,544.4,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,GPU Peak MB,4876.4 ± 946.1,3701.6,6051.2,4433.1,4387.2,6560.7,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,az_class,final memory efficient,100,Elapsed Minutes,14.1 ± 0.3,13.7178,14.4879,14.1762,13.5657,14.3607,5,"42,43,44,45,46"
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Mean Seen Accuracy,75.18 (n=1),,,75.18,75.18,75.18,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Min Seen Accuracy,55.41 (n=1),,,55.41,55.41,55.41,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Final Taskwise Accuracy,60.82 (n=1),,,60.82,60.82,60.82,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Forgetting,30.10 (n=1),,,30.10,30.10,30.10,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Macro-F1,49.50 (n=1),,,49.50,49.50,49.50,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Weighted-F1,55.35 (n=1),,,55.35,55.35,55.35,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Balanced Accuracy,60.98 (n=1),,,60.98,60.98,60.98,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Old-Class Accuracy,54.54 (n=1),,,54.54,54.54,54.54,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,New-Class Accuracy,89.89 (n=1),,,89.89,89.89,89.89,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Plasticity-Stability Gap,35.35 (n=1),,,35.35,35.35,35.35,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,MMD,0.0062 (n=1),,,0.0062,0.0062,0.0062,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Wasserstein,0.0644 (n=1),,,0.0644,0.0644,0.0644,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Memory MB,440.9 (n=1),,,440.9,440.9,440.9,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,GPU Peak MB,4351.5 (n=1),,,4351.5,4351.5,4351.5,1,42
+ahr_malcl_v15_1_final_paper_critic2_ember_k25,ember,final memory efficient,25,Elapsed Minutes,7.7 (n=1),,,7.6916,7.6916,7.6916,1,42
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Mean Seen Accuracy,83.70 ± 0.67,82.87,84.53,83.40,83.12,84.69,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Min Seen Accuracy,79.40 ± 0.41,78.89,79.91,79.52,78.95,79.83,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Final Taskwise Accuracy,79.76 ± 1.42,78.00,81.53,79.74,78.18,81.35,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Forgetting,8.38 ± 1.15,6.95,9.81,8.13,7.07,9.59,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Macro-F1,72.68 ± 0.59,71.95,73.41,72.78,71.74,73.38,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Weighted-F1,80.84 ± 0.63,80.06,81.62,80.79,80.04,81.64,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Balanced Accuracy,79.51 ± 0.30,79.13,79.89,79.63,79.07,79.79,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Old-Class Accuracy,79.40 ± 0.59,78.68,80.13,79.63,78.66,80.09,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,New-Class Accuracy,82.12 ± 7.91,72.30,91.95,82.67,74.58,93.54,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Plasticity-Stability Gap,2.72 ± 8.29,-7.58,13.02,4.01,-5.33,14.60,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,MMD,0.0025 ± 0.0011,0.0012,0.0039,0.0025,0.0010,0.0038,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Wasserstein,0.0496 ± 0.0099,0.0373,0.0619,0.0476,0.0375,0.0614,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Memory MB,531.8 ± 0.0,531.8,531.8,531.8,531.8,531.8,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,GPU Peak MB,3029.2 ± 42.3,2976.7,3081.7,3047.7,2974.8,3074.2,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final best performance,100,Elapsed Minutes,15.1 ± 0.3,14.7303,15.5036,15.0924,14.7184,15.5825,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Mean Seen Accuracy,73.81 ± 1.74,71.64,75.97,74.03,71.19,76.09,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Min Seen Accuracy,59.13 ± 3.35,54.96,63.29,60.29,53.23,61.39,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Final Taskwise Accuracy,66.98 ± 0.98,65.75,68.20,66.60,65.83,68.16,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Forgetting,25.02 ± 0.60,24.28,25.76,25.19,24.37,25.67,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Macro-F1,51.39 ± 1.56,49.46,53.33,51.69,48.97,52.75,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Weighted-F1,58.67 ± 2.80,55.19,62.14,59.53,53.97,61.10,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Balanced Accuracy,62.54 ± 1.54,60.63,64.45,61.99,61.16,65.18,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Old-Class Accuracy,57.90 ± 3.19,53.93,61.87,59.44,52.53,60.49,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,New-Class Accuracy,86.79 ± 5.74,79.66,93.92,86.41,80.44,95.01,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Plasticity-Stability Gap,28.89 ± 4.91,22.79,34.99,29.86,21.00,34.52,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,MMD,0.0079 ± 0.0024,0.0050,0.0108,0.0071,0.0056,0.0115,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Wasserstein,0.0640 ± 0.0060,0.0565,0.0715,0.0602,0.0596,0.0734,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Memory MB,463.7 ± 0.0,463.7,463.7,463.7,463.7,463.7,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,GPU Peak MB,4796.3 ± 1091.4,3441.2,6151.4,4276.9,4276.9,6746.0,5,"42,43,44,45,46"
+AHR-MalCL-HR / hybrid_random_buffer,ember,final memory efficient,25,Elapsed Minutes,13.4 ± 0.3,12.9508,13.7692,13.5530,12.9831,13.6452,5,"42,43,44,45,46"

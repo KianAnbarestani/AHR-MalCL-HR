@@ -1,0 +1,15 @@
+dataset,k,reference_method,method,reference_seeds,method_seeds,n_reference,n_method,matches_reference
+az_class,100,hybrid_random_buffer,classifier_real_only,"42,43,44,45,46","42,43,44,45,46",5,5,True
+az_class,100,hybrid_random_buffer,hybrid_diversity_buffer,"42,43,44,45,46","42,43,44,45,46",5,5,True
+az_class,100,hybrid_random_buffer,hybrid_random_buffer,"42,43,44,45,46","42,43,44,45,46",5,5,True
+az_class,100,hybrid_random_buffer,malcl_like,"42,43,44,45,46","42,43,44,45,46",5,5,True
+az_class,100,hybrid_random_buffer,plus_kd,"42,43,44,45,46","42,43,44,45,46",5,5,True
+az_class,100,hybrid_random_buffer,real_buffer_only,"42,43,44,45,46","42,43,44,45,46",5,5,True
+az_class,100,hybrid_random_buffer,wgan_projection_generated_only,"42,43,44,45,46","42,43,44,45,46",5,5,True
+ember,25,hybrid_random_buffer,classifier_real_only,"42,43,44,45,46","42,43,44,45,46",5,5,True
+ember,25,hybrid_random_buffer,hybrid_diversity_buffer,"42,43,44,45,46","42,43,44,45,46",5,5,True
+ember,25,hybrid_random_buffer,hybrid_random_buffer,"42,43,44,45,46","42,43,44,45,46",5,5,True
+ember,25,hybrid_random_buffer,malcl_like,"42,43,44,45,46","42,43,44,45,46",5,5,True
+ember,25,hybrid_random_buffer,plus_kd,"42,43,44,45,46","42,43,44,45,46",5,5,True
+ember,25,hybrid_random_buffer,real_buffer_only,"42,43,44,45,46","42,43,44,45,46",5,5,True
+ember,25,hybrid_random_buffer,wgan_projection_generated_only,"42,43,44,45,46","42,43,44,45,46",5,5,True

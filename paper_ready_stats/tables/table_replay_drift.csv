@@ -1,0 +1,3 @@
+dataset,k,n,methods,seeds,mean_acc_seen,final_taskwise_average_accuracy,forgetting,mmd_real_generated,wasserstein_real_generated,memory_MB,mmd_reduction_vs_k0_percent,wasserstein_reduction_vs_k0_percent
+ember,0,1,replay_drift_k0_no_anchor,42,0.4534795904198438,0.4444599835909333,0.5452073788799454,0.0619820356369018,0.2068850398063659,418.216911315918,0.0,0.0
+ember,25,1,replay_drift_k25_anchor,42,0.7678809302878515,0.6733258872535863,0.2354564947913147,0.0064382553100585,0.0653297901153564,440.9429702758789,89.61270754678893,68.42217775799458

@@ -1,0 +1,4 @@
+| Method | Dataset | Setting | K | Mean Seen Accuracy | Final Taskwise Accuracy | Forgetting | Macro-F1 | Weighted-F1 | Balanced Accuracy | Old-Class Accuracy | New-Class Accuracy | MMD | Wasserstein | Memory MB | Paper Use Note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | final memory efficient | 100 | 68.92 ± 0.54 | 64.22 ± 2.84 | 19.94 ± 3.14 | 56.85 ± 0.51 | 58.54 ± 1.41 | 76.01 ± 1.37 | 58.34 ± 1.30 | 73.60 ± 16.97 | 0.0043 ± 0.0032 | 0.0480 ± 0.0101 | 544.4 ± 0.0 | Not used as final AHR-MalCL-HR main results because config flags differ. |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | final memory efficient | 25 | 73.81 ± 1.74 | 66.98 ± 0.98 | 25.02 ± 0.60 | 51.39 ± 1.56 | 58.67 ± 2.80 | 62.54 ± 1.54 | 57.90 ± 3.19 | 86.79 ± 5.74 | 0.0079 ± 0.0024 | 0.0640 ± 0.0060 | 463.7 ± 0.0 | Not used as final AHR-MalCL-HR main results because config flags differ. |

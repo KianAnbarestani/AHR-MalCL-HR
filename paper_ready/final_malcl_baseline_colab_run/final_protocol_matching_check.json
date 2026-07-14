@@ -1,0 +1,90 @@
+{
+  "decision": "PROTOCOL_MATCHED_WITH_DOCUMENTED_DEVIATIONS",
+  "protocol_matched": true,
+  "exact_official_malcl_reproduction": false,
+  "recommended_label": "protocol-matched adapted MalCL baseline",
+  "checked_at": "2026-07-03",
+  "scope": [
+    "paper_ready/final_malcl_baseline_colab_run/",
+    "paper_ready/phase9a_malcl_reproduction_design/external_code/MalCL_official/",
+    "paper_ready/phase9c_malcl_real_limited_pilot_outputs_colab/",
+    "paper_ready/phase9d_malcl_one_seed_pilot/",
+    "result_external_baselines/",
+    "result/"
+  ],
+  "dataset_protocol": {
+    "status": "pass_with_runtime_validation",
+    "ember": {
+      "expected_train_shape": [303331, 2381],
+      "expected_test_shape": [33704, 2381],
+      "feature_dim": 2381,
+      "labels": "0-99",
+      "num_classes": 100
+    },
+    "az_class": {
+      "expected_train_shape": [257023, 2439],
+      "expected_test_shape": [28559, 2439],
+      "feature_dim": 2439,
+      "labels": "0-99",
+      "num_classes": 100
+    },
+    "local_npz_reloaded_in_this_audit": false,
+    "runtime_validation_before_training": true
+  },
+  "task_protocol": {
+    "status": "pass",
+    "task_count": 11,
+    "classes_per_task": [50, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+    "evaluation_after_each_task_on_seen_classes": true
+  },
+  "seed_protocol": {
+    "status": "pass",
+    "seeds": [42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
+    "datasets": ["EMBER", "AZ-Class"],
+    "runs_per_dataset": 10,
+    "total_runs": 20
+  },
+  "class_order_protocol": {
+    "status": "pass",
+    "rule": "numpy.random.RandomState(seed).permutation(100)",
+    "seed_42_first_10_expected": [83, 53, 70, 45, 44, 39, 22, 80, 10, 0],
+    "seed_42_first_10_validated_by_final_runner": true,
+    "phase9c_status": "limited pilot, superseded, wrong class order",
+    "phase9d_status": "one-seed pilot matched AHR class order"
+  },
+  "training_protocol": {
+    "status": "pass_after_3_epoch_patch",
+    "epochs_per_task": 3,
+    "epoch_control": "single shared MALCL_EPOCHS",
+    "separate_gan_classifier_epoch_controls": false,
+    "gan_and_classifier_follow_epoch_setting": true,
+    "batch_size": 256,
+    "generator_loss": "FML",
+    "sample_selection": "L1_C_Mean",
+    "k": 3,
+    "replay_refresh_every_batch": true
+  },
+  "malcl_faithfulness": {
+    "status": "documented_deviations",
+    "label": "protocol-matched adapted MalCL baseline",
+    "deviations": [
+      "feature_dim parameterization for EMBER and AZ-Class",
+      "T4-safe discriminator adaptive pooling head",
+      "parameterized classifier and explicit softmax dimension handling",
+      "adapted/reimplemented replay and sample selection integration",
+      "protocol-specific consolidated task loop and update-order differences from official train.py"
+    ]
+  },
+  "main_blockers": [],
+  "main_caveats": [
+    "Not an exact official MalCL reproduction",
+    "Local large dataset files were not directly reloaded in this audit; final runner validates them before training",
+    "Phase 9C pilot is not final evidence and is superseded by corrected Phase 9D/final runner evidence",
+    "One stale helper path has an old AZ-Class feature dimension and should not be used as final authority"
+  ],
+  "created_reports": [
+    "paper_ready/final_malcl_baseline_colab_run/reports/FINAL_PROTOCOL_MATCHING_CHECK.md",
+    "paper_ready/final_malcl_baseline_colab_run/reports/FINAL_PROTOCOL_DEVIATION_TABLE.csv",
+    "paper_ready/final_malcl_baseline_colab_run/final_protocol_matching_check.json"
+  ]
+}

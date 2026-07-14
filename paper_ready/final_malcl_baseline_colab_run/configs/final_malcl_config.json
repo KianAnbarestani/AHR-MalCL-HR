@@ -1,0 +1,78 @@
+{
+  "class_order_rule": "numpy.random.RandomState(seed).permutation(100)",
+  "datasets": [
+    "EMBER",
+    "AZ-Class"
+  ],
+  "expected_shapes": {
+    "AZ-Class": {
+      "test": [
+        28559,
+        2439
+      ],
+      "train": [
+        257023,
+        2439
+      ]
+    },
+    "EMBER": {
+      "test": [
+        33704,
+        2381
+      ],
+      "train": [
+        303331,
+        2381
+      ]
+    }
+  },
+  "feature_dims": {
+    "AZ-Class": 2439,
+    "EMBER": 2381
+  },
+  "method": "MalCL",
+  "mode": "final_protocol_matched_malcl_baseline",
+  "num_classes": 100,
+  "num_tasks": 11,
+  "official_malcl_commit": "2cfb344461f594877e24fd4d19919b6bca38c861",
+  "seeds": [
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51
+  ],
+  "task_sizes": [
+    50,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5
+  ],
+  "training": {
+    "allow_subsampling": false,
+    "batch_size": 256,
+    "discriminator_t4_safe_pooled_head": true,
+    "epochs": 3,
+    "fast_debug": false,
+    "generator_loss": "FML",
+    "k": 3,
+    "print_training_progress": true,
+    "progress_every_n_batches": 25,
+    "sample_select": "L1_C_Mean",
+    "tqdm_mininterval": 2.0,
+    "use_tqdm_progress": true,
+    "z_dim": 62
+  }
+}

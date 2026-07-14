@@ -1,0 +1,15 @@
+{
+  "created_locally": true,
+  "decision": "COLAB_RUN_NOT_EXECUTED_LOCALLY",
+  "expected_colab_decisions": [
+    "MALCL_BASELINE_COMPLETE_READY_FOR_REVIEW",
+    "MALCL_BASELINE_PARTIAL_NEEDS_RESUME",
+    "MALCL_BASELINE_NOT_VALID_PATCH_REQUIRED"
+  ],
+  "expected_runs": 20,
+  "local_note": "This file is package metadata only. The Colab runner overwrites it with the real aggregate MalCL baseline summary after validation and execution.",
+  "one_cell_path": "paper_ready/final_malcl_baseline_colab_run/final_malcl_baseline_colab_one_cell.py",
+  "output_folder": "paper_ready/final_malcl_baseline_colab_run",
+  "package_commands": "paper_ready/final_malcl_baseline_colab_run/PACKAGING_COMMANDS.md",
+  "paper_claim_allowed": false
+}

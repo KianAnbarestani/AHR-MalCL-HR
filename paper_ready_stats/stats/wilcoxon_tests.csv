@@ -1,0 +1,183 @@
+dataset,setting_type,k,metric,comparison_family,comparison_label,method_a,method_b,n_pairs,seeds,wilcoxon_statistic,p_value,note,holm_p_value,holm_reject_0_05
+az_class,ablation,100,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mmd_real_generated,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,wasserstein_real_generated,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mmd_real_generated,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,wasserstein_real_generated,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",1.0,0.125,,1.0,False
+az_class,ablation,100,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",3.0,0.625,,1.0,False
+az_class,ablation,100,mmd_real_generated,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",2.0,0.1875,,1.0,False
+az_class,ablation,100,wasserstein_real_generated,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",4.0,0.4375,,1.0,False
+az_class,ablation,100,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mmd_real_generated,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",5.0,0.625,,1.0,False
+az_class,ablation,100,wasserstein_real_generated,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mean_acc_seen,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",3.0,0.3125,,1.0,False
+az_class,ablation,100,mean_acc_seen,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mmd_real_generated,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,wasserstein_real_generated,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mean_acc_seen,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",1.0,0.125,,1.0,False
+az_class,ablation,100,mean_acc_seen,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",3.0,0.625,,1.0,False
+az_class,ablation,100,mmd_real_generated,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",2.0,0.1875,,1.0,False
+az_class,ablation,100,wasserstein_real_generated,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",4.0,0.4375,,1.0,False
+az_class,ablation,100,mean_acc_seen,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,final_taskwise_average_accuracy,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,forgetting,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,macro_f1,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,balanced_accuracy,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,old_class_accuracy,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,new_class_accuracy,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+az_class,ablation,100,mmd_real_generated,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",5.0,0.625,,1.0,False
+az_class,ablation,100,wasserstein_real_generated,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs classifier_real_only,hybrid_random_buffer,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mmd_real_generated,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,wasserstein_real_generated,main_ablation_reference,hybrid_random_buffer vs malcl_like,hybrid_random_buffer,malcl_like,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mmd_real_generated,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,wasserstein_real_generated,main_ablation_reference,hybrid_random_buffer vs wgan_projection_generated_only,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs real_buffer_only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",3.0,0.3125,,1.0,False
+ember,ablation,25,mmd_real_generated,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",1.0,0.125,,1.0,False
+ember,ablation,25,wasserstein_real_generated,main_ablation_reference,hybrid_random_buffer vs hybrid_diversity_buffer,hybrid_random_buffer,hybrid_diversity_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",5.0,0.625,,1.0,False
+ember,ablation,25,mmd_real_generated,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,wasserstein_real_generated,main_ablation_reference,hybrid_random_buffer vs plus_kd,hybrid_random_buffer,plus_kd,5,"42,43,44,45,46",1.0,0.125,,1.0,False
+ember,ablation,25,mean_acc_seen,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,component_effect,Generated replay effect,wgan_projection_generated_only,classifier_real_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mmd_real_generated,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,wasserstein_real_generated,component_effect,Real anchoring effect,hybrid_random_buffer,wgan_projection_generated_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,component_effect,Hybrid vs real-only,hybrid_random_buffer,real_buffer_only,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",3.0,0.3125,,1.0,False
+ember,ablation,25,mmd_real_generated,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",1.0,0.125,,1.0,False
+ember,ablation,25,wasserstein_real_generated,component_effect,Diversity effect,hybrid_diversity_buffer,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,mean_acc_seen,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,final_taskwise_average_accuracy,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,forgetting,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,macro_f1,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,balanced_accuracy,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,old_class_accuracy,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,new_class_accuracy,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",5.0,0.625,,1.0,False
+ember,ablation,25,mmd_real_generated,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",0.0,0.0625,,1.0,False
+ember,ablation,25,wasserstein_real_generated,component_effect,KD effect,plus_kd,hybrid_random_buffer,5,"42,43,44,45,46",1.0,0.125,,1.0,False

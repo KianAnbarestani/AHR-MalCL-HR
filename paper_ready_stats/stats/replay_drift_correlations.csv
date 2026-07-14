@@ -1,0 +1,5 @@
+dataset,x_metric,y_metric,n,pearson_correlation,spearman_correlation,note
+ember,mmd_real_generated,final_taskwise_average_accuracy,2,,,not enough points for correlation: n=2
+ember,mmd_real_generated,forgetting,2,,,not enough points for correlation: n=2
+ember,wasserstein_real_generated,final_taskwise_average_accuracy,2,,,not enough points for correlation: n=2
+ember,wasserstein_real_generated,forgetting,2,,,not enough points for correlation: n=2

@@ -1,0 +1,40 @@
+| Method | Dataset | Setting | K | Memory MB | GPU Peak MB | Elapsed Minutes |
+| --- | --- | --- | --- | --- | --- | --- |
+| ahr_malcl_v14_5_az_validation_k25 | az_class | other | 25 | 451.3 (n=1) | 2862.7 (n=1) | 56.7 (n=1) |
+| classifier_real_only | az_class | ablation | 100 | 358.1 ± 0.0 | 429.2 ± 0.0 | 1.7 ± 0.2 |
+| hybrid_diversity_buffer | az_class | ablation | 100 | 544.4 ± 0.0 | 3041.5 ± 109.9 | 20.0 ± 0.2 |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | ablation | 100 | 544.4 ± 0.0 | 3027.3 ± 110.5 | 13.8 ± 0.2 |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | final best performance | 200 | 637.1 ± 0.0 | 3065.9 ± 83.1 | 22.4 ± 0.3 |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | final memory efficient | 100 | 544.4 ± 0.0 | 4876.4 ± 946.1 | 14.1 ± 0.3 |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | memory budget | 0 | 428.0 (n=1) | 2862.7 (n=1) | 60.9 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | memory budget | 10 | 437.3 (n=1) | 2862.7 (n=1) | 52.9 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | memory budget | 25 | 451.3 (n=1) | 2862.7 (n=1) | 55.4 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | memory budget | 50 | 474.5 (n=1) | 2862.7 (n=1) | 57.4 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | memory budget | 100 | 521.1 (n=1) | 2862.7 (n=1) | 71.4 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | memory budget | 150 | 567.7 (n=1) | 2862.7 (n=1) | 68.3 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | memory budget | 200 | 613.9 (n=1) | 3257.1 (n=1) | 11.2 (n=1) |
+| malcl_like | az_class | ablation | 100 | 451.3 ± 0.0 | 2652.7 ± 0.0 | 4.6 ± 0.2 |
+| plus_kd | az_class | ablation | 100 | 544.4 ± 0.0 | 2940.1 ± 0.0 | 18.8 ± 0.1 |
+| real_buffer_only | az_class | ablation | 100 | 451.3 ± 0.0 | 445.2 ± 0.0 | 1.7 ± 0.0 |
+| wgan_projection_generated_only | az_class | ablation | 100 | 451.3 ± 0.0 | 2933.9 ± 0.0 | 11.6 ± 0.1 |
+| ahr_malcl_v14_5_oracle_fidelity_k25 | ember | oracle fidelity | 25 | 440.9 (n=1) | 2797.3 (n=1) | 55.8 (n=1) |
+| ahr_malcl_v14_5_ordering_giant_first | ember | ordering sensitivity | 25 | 440.9 (n=1) | 2797.3 (n=1) | 56.3 (n=1) |
+| ahr_malcl_v14_5_ordering_random | ember | ordering sensitivity | 25 | 440.9 (n=1) | 2797.3 (n=1) | 55.7 (n=1) |
+| ahr_malcl_v14_5_scaler_incremental | ember | scaler sensitivity | 25 | 440.9 (n=1) | 2797.3 (n=1) | 69.2 (n=1) |
+| ahr_malcl_v15_1_final_paper_critic2_ember_k25 | ember | final memory efficient | 25 | 440.9 (n=1) | 4351.5 (n=1) | 7.7 (n=1) |
+| classifier_real_only | ember | ablation | 25 | 350.0 ± 0.0 | 420.1 ± 0.0 | 1.8 ± 0.3 |
+| hybrid_diversity_buffer | ember | ablation | 25 | 463.7 ± 0.0 | 2867.1 ± 0.0 | 12.8 ± 0.1 |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | ablation | 25 | 463.7 ± 0.0 | 2934.1 ± 95.9 | 13.2 ± 0.2 |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | final best performance | 100 | 531.8 ± 0.0 | 3029.2 ± 42.3 | 15.1 ± 0.3 |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | final memory efficient | 25 | 463.7 ± 0.0 | 4796.3 ± 1091.4 | 13.4 ± 0.3 |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | memory budget | 0 | 418.2 (n=1) | 2797.3 (n=1) | 57.1 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | memory budget | 10 | 427.3 (n=1) | 2797.3 (n=1) | 55.7 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | memory budget | 25 | 440.9 (n=1) | 2797.3 (n=1) | 57.2 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | memory budget | 50 | 463.7 (n=1) | 2797.3 (n=1) | 59.6 (n=1) |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | memory budget | 100 | 509.1 (n=1) | 2797.3 (n=1) | 73.6 (n=1) |
+| malcl_like | ember | ablation | 25 | 440.9 ± 0.0 | 2592.5 ± 0.0 | 4.9 ± 0.1 |
+| plus_kd | ember | ablation | 25 | 463.7 ± 0.0 | 2879.6 ± 0.0 | 12.9 ± 0.0 |
+| real_buffer_only | ember | ablation | 25 | 372.8 ± 0.0 | 435.9 ± 0.0 | 1.8 ± 0.1 |
+| replay_drift_k0_no_anchor | ember | replay drift | 0 | 418.2 (n=1) | 2797.3 (n=1) | 57.4 (n=1) |
+| replay_drift_k25_anchor | ember | replay drift | 25 | 440.9 (n=1) | 2797.3 (n=1) | 56.4 (n=1) |
+| wgan_projection_generated_only | ember | ablation | 25 | 440.9 ± 0.0 | 2971.5 ± 97.5 | 13.1 ± 0.4 |

@@ -1,0 +1,4 @@
+| Method | Dataset | Setting | K | Mean Seen Accuracy | Final Taskwise Accuracy | Forgetting | Macro-F1 | Weighted-F1 | Balanced Accuracy | Old-Class Accuracy | New-Class Accuracy | MMD | Wasserstein | Memory MB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| AHR-MalCL-HR / hybrid_random_buffer | az_class | final best performance | 200 | 75.76 ± 1.40 | 74.31 ± 1.24 | 8.43 ± 0.94 | 67.48 ± 0.74 | 71.32 ± 0.72 | 83.48 ± 0.60 | 70.94 ± 0.16 | 73.11 ± 18.36 | 0.0013 ± 0.0005 | 0.0383 ± 0.0052 | 637.1 ± 0.0 |
+| AHR-MalCL-HR / hybrid_random_buffer | ember | final best performance | 100 | 83.70 ± 0.67 | 79.76 ± 1.42 | 8.38 ± 1.15 | 72.68 ± 0.59 | 80.84 ± 0.63 | 79.51 ± 0.30 | 79.40 ± 0.59 | 82.12 ± 7.91 | 0.0025 ± 0.0011 | 0.0496 ± 0.0099 | 531.8 ± 0.0 |

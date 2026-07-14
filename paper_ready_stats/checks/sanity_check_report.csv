@@ -1,0 +1,128 @@
+check,severity,dataset,setting_type,method,k,seed,result_validity,paper_use_category,metric,status,detail
+numeric_metric_columns,info,,,,,,,,mean_acc_seen,pass,mean_acc_seen is numeric where present
+numeric_metric_columns,info,,,,,,,,min_acc_seen,pass,min_acc_seen is numeric where present
+numeric_metric_columns,info,,,,,,,,final_taskwise_average_accuracy,pass,final_taskwise_average_accuracy is numeric where present
+numeric_metric_columns,info,,,,,,,,forgetting,pass,forgetting is numeric where present
+numeric_metric_columns,info,,,,,,,,backward_transfer,pass,backward_transfer is numeric where present
+numeric_metric_columns,info,,,,,,,,bwt,pass,bwt is numeric where present
+numeric_metric_columns,info,,,,,,,,precision_macro,pass,precision_macro is numeric where present
+numeric_metric_columns,info,,,,,,,,precision_weighted,pass,precision_weighted is numeric where present
+numeric_metric_columns,info,,,,,,,,recall_macro,pass,recall_macro is numeric where present
+numeric_metric_columns,info,,,,,,,,recall_weighted,pass,recall_weighted is numeric where present
+numeric_metric_columns,info,,,,,,,,macro_f1,pass,macro_f1 is numeric where present
+numeric_metric_columns,info,,,,,,,,weighted_f1,pass,weighted_f1 is numeric where present
+numeric_metric_columns,info,,,,,,,,balanced_accuracy,pass,balanced_accuracy is numeric where present
+numeric_metric_columns,info,,,,,,,,old_class_accuracy,pass,old_class_accuracy is numeric where present
+numeric_metric_columns,info,,,,,,,,new_class_accuracy,pass,new_class_accuracy is numeric where present
+numeric_metric_columns,info,,,,,,,,plasticity_stability_gap,pass,plasticity_stability_gap is numeric where present
+numeric_metric_columns,info,,,,,,,,memory_MB,pass,memory_MB is numeric where present
+numeric_metric_columns,info,,,,,,,,replay_memory_MB,pass,replay_memory_MB is numeric where present
+numeric_metric_columns,info,,,,,,,,generated_replay_MB,pass,generated_replay_MB is numeric where present
+numeric_metric_columns,info,,,,,,,,real_buffer_MB,pass,real_buffer_MB is numeric where present
+numeric_metric_columns,info,,,,,,,,model_memory_MB,pass,model_memory_MB is numeric where present
+numeric_metric_columns,info,,,,,,,,gpu_peak_memory_MB,pass,gpu_peak_memory_MB is numeric where present
+numeric_metric_columns,info,,,,,,,,mmd_real_generated,pass,mmd_real_generated is numeric where present
+numeric_metric_columns,info,,,,,,,,wasserstein_real_generated,pass,wasserstein_real_generated is numeric where present
+numeric_metric_columns,info,,,,,,,,feature_center_l2,pass,feature_center_l2 is numeric where present
+numeric_metric_columns,info,,,,,,,,elapsed_minutes,pass,elapsed_minutes is numeric where present
+expected_seed_coverage,info,az_class,ablation,classifier_real_only,100,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,az_class,ablation,hybrid_diversity_buffer,100,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,az_class,ablation,hybrid_random_buffer,100,,valid_memory_efficient_hr,memory_efficient_hr_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,az_class,ablation,malcl_like,100,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,az_class,ablation,plus_kd,100,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,az_class,ablation,real_buffer_only,100,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,az_class,ablation,wgan_projection_generated_only,100,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,az_class,final_best_performance,hybrid_random_buffer,200,,valid_main_hr,main_final_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,ember,ablation,classifier_real_only,25,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,ember,ablation,hybrid_diversity_buffer,25,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,ember,ablation,hybrid_random_buffer,25,,valid_memory_efficient_hr,memory_efficient_hr_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,ember,ablation,malcl_like,25,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,ember,ablation,plus_kd,25,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,ember,ablation,real_buffer_only,25,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,ember,ablation,wgan_projection_generated_only,25,,valid_ablation,ablation_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+expected_seed_coverage,info,ember,final_best_performance,hybrid_random_buffer,100,,valid_main_hr,main_final_table,,pass,"seeds=[42, 43, 44, 45, 46]"
+paper_claim_early_stop,info,,,,,,,,,pass,No early stopped paper-claim rows detected
+final_config_flags,info,,,,,,,,,pass,Checked final main-method config flags
+memory_efficient_hr_config_flags,info,,,,,,,,,pass,Checked valid memory-efficient HR config flags
+legacy_or_config_mismatch,legacy,az_class,final_memory_efficient,hybrid_random_buffer,100,42,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,az_class,final_memory_efficient,hybrid_random_buffer,100,43,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,az_class,final_memory_efficient,hybrid_random_buffer,100,44,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,az_class,final_memory_efficient,hybrid_random_buffer,100,45,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,az_class,final_memory_efficient,hybrid_random_buffer,100,46,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,ember,final_memory_efficient,hybrid_random_buffer,25,42,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,ember,final_memory_efficient,hybrid_random_buffer,25,43,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,ember,final_memory_efficient,hybrid_random_buffer,25,44,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,ember,final_memory_efficient,hybrid_random_buffer,25,45,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+legacy_or_config_mismatch,legacy,ember,final_memory_efficient,hybrid_random_buffer,25,46,legacy_or_config_mismatch,supplementary_only,,record,memory-efficient file uses full-complexity flags; not the final simplified AHR-MalCL-HR method
+expected_exclusion,expected_exclusion,ember,final_memory_efficient,ahr_malcl_v15_1_final_paper_critic2_ember_k25,25,42,excluded_incomplete,exclude_from_paper_claims,,record,stray incomplete EMBER critic2 memory-efficient seed file; not part of declared final result set; source=result/final-run/EMBER/memory-efficient setting/seed=42/full-result.json
+ablation_pairing,info,,,,,,,,,pass,Ablation methods share reference seed sets
+nan_report,info,,,,,,,,mean_acc_seen,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,min_acc_seen,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,final_taskwise_average_accuracy,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,forgetting,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,backward_transfer,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,bwt,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,precision_macro,record,runs_missing=19; aggregates_missing=19
+nan_report,info,,,,,,,,precision_weighted,record,runs_missing=19; aggregates_missing=19
+nan_report,info,,,,,,,,recall_macro,record,runs_missing=19; aggregates_missing=19
+nan_report,info,,,,,,,,recall_weighted,record,runs_missing=19; aggregates_missing=19
+nan_report,info,,,,,,,,macro_f1,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,weighted_f1,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,balanced_accuracy,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,old_class_accuracy,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,new_class_accuracy,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,plasticity_stability_gap,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,memory_MB,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,replay_memory_MB,record,runs_missing=0; aggregates_missing=37
+nan_report,info,,,,,,,,generated_replay_MB,record,runs_missing=0; aggregates_missing=37
+nan_report,info,,,,,,,,real_buffer_MB,record,runs_missing=0; aggregates_missing=37
+nan_report,info,,,,,,,,model_memory_MB,record,runs_missing=0; aggregates_missing=37
+nan_report,info,,,,,,,,gpu_peak_memory_MB,record,runs_missing=0; aggregates_missing=0
+nan_report,info,,,,,,,,mmd_real_generated,record,runs_missing=20; aggregates_missing=4
+nan_report,info,,,,,,,,wasserstein_real_generated,record,runs_missing=20; aggregates_missing=4
+nan_report,info,,,,,,,,feature_center_l2,record,runs_missing=20; aggregates_missing=34
+nan_report,info,,,,,,,,elapsed_minutes,record,runs_missing=0; aggregates_missing=37
+duplicate_run_report,info,ember,ordering_sensitivity,ahr_malcl_v14_5_ordering_random,25,42,unknown_review_needed,manual_review_needed,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,ablation,hybrid_diversity_buffer,100,42,valid_ablation,ablation_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,ablation,hybrid_diversity_buffer,100,43,valid_ablation,ablation_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,ablation,hybrid_diversity_buffer,100,44,valid_ablation,ablation_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,ablation,hybrid_diversity_buffer,100,45,valid_ablation,ablation_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,ablation,hybrid_diversity_buffer,100,46,valid_ablation,ablation_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_best_performance,hybrid_random_buffer,200,42,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_best_performance,hybrid_random_buffer,200,43,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_best_performance,hybrid_random_buffer,200,44,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_best_performance,hybrid_random_buffer,200,45,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_best_performance,hybrid_random_buffer,200,46,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_memory_efficient,hybrid_random_buffer,100,42,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_memory_efficient,hybrid_random_buffer,100,43,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_memory_efficient,hybrid_random_buffer,100,44,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_memory_efficient,hybrid_random_buffer,100,45,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+duplicate_run_report,info,az_class,final_memory_efficient,hybrid_random_buffer,100,46,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_best_performance,hybrid_random_buffer,100,42,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_best_performance,hybrid_random_buffer,100,43,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_best_performance,hybrid_random_buffer,100,44,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_best_performance,hybrid_random_buffer,100,45,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_best_performance,hybrid_random_buffer,100,46,valid_main_hr,main_final_table,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_memory_efficient,hybrid_random_buffer,25,43,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_memory_efficient,hybrid_random_buffer,25,44,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_memory_efficient,hybrid_random_buffer,25,45,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+duplicate_run_report,info,ember,final_memory_efficient,hybrid_random_buffer,25,46,legacy_or_config_mismatch,supplementary_only,,record,merged duplicate sources=2
+inconsistent_config_report,warning,az_class,ablation,classifier_real_only,100,,,,,record,"Multiple config hashes in group: ['67bc0d92e8af9ceb', '809603f015c13616', 'b592b71d97840a6a', 'c1b1f3cd155478a4', 'e36ff0eb89867a56']"
+inconsistent_config_report,warning,az_class,ablation,hybrid_diversity_buffer,100,,,,,record,"Multiple config hashes in group: ['67d44792e8e55fd9', 'a297cf4e848cc134', 'a2cc58548e215cd3', 'cc5f4b33d7d48e43', 'dcb823370af3de5c']"
+inconsistent_config_report,warning,az_class,ablation,hybrid_random_buffer,100,,,,,record,"Multiple config hashes in group: ['617976a3a581c3aa', '87e684aa3261bd8a', 'cd874afbae7f6aae', 'e9de735d182ae120', 'eed388777e45a557']"
+inconsistent_config_report,warning,az_class,ablation,malcl_like,100,,,,,record,"Multiple config hashes in group: ['10ef5173dc2e69a5', '1ac5f6afebce5d50', '421021a4155c2e8f', '837f55db4411f490', 'aa4e7816df4cb85a']"
+inconsistent_config_report,warning,az_class,ablation,plus_kd,100,,,,,record,"Multiple config hashes in group: ['09e23f00641f0639', '4277eb0fbce0c439', '43fe61fafb6d5c00', '8d7ba547b69f0032', '9773d02f8039a3b6']"
+inconsistent_config_report,warning,az_class,ablation,real_buffer_only,100,,,,,record,"Multiple config hashes in group: ['26885a3195467dc1', '72b22a69e9f6bed0', '7be651e41ec314d2', '9e20f54c60cc032a', 'efc714e9659b9191']"
+inconsistent_config_report,warning,az_class,ablation,wgan_projection_generated_only,100,,,,,record,"Multiple config hashes in group: ['03d90b1155fe7740', '5acfeab50caf4cea', '991e1fcabaa489fc', 'a841383e22e69b3c', 'c08a2253be174989']"
+inconsistent_config_report,warning,az_class,final_best_performance,hybrid_random_buffer,200,,,,,record,"Multiple config hashes in group: ['49b4669f01655cf6', '57184a79aac643f7', '80bedf77e9011419', '8695a18d8f5c3e78', '9ce8d1a5fef303f8']"
+inconsistent_config_report,warning,az_class,final_memory_efficient,hybrid_random_buffer,100,,,,,record,"Multiple config hashes in group: ['0939296008275640', '0ceab2d4a153e96a', 'afab2921eb68f91e', 'ec1d834d4c0bfa09', 'f5c7ac61b8b0c518']"
+inconsistent_config_report,warning,ember,ablation,classifier_real_only,25,,,,,record,"Multiple config hashes in group: ['01c8789e575a46a0', '2cabf0134aaa335d', '2d6b3df5639afb72', '3d3a9b228af577d6', 'ee634eb8e34bbf00']"
+inconsistent_config_report,warning,ember,ablation,hybrid_diversity_buffer,25,,,,,record,"Multiple config hashes in group: ['2658528c6bfae862', '3fec623a815747fe', '708fafef67ca2502', 'acd5e88452f2b130', 'c9170155c8af0343']"
+inconsistent_config_report,warning,ember,ablation,hybrid_random_buffer,25,,,,,record,"Multiple config hashes in group: ['646324bfa5dd3f2d', '750b2fc74d166cbe', '9f79673513beaa92', 'a04630b82264b268', 'e072794a348b3c7a']"
+inconsistent_config_report,warning,ember,ablation,malcl_like,25,,,,,record,"Multiple config hashes in group: ['348ba559b975a018', '8172ecb7a2b94c2b', '832c965c1c924640', '83e86a7e4b0c12a3', 'cf76f95e361b7c26']"
+inconsistent_config_report,warning,ember,ablation,plus_kd,25,,,,,record,"Multiple config hashes in group: ['10cc13baeaac1370', '5b42a0366f7ac0dc', '678db8987811cfaa', '871b240429da9141', 'c1f5cfe247fc5a64']"
+inconsistent_config_report,warning,ember,ablation,real_buffer_only,25,,,,,record,"Multiple config hashes in group: ['4d8288ad2e207d1b', 'ae43d25910cc130c', 'c8ef43d6389b9cf9', 'e569ee0afd6242ed', 'f9042b865a81473f']"
+inconsistent_config_report,warning,ember,ablation,wgan_projection_generated_only,25,,,,,record,"Multiple config hashes in group: ['0a746ec907cdb67d', '4766f0a7095e2603', '7d16e8afbde6d5cc', 'b895a2b890cc8ec8', 'ed30958765a2400f']"
+inconsistent_config_report,warning,ember,final_best_performance,hybrid_random_buffer,100,,,,,record,"Multiple config hashes in group: ['79af7404124fe4f9', 'a05cb5c5f44662c2', 'bfee1d37291f4800', 'c4a7e0db8f5f7261', 'f8d951075b702435']"
+inconsistent_config_report,warning,ember,final_memory_efficient,hybrid_random_buffer,25,,,,,record,"Multiple config hashes in group: ['0b6649414269c805', 'b90ba2295604d901', 'c351e99718a6b8a3', 'c99be68d4932cb01', 'cf0fea57de6cb0e4']"
+memory_consistency_report,info,,,,,,,,,record,Memory consistency checked where component values exist

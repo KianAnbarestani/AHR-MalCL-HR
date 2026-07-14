@@ -1,0 +1,3 @@
+dataset,best_accuracy_k,lowest_forgetting_k,best_gain_per_MB_k,k_95_percent_of_best_performance,recommended_practical_k,threshold_source,threshold_mean_acc_seen
+az_class,200,200,10,200,200,final_best_performance,0.7197520583280463
+ember,100,100,10,100,100,final_best_performance,0.7951498182902762

@@ -1,0 +1,82 @@
+{
+  "schema_version": "v1",
+  "dataset": "ember",
+  "dataset_label": "EMBER",
+  "baseline_name": "MalCL faithful",
+  "seeds": [
+    42,
+    43,
+    44,
+    45,
+    46
+  ],
+  "class_stream_source": "same class stream as AHR-MalCL-HR final runs; importable adapter required",
+  "task_ordering": {
+    "mode": "random",
+    "initial_classes": 50,
+    "increment_classes_per_task": 5,
+    "total_classes": 100,
+    "task_count": 11,
+    "seed_dependent": true
+  },
+  "memory_budget": {
+    "k_per_class": 100,
+    "unit": "examples per class",
+    "official_comparison_budget": true
+  },
+  "classifier_backbone": {
+    "type": "mlp",
+    "hidden_layers": [
+      1024,
+      512,
+      256
+    ],
+    "dropout": 0.25,
+    "embedding_dim": 512,
+    "input_features": "adapter-provided feature dimension"
+  },
+  "optimizer": {
+    "name": "AdamW",
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "momentum": 0.9
+  },
+  "batch_size": 256,
+  "test_batch_size": 2048,
+  "epochs": 3,
+  "metrics": [
+    "mean_acc_seen",
+    "final_taskwise_average_accuracy",
+    "forgetting",
+    "macro_f1",
+    "weighted_f1",
+    "balanced_accuracy",
+    "old_class_accuracy",
+    "new_class_accuracy",
+    "final_classification_report",
+    "final_confusion_matrix",
+    "final_per_class_accuracy",
+    "memory_MB",
+    "elapsed_minutes"
+  ],
+  "output_directory": "result_external_baselines/MalCL-faithful/EMBER/",
+  "memory_accounting_rule": {
+    "count_model_memory": true,
+    "count_exemplar_features": true,
+    "count_labels": true,
+    "count_stored_logits": false,
+    "count_generator": true,
+    "count_checkpoints": false,
+    "count_fisher_or_importance_state": false,
+    "notes": "Count generator/discriminator if retained, replay samples, labels, and classifier memory."
+  },
+  "requires_external_code": true,
+  "ready_to_run": false,
+  "template_only_reason": "Faithful MalCL source or paper-level implementation still required.",
+  "malcl": {
+    "gan_mode": "paper-faithful standard GAN",
+    "feature_matching_loss": true,
+    "replay_selection": "paper-faithful selection after source inspection",
+    "classifier_backbone_note": "If MLP replaces paper CNN for tabular protocol, disclose as fair adaptation."
+  }
+}
