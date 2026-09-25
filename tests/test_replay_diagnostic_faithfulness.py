@@ -1,0 +1,2 @@
+from v15_5_checks import check_notebook_diagnostics
+def test_replay_diagnostic_faithfulness(): check_notebook_diagnostics()

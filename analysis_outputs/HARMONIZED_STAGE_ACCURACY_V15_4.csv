@@ -1,0 +1,881 @@
+dataset,method,seed,stage_id,sample_weighted_seen_accuracy,cumulative_seen_support,matrix_source,definition_version
+AZ-Class,protocol-matched adapted MalCL baseline,42,1,50.469834021252304,11387,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,2,48.69987112425138,13191,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,3,46.00996655061779,14649,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,4,40.49620311865979,17251,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,5,38.38466663250141,19513,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,6,39.533205004812324,20780,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,7,36.419618290605754,22897,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,8,34.37122481586844,25661,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,9,35.224905485687835,25922,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,10,35.29715571623566,27107,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,42,11,35.53345705381841,28559,adapted_malcl__az_class__seed_42.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,1,53.84953805543334,15911,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,2,47.33310969473331,17886,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,3,45.01154007553504,19064,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,4,40.70930289282404,20499,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,5,40.8232826428946,22884,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,6,39.26517297622114,23298,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,7,36.248031042298976,26029,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,8,35.33668858601815,27221,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,9,32.03893957899274,27838,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,10,32.81857375079511,28298,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,43,11,35.33387023355159,28559,adapted_malcl__az_class__seed_43.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,1,59.0239068499938,16146,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,2,54.80642006558132,17383,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,3,52.37346064124125,18433,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,4,50.74091906061092,18693,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,5,49.30538979328782,20947,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,6,49.18785812378652,21117,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,7,43.04386447273804,23641,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,8,43.82274127104747,25003,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,9,41.58696835393826,25722,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,10,38.72211103698762,26982,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,44,11,40.453097097237304,28559,adapted_malcl__az_class__seed_44.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,1,49.653824224158996,12277,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,2,46.057706041994,14002,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,3,44.73666372941097,14753,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,4,43.15456581894848,15178,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,5,40.19781601966726,17491,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,6,37.7175449714815,20513,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,7,38.484162895927604,22100,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,8,37.21668956043956,23296,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,9,34.89808274470232,24775,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,10,30.60428111384732,26395,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,45,11,32.32956336006163,28559,adapted_malcl__az_class__seed_45.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,1,59.45510756150972,15526,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,2,56.39207742516318,17772,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,3,54.72499586252552,18127,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,4,52.88561886871217,19164,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,5,49.37420897201519,21333,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,6,46.9832121128951,21861,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,7,41.67811748540021,23288,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,8,43.69703389830508,24544,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,9,41.22165732734627,26947,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,10,39.960427964238605,27292,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,46,11,39.46216604222837,28559,adapted_malcl__az_class__seed_46.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,1,59.15163860763286,16691,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,2,57.82252710776721,18076,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,3,56.986471134978835,19366,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,4,53.677251230576196,20722,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,5,49.576502732240435,21960,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,6,48.65675592218448,22669,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,7,45.937245138859076,23297,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,8,43.70165295985669,24562,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,9,36.22934888241011,25725,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,10,38.66503413475809,26952,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,47,11,34.88217374557932,28559,adapted_malcl__az_class__seed_47.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,1,57.478585547990335,18212,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,2,52.624713003548315,19164,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,3,49.785602582858296,19823,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,4,49.01004168245547,21112,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,5,46.12201737851133,21751,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,6,45.88707495264725,22174,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,7,43.46160698378764,22452,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,8,42.50469732864962,24482,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,9,39.63355110009762,26634,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,10,38.108108108108105,27380,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,48,11,39.115515249133374,28559,adapted_malcl__az_class__seed_48.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,1,58.354173179118476,12796,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,2,54.94461762950189,15077,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,3,52.94679226069247,15712,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,4,47.86644165863066,16592,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,5,46.740756571917075,18716,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,6,44.748287756836476,20003,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,7,37.510286184511294,21874,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,8,41.62106982441813,24490,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,9,40.23499885922884,26298,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,10,37.61073146038977,27657,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,49,11,38.84939948877762,28559,adapted_malcl__az_class__seed_49.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,1,64.21183606812349,12859,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,2,58.5091320968427,14126,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,3,50.48662584595552,15515,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,4,52.39843795535351,17157,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,5,51.18105786618445,17696,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,6,44.3977296615514,19028,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,7,46.06758991318727,19352,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,8,45.173041894353375,22509,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,9,42.76358309276574,23209,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,10,36.679702776691435,25570,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,50,11,36.22325711684583,28559,adapted_malcl__az_class__seed_50.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,1,49.46220930232558,13760,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,2,43.790849673202615,14994,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,3,45.69617166544745,16404,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,4,44.285714285714285,16870,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,5,44.61003219441271,19258,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,6,36.54319818112921,21112,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,7,39.05552855943809,22637,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,8,37.21112902559015,24189,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,9,33.458516957271506,26095,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,10,33.149941314553985,27264,adapted_malcl__az_class__seed_51.json,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,51,11,33.001855807276165,28559,adapted_malcl__az_class__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,1,82.90763052208835,18675,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,2,75.13159640819215,22607,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,3,72.12108731466228,24280,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,4,71.56380921688688,24824,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,5,68.73294038530005,25279,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,6,66.94170056168895,25815,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,7,65.46199984815124,26342,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,8,64.18930463010422,29265,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,9,60.168729257777365,32241,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,10,58.09631004167554,32873,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,42,11,56.49477806788512,33704,adapted_malcl__ember__seed_42.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,1,72.34280599686731,22345,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,2,69.98781761225202,22984,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,3,68.86495998659237,23867,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,4,65.6571450422546,26151,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,5,64.27775581353556,27823,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,6,63.39127976821426,28302,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,7,59.65009992464698,30523,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,8,56.76686879112373,31004,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,9,57.8322385042951,31664,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,10,57.15110098709187,32925,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,43,11,58.14146688820318,33704,adapted_malcl__ember__seed_43.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,1,82.31695411649854,15365,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,2,77.47387146986881,17988,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,3,73.14422733534003,19601,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,4,66.99333927283526,23571,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,5,67.24472471501333,24738,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,6,62.21100809764112,25563,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,7,62.55037095620081,26553,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,8,59.51892346509672,29725,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,9,56.00703781163895,30123,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,10,55.363824022706744,31004,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,44,11,36.12330880607643,33704,adapted_malcl__ember__seed_44.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,1,74.49234914830141,20782,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,2,72.11744935113434,21422,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,3,71.29064127896532,22268,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,4,67.27453994101276,24073,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,5,65.70672478206725,25696,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,6,64.04878604810213,26319,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,7,60.75071549130403,27254,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,8,60.642883812497885,29461,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,9,59.375308236067724,30415,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,10,59.241161253233685,31311,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,45,11,44.16686446712556,33704,adapted_malcl__ember__seed_45.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,1,65.23931000971818,16464,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,2,65.28478352248844,19032,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,3,61.9729615547106,23670,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,4,56.74900199600798,24048,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,5,58.11727163940965,25070,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,6,54.32721548424028,27951,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,7,50.24729739277891,28306,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,8,47.89061426411983,29108,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,9,49.99057907298078,31844,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,10,44.88757540673938,32822,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,46,11,47.896392119629716,33704,adapted_malcl__ember__seed_46.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,1,73.05802968960865,18525,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,2,70.82286593181234,19505,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,3,63.860582559292986,22178,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,4,59.78371934604905,23488,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,5,56.679673357737634,24859,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,6,53.995827938426125,27804,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,7,54.523709019276765,28428,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,8,41.61823716618237,28908,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,9,39.824967649662874,29366,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,10,51.29854975829304,29995,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,47,11,40.17920721576074,33704,adapted_malcl__ember__seed_47.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,1,73.70756600843133,18028,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,2,70.22232623449567,21365,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,3,66.45463380157258,22638,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,4,65.30043099805629,23666,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,5,63.02715193529751,24234,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,6,52.51724817662134,25365,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,7,55.438822726238335,26366,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,8,52.66172875542745,27407,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,9,49.7730452885567,29301,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,10,50.7571189279732,29850,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,48,11,42.20270591027771,33704,adapted_malcl__ember__seed_48.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,1,72.83561163687347,17118,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,2,67.06664117028397,20918,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,3,66.67834157873999,22841,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,4,63.656624019810145,24230,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,5,60.24202596569963,24956,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,6,56.366717006151234,27149,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,7,57.49791068638495,27521,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,8,55.8415003877882,28366,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,9,54.03148301574151,30175,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,10,42.037921997841835,32435,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,49,11,53.51293615001187,33704,adapted_malcl__ember__seed_49.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,1,68.9293212036389,14290,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,2,65.04299792856695,15931,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,3,60.556417773179284,17397,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,4,67.23158580873452,21478,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,5,62.13493571333893,22633,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,6,61.22166464786295,23116,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,7,58.73042319226924,24008,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,8,58.621081326669696,26412,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,9,54.615836587979125,28933,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,10,51.304856281159594,32494,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,50,11,51.756468075005934,33704,adapted_malcl__ember__seed_50.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,1,76.86966106365391,18145,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,2,71.22423425158928,20764,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,3,66.72887893492597,24111,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,4,66.8051434223541,25275,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,5,67.18600720217535,27214,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,6,66.53036114930883,27634,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,7,62.83589419771276,28506,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,8,61.9396039921697,31161,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,9,59.63334163346613,32128,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,10,59.15582837000122,32908,adapted_malcl__ember__seed_51.json,V15.4
+EMBER,protocol-matched adapted MalCL baseline,51,11,58.76157132684548,33704,adapted_malcl__ember__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,1,83.367,11387,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,2,80.66103632779925,13191,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,3,80.96801575534165,14649,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,4,78.29110306069214,17251,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,5,76.46186228668067,19513,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,6,75.25021422040423,20780,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,7,73.25848507228021,22897,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,8,72.02760014418767,25661,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,9,71.93117131394182,25922,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,10,72.7930283395433,27107,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),42,11,69.42819655099967,28559,anchored_hr__az_class__seed_42.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,1,84.21849999999999,15911,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,2,79.34699540422676,17886,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,3,76.02283186109945,19064,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,4,75.3061106736914,20499,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,5,74.53680643244188,22884,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,6,74.44412559017941,23298,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,7,73.44497201198664,26029,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,8,72.74898397928071,27221,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,9,71.6682387060852,27838,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,10,71.09687287440808,28298,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),43,11,71.3960661507756,28559,anchored_hr__az_class__seed_43.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,1,85.59400000000001,16146,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,2,81.78675937985388,17383,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,3,80.43726050018988,18433,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,4,79.60738002460815,18693,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,5,77.2759793049124,20947,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,6,76.07142050480655,21117,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,7,75.42405537413815,23641,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,8,72.88726088469384,25003,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,9,72.04339492652204,25722,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,10,71.48471762285968,26982,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),44,11,71.32952378234532,28559,anchored_hr__az_class__seed_44.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,1,86.45429999999999,12277,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,2,81.88117720325668,14002,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,3,80.7767675252491,14753,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,4,80.03689947292133,15178,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,5,77.78289120118917,17491,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,6,76.80980539170282,20513,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,7,76.9140069954751,22100,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,8,74.67802405563187,23296,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,9,73.38444992532796,24775,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,10,71.16877666603521,26395,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),45,11,71.63768404706047,28559,anchored_hr__az_class__seed_45.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,1,83.71119999999999,15526,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,2,75.88900522169705,17772,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,3,74.54622235891213,18127,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,4,74.63995778021291,19164,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,5,73.58554703979749,21333,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,6,72.31139415854719,21861,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,7,71.43165184215046,23288,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,8,72.74279140726857,24544,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,9,71.92265361635805,26947,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,10,71.10140725120915,27292,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),46,11,70.96888247837809,28559,anchored_hr__az_class__seed_46.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,1,85.82469999999999,16691,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,2,81.87095191967249,18076,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,3,80.84275038211298,19366,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,4,79.97780324775601,20722,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,5,77.09476249544626,21960,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,6,75.42899669151704,22669,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,7,75.03968862085249,23297,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,8,72.43707762804331,24562,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,9,72.36151468999029,25725,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,10,71.189532413179,26952,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),47,11,71.45207801393606,28559,anchored_hr__az_class__seed_47.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,1,83.5603,18212,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,2,79.15363375078272,19164,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,3,77.32935326136304,19823,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,4,76.11783932834408,21112,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,5,75.81257603328582,21751,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,6,73.90188035086136,22174,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,7,73.81080711295208,22452,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,8,70.95416873621436,24482,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,9,70.66530197116468,26634,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,10,70.36887361212563,27380,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),48,11,71.44856357715607,28559,anchored_hr__az_class__seed_48.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,1,86.105,12796,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,2,82.21130841679378,15077,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,3,78.19504638492872,15712,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,4,78.01349148987464,16592,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,5,75.37934276020518,18716,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,6,74.04888383742438,20003,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,7,74.19767671207828,21874,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,8,74.11594959167007,24490,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,9,72.17657892995665,26298,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,10,71.41047736558558,27657,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),49,11,70.67475218670121,28559,anchored_hr__az_class__seed_49.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,1,89.19049999999999,12859,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,2,83.08794093161548,14126,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,3,81.4823948823719,15515,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,4,81.99565808707817,17157,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,5,81.31783865280289,17696,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,6,80.4078497529956,19028,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,7,78.61200107999173,19352,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,8,75.44539378470833,22509,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,9,75.07862758843554,23209,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,10,73.21468393429801,25570,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),50,11,71.43806323750832,28559,anchored_hr__az_class__seed_50.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,1,80.6686,13760,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,2,76.64401032412964,14994,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,3,75.11581666666667,16404,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,4,74.45759506816835,16870,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,5,73.83940809014436,19258,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,6,73.92949118037134,21112,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,7,71.37429490656889,22637,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,8,70.82558372400676,24189,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,9,70.63804878329182,26095,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,10,70.22813851599177,27264,anchored_hr__az_class__seed_51.json,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),51,11,70.69925497741518,28559,anchored_hr__az_class__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,1,91.00940000000001,18675,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,2,89.27764467642766,22607,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,3,88.19193600494235,24280,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,4,85.01047357396068,24824,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,5,85.22093187230509,25279,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,6,84.67561535153979,25815,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,7,83.16759672386303,26342,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,8,82.55255527421835,29265,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,9,81.43050307682765,32241,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,10,81.1851670367779,32873,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),42,11,79.82733584144316,33704,anchored_hr__ember__seed_42.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,1,88.9505,22345,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,2,88.40933691263487,22984,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,3,86.20685859136046,23867,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,4,84.00059376696876,26151,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,5,82.62948579592423,27823,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,6,81.58787288884177,28302,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,7,81.764599413557,30523,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,8,81.35721112437106,31004,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,9,80.13829215512884,31664,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,10,79.80260097798025,32925,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),43,11,79.51578998635178,33704,anchored_hr__ember__seed_43.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,1,90.57600000000001,15365,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,2,88.07536512675117,17988,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,3,85.82726893015662,19601,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,4,85.39727586440965,23571,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,5,84.00033217317487,24738,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,6,84.27803151820991,25563,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,7,83.37662414793054,26553,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,8,82.08579606728344,29725,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,9,81.57220084652921,30123,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,10,80.8153731712037,31004,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),44,11,78.98174028008543,33704,anchored_hr__ember__seed_44.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,1,88.8076,20782,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,2,86.20108574362804,21422,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,3,86.80173128255791,22268,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,4,82.50326207784656,24073,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,5,83.60055937110835,25696,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,6,81.95221124282838,26319,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,7,82.90896581786158,27254,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,8,82.49892974101354,29461,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,9,81.4499658162091,30415,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,10,81.00667907125293,31311,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),45,11,79.71455967540943,33704,anchored_hr__ember__seed_45.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,1,88.7269,16464,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,2,86.81170832282471,19032,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,3,86.4934317617237,23670,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,4,84.83031437125747,24048,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,5,84.75071100917432,25070,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,6,82.65178709527387,27951,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,7,81.94020174874585,28306,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,8,80.88498505909028,29108,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,9,79.79210067202612,31844,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,10,78.95007972701237,32822,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),46,11,79.3229319873012,33704,anchored_hr__ember__seed_46.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,1,90.94200000000001,18525,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,2,88.31581679056653,19505,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,3,84.65141483001173,22178,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,4,77.9546921278951,23488,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,5,78.78431857677302,24859,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,6,78.65056681053086,27804,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,7,78.51414603911637,28428,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,8,78.74983105368754,28908,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,9,77.51822434448002,29366,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,10,78.26300770461742,29995,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),47,11,79.12116852005697,33704,anchored_hr__ember__seed_47.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,1,88.479,18028,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,2,85.6447844839691,21365,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,3,84.67617541302236,22638,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,4,81.95722157525564,23666,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,5,80.05693840884709,24234,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,6,79.36527384585061,25365,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,7,79.5645751763635,26366,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,8,78.08951796986172,27407,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,9,78.85397159141327,29301,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,10,76.95478066666666,29850,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),48,11,79.38523208817945,33704,anchored_hr__ember__seed_48.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,1,89.9404,17118,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,2,84.42965038722632,20918,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,3,84.51464712578259,22841,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,4,79.60378699546017,24230,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,5,80.20515990543358,24956,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,6,80.11713237688312,27149,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,7,79.77180551578792,27521,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,8,79.64462774095747,28366,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,9,79.46643150289975,30175,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,10,78.74519185139512,32435,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),49,11,78.8511649121766,33704,anchored_hr__ember__seed_49.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,1,92.2113,14290,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,2,88.11121709246125,15931,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,3,86.22178289360235,17397,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,4,86.38143667473695,21478,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,5,84.48728055494189,22633,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,6,83.61737441166291,23116,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,7,82.21426319560146,24008,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,8,81.47054602832046,26412,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,9,80.8592192651989,28933,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,10,80.86414406351942,32494,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),50,11,78.95500028186567,33704,anchored_hr__ember__seed_50.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,1,93.10000000000002,18145,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,2,89.34698408302833,20764,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,3,86.3796629795529,24111,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,4,85.74873383580614,25275,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,5,85.59935941427209,27214,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,6,84.5335821017587,27634,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,7,83.54028649757946,28506,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,8,80.29589469529219,31161,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,9,80.30381826132967,32128,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,10,79.13578844050079,32908,anchored_hr__ember__seed_51.json,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),51,11,78.5188518988844,33704,anchored_hr__ember__seed_51.json,V15.4
+AZ-Class,DER++ (standard),42,1,88.85571265478177,11387,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,2,77.49222955045106,13191,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,3,81.48679090722916,14649,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,4,71.60744304677989,17251,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,5,45.86173320350536,19513,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,6,71.96342637151106,20780,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,7,73.63410053718827,22897,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,8,55.122559526129145,25661,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,9,71.83473497415322,25922,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,10,78.04995019736599,27107,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),42,11,70.12850590006653,28559,derpp__az_class__seed_42.json,V15.4
+AZ-Class,DER++ (standard),43,1,88.39167871284018,15911,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,2,80.57139662305714,17886,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,3,79.21212757028955,19064,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,4,77.47207180838089,20499,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,5,77.72679601468275,22884,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,6,77.01948665121469,23298,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,7,65.94183410811019,26029,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,8,73.70045185702216,27221,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,9,75.14907680149436,27838,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,10,73.9204184041275,28298,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),43,11,71.84425224972864,28559,derpp__az_class__seed_43.json,V15.4
+AZ-Class,DER++ (standard),44,1,89.60733308559395,16146,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,2,82.96611632054307,17383,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,3,84.42467314056313,18433,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,4,81.04103140212914,18693,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,5,80.59865374516637,20947,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,6,71.17488279585167,21117,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,7,77.47980203883085,23641,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,8,72.65528136623604,25003,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,9,76.96913148277739,25722,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,10,72.21480987324883,26982,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),44,11,75.27224342589027,28559,derpp__az_class__seed_44.json,V15.4
+AZ-Class,DER++ (standard),45,1,90.67361733322473,12277,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,2,54.642193972289675,14002,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,3,84.0710363993764,14753,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,4,78.75214125708261,15178,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,5,67.05162655079755,17491,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,6,72.86111246526593,20513,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,7,82.38009049773756,22100,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,8,79.02214972527473,23296,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,9,73.11806256306761,24775,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,10,75.68100018942981,26395,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),45,11,63.563149970237056,28559,derpp__az_class__seed_45.json,V15.4
+AZ-Class,DER++ (standard),46,1,87.24719824809996,15526,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,2,73.09250506414585,17772,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,3,76.71981022783693,18127,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,4,77.6299311208516,19164,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,5,76.5386959171237,21333,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,6,76.7485476419194,21861,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,7,52.95431123325318,23288,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,8,75.78634289439374,24544,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,9,71.4550784874012,26947,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,10,73.04338267624212,27292,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),46,11,74.15875906019119,28559,derpp__az_class__seed_46.json,V15.4
+AZ-Class,DER++ (standard),47,1,89.83883530046133,16691,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,2,85.22903297189643,18076,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,3,84.28689455747185,19366,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,4,82.06254222565389,20722,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,5,79.62204007285975,21960,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,6,77.30380696104812,22669,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,7,78.36202086105507,23297,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,8,70.02687077599545,24562,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,9,75.75898931000971,25725,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,10,73.83867616503413,26952,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),47,11,73.27287370005952,28559,derpp__az_class__seed_47.json,V15.4
+AZ-Class,DER++ (standard),48,1,88.27696024599166,18212,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,2,78.72051763723648,19164,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,3,81.16833980729456,19823,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,4,75.11841606669194,21112,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,5,77.76653946944968,21751,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,6,74.77225579507531,22174,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,7,74.14038838410832,22452,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,8,71.57503471938567,24482,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,9,73.51130134414659,26634,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,10,74.58728999269539,27380,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),48,11,76.46976434749115,28559,derpp__az_class__seed_48.json,V15.4
+AZ-Class,DER++ (standard),49,1,90.46577055329792,12796,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,2,65.55017576440937,15077,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,3,80.67718940936864,15712,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,4,82.64223722275796,16592,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,5,49.791622141483224,18716,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,6,78.30325451182323,20003,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,7,72.93590564140075,21874,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,8,51.33932217231523,24490,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,9,72.77739752072401,26298,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,10,71.93115666919768,27657,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),49,11,75.47183024615708,28559,derpp__az_class__seed_49.json,V15.4
+AZ-Class,DER++ (standard),50,1,92.82992456645151,12859,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,2,82.98173580631459,14126,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,3,79.67773122784402,15515,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,4,85.55691554467563,17157,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,5,83.64037070524412,17696,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,6,73.044986335926,19028,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,7,76.80343116990493,19352,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,8,63.13474610155938,22509,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,9,77.57766383730448,23209,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,10,73.43762221353148,25570,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),50,11,61.553275674918595,28559,derpp__az_class__seed_50.json,V15.4
+AZ-Class,DER++ (standard),51,1,85.99563953488372,13760,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,2,75.13672135520875,14994,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,3,72.89075835162156,16404,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,4,77.25548310610552,16870,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,5,77.18870079966767,19258,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,6,77.96040166729821,21112,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,7,75.28382736228298,22637,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,8,73.8848236801852,24189,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,9,66.41502203487258,26095,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,10,76.08201291079813,27264,derpp__az_class__seed_51.json,V15.4
+AZ-Class,DER++ (standard),51,11,75.94103434994223,28559,derpp__az_class__seed_51.json,V15.4
+EMBER,DER++ (standard),42,1,92.17135207496653,18675,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,2,87.38001503958951,22607,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,3,89.81054365733114,24280,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,4,83.8059941991621,24824,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,5,85.72332766327781,25279,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,6,82.90141390664343,25815,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,7,84.73540353807608,26342,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,8,70.74662566205365,29265,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,9,84.20644520951583,32241,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,10,84.55875642624646,32873,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),42,11,76.82470923332542,33704,derpp__ember__seed_42.json,V15.4
+EMBER,DER++ (standard),43,1,92.1369433877825,22345,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,2,90.07570483814827,22984,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,3,86.33259312020782,23867,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,4,85.05602080226377,26151,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,5,86.08705028214068,27823,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,6,78.78241820366053,28302,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,7,85.8500147429807,30523,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,8,83.07960263191846,31004,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,9,81.32579585649317,31664,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,10,83.73880030372057,32925,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),43,11,81.45027296463327,33704,derpp__ember__seed_43.json,V15.4
+EMBER,DER++ (standard),44,1,92.98405466970388,15365,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,2,84.04491883477874,17988,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,3,85.30687209836233,19601,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,4,86.59369564295109,23571,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,5,86.72083434392432,24738,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,6,85.93279349059188,25563,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,7,85.12785749256204,26553,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,8,74.20689655172413,29725,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,9,82.90342927331275,30123,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,10,82.7054573603406,31004,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),44,11,82.16235461666271,33704,derpp__ember__seed_44.json,V15.4
+EMBER,DER++ (standard),45,1,91.87758637282263,20782,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,2,86.5372047427878,21422,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,3,87.5785881084965,22268,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,4,85.06625680222656,24073,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,5,86.67107721046077,25696,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,6,82.59812302899047,26319,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,7,84.98202098774492,27254,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,8,85.31957503139745,29461,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,9,80.82525069866841,30415,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,10,84.42081057775222,31311,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),45,11,83.30465226679325,33704,derpp__ember__seed_45.json,V15.4
+EMBER,DER++ (standard),46,1,91.75777453838678,16464,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,2,88.7505254308533,19032,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,3,87.5242923531897,23670,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,4,86.68912175648703,24048,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,5,87.19186278420423,25070,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,6,70.90622875746843,27951,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,7,83.1060552533032,28306,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,8,83.51655902157482,29108,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,9,83.0611732194448,31844,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,10,80.98226799098165,32822,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),46,11,84.23035841443152,33704,derpp__ember__seed_46.json,V15.4
+EMBER,DER++ (standard),47,1,93.55465587044534,18525,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,2,87.7005895924122,19505,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,3,83.38894399855712,22178,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,4,79.09996594005449,23488,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,5,81.35484130495998,24859,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,6,82.18241979571285,27804,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,7,80.91318418460672,28428,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,8,80.01591255015913,28908,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,9,80.60682421848396,29366,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,10,81.12018669778296,29995,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),47,11,84.45881794445764,33704,derpp__ember__seed_47.json,V15.4
+EMBER,DER++ (standard),48,1,92.88329265586864,18028,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,2,85.62602387081675,21365,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,3,87.55632122979061,22638,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,4,85.46437927828953,23666,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,5,81.17933481884954,24234,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,6,79.16814508180565,25365,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,7,84.10452855950847,26366,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,8,83.38015835370526,27407,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,9,83.3077369373059,29301,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,10,79.93299832495812,29850,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),48,11,83.57464989318774,33704,derpp__ember__seed_48.json,V15.4
+EMBER,DER++ (standard),49,1,92.86715737819839,17118,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,2,79.37661344296778,20918,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,3,87.3735825927061,22841,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,4,81.39083780437474,24230,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,5,83.44285943260138,24956,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,6,83.45795425245865,27149,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,7,83.60524690236547,27521,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,8,84.44969329478954,28366,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,9,84.83844241922121,30175,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,10,70.4177585941113,32435,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),49,11,83.61322098267267,33704,derpp__ember__seed_49.json,V15.4
+EMBER,DER++ (standard),50,1,94.64660601819455,14290,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,2,88.2242169355345,15931,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,3,89.16479852848192,17397,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,4,89.03994785361765,21478,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,5,84.38563159987629,22633,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,6,86.76241564284479,23116,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,7,81.81439520159947,24008,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,8,83.02286839315462,26412,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,9,83.82815470224313,28933,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,10,65.05508709300179,32494,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),50,11,82.96938048896273,33704,derpp__ember__seed_50.json,V15.4
+EMBER,DER++ (standard),51,1,94.9903554698264,18145,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,2,63.600462338663064,20764,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,3,85.75339056862013,24111,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,4,87.72304648862513,25275,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,5,88.10171235393548,27214,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,6,85.51422161105884,27634,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,7,86.98168806567038,28506,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,8,83.12313468759027,31161,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,9,83.70580179282868,32128,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,10,80.04132733681779,32908,derpp__ember__seed_51.json,V15.4
+EMBER,DER++ (standard),51,11,81.39686684073108,33704,derpp__ember__seed_51.json,V15.4
+AZ-Class,ER (standard),42,1,88.85571265478177,11387,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,2,77.84095216435448,13191,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,3,79.99863471909346,14649,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,4,74.28554866384557,17251,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,5,51.417004048582996,19513,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,6,75.94802694898941,20780,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,7,74.2673712713456,22897,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,8,60.87837574529441,25661,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,9,66.7965434765836,25922,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,10,77.51134393330136,27107,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),42,11,69.22511292412199,28559,er__az_class__seed_42.json,V15.4
+AZ-Class,ER (standard),43,1,88.39167871284018,15911,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,2,79.63770546796377,17886,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,3,78.61938732689887,19064,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,4,76.09639494609493,20499,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,5,76.953329837441,22884,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,6,74.4012361576101,23298,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,7,68.32379269276576,26029,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,8,73.40656111090702,27221,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,9,74.52403189884332,27838,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,10,71.55982754965015,28298,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),43,11,70.8113029167688,28559,er__az_class__seed_43.json,V15.4
+AZ-Class,ER (standard),44,1,89.60733308559395,16146,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,2,81.34384168440431,17383,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,3,83.68686594694297,18433,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,4,79.4735997432194,18693,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,5,79.7297942426123,20947,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,6,65.7479755647109,21117,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,7,77.79281756270885,23641,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,8,71.96336439627244,25003,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,9,75.72506025969987,25722,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,10,73.66763027203321,26982,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),44,11,74.68748905774012,28559,er__az_class__seed_44.json,V15.4
+AZ-Class,ER (standard),45,1,90.67361733322473,12277,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,2,55.34923582345379,14002,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,3,83.24408594862062,14753,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,4,76.57794175780735,15178,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,5,77.41124006631982,17491,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,6,75.96158533612831,20513,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,7,81.4027149321267,22100,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,8,77.87603021978022,23296,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,9,71.23309788092836,24775,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,10,74.5974616404622,26395,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),45,11,67.06467313281277,28559,er__az_class__seed_45.json,V15.4
+AZ-Class,ER (standard),46,1,87.24719824809996,15526,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,2,75.17443169029934,17772,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,3,76.24537982015778,18127,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,4,77.3794614902943,19164,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,5,75.54961796278067,21333,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,6,75.4585792049769,21861,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,7,68.36997595328066,23288,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,8,75.50928943937419,24544,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,9,72.47931124058337,26947,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,10,70.76066246519126,27292,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),46,11,73.26937217689695,28559,er__az_class__seed_46.json,V15.4
+AZ-Class,ER (standard),47,1,89.83883530046133,16691,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,2,84.31068820535516,18076,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,3,83.82216255292782,19366,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,4,81.92742013319177,20722,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,5,79.16666666666666,21960,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,6,76.0245268869381,22669,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,7,77.33613770013307,23297,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,8,72.11546291018647,24562,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,9,75.04373177842567,25725,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,10,72.96304541406946,26952,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),47,11,72.15588781119787,28559,er__az_class__seed_47.json,V15.4
+AZ-Class,ER (standard),48,1,88.27696024599166,18212,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,2,77.57253183051554,19164,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,3,80.33597336427383,19823,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,4,76.52046229632437,21112,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,5,76.10224817249782,21751,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,6,73.22990890231803,22174,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,7,73.36985569214323,22452,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,8,71.41573400865943,24482,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,9,72.18968236089209,26634,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,10,73.37837837837839,27380,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),48,11,75.89201302566616,28559,er__az_class__seed_48.json,V15.4
+AZ-Class,ER (standard),49,1,90.46577055329792,12796,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,2,77.4955229820256,15077,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,3,79.16878818737271,15712,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,4,81.77434908389586,16592,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,5,64.63988031630691,18716,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,6,77.55336699495075,20003,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,7,75.30401389777819,21874,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,8,61.049407921600654,24490,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,9,73.16145714503004,26298,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,10,70.47040532234155,27657,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),49,11,74.4178717742218,28559,er__az_class__seed_49.json,V15.4
+AZ-Class,ER (standard),50,1,92.82992456645151,12859,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,2,81.84199348718676,14126,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,3,78.53045439896874,15515,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,4,84.43783878300403,17157,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,5,81.60601265822784,17696,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,6,77.49106579777171,19028,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,7,72.01322860686234,19352,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,8,68.63476831489626,22509,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,9,76.45310009048214,23209,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,10,74.04380132968322,25570,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),50,11,71.45208165552015,28559,er__az_class__seed_50.json,V15.4
+AZ-Class,ER (standard),51,1,85.99563953488372,13760,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,2,75.90369481125784,14994,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,3,75.35357229943916,16404,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,4,76.25963248369887,16870,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,5,76.23325371274275,19258,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,6,76.89465706707085,21112,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,7,75.35450810619781,22637,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,8,73.42180329902021,24189,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,9,70.19735581529028,26095,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,10,75.43280516431925,27264,er__az_class__seed_51.json,V15.4
+AZ-Class,ER (standard),51,11,75.11117336041178,28559,er__az_class__seed_51.json,V15.4
+EMBER,ER (standard),42,1,92.17135207496653,18675,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,2,87.43751935241298,22607,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,3,88.0313014827018,24280,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,4,82.99629390912021,24824,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,5,83.97088492424542,25279,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,6,81.75866744141004,25815,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,7,83.63450003796218,26342,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,8,72.01435161455663,29265,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,9,83.74119909432089,32241,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,10,82.49931554771392,32873,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),42,11,75.69131260384523,33704,er__ember__seed_42.json,V15.4
+EMBER,ER (standard),43,1,92.1369433877825,22345,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,2,89.18813087365123,22984,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,3,85.46528679767043,23867,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,4,84.67362624756224,26151,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,5,84.38701793480215,27823,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,6,77.36909052363791,28302,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,7,85.76810929463028,30523,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,8,81.36046961682364,31004,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,9,82.03954017180394,31664,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,10,83.54138192862567,32925,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),43,11,80.69962022311891,33704,er__ember__seed_43.json,V15.4
+EMBER,ER (standard),44,1,92.98405466970388,15365,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,2,82.97198132088059,17988,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,3,84.07224121218306,19601,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,4,85.80034788511306,23571,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,5,85.22920203735144,24738,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,6,85.18953174510034,25563,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,7,84.00180770534404,26553,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,8,78.43566021867116,29725,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,9,81.04438468943997,30123,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,10,82.26357889304606,31004,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),44,11,81.67576548777593,33704,er__ember__seed_44.json,V15.4
+EMBER,ER (standard),45,1,91.87758637282263,20782,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,2,85.94902436747269,21422,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,3,87.2103466858272,22268,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,4,85.21580193577867,24073,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,5,85.97836239103363,25696,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,6,81.69383335233101,26319,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,7,84.21149189109856,27254,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,8,84.75611825803605,29461,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,9,80.0361663652803,30415,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,10,84.02158985659992,31311,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),45,11,82.8239971516734,33704,er__ember__seed_45.json,V15.4
+EMBER,ER (standard),46,1,91.75777453838678,16464,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,2,87.62084909625894,19032,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,3,86.34980988593156,23670,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,4,85.97388556220892,24048,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,5,87.14000797766255,25070,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,6,76.56255590139888,27951,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,7,80.477637250053,28306,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,8,80.27346433970042,29108,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,9,82.53046099736214,31844,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,10,80.48564986899032,32822,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),46,11,82.48872537384287,33704,er__ember__seed_46.json,V15.4
+EMBER,ER (standard),47,1,93.55465587044534,18525,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,2,87.19302742886438,19505,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,3,82.34737126882496,22178,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,4,78.41450953678473,23488,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,5,80.75546079890583,24859,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,6,81.61415623651274,27804,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,7,80.03728718165189,28428,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,8,79.48318804483188,28908,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,9,79.80998433562624,29366,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,10,79.84330721786964,29995,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),47,11,83.8001424163304,33704,er__ember__seed_47.json,V15.4
+EMBER,ER (standard),48,1,92.88329265586864,18028,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,2,84.52609407910133,21365,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,3,85.93073593073593,22638,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,4,84.0150426772585,23666,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,5,80.95238095238095,24234,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,6,78.96313818253499,25365,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,7,83.44838049002503,26366,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,8,82.26730397343745,27407,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,9,82.50571652844613,29301,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,10,78.83417085427136,29850,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),48,11,82.96047946831237,33704,er__ember__seed_48.json,V15.4
+EMBER,ER (standard),49,1,92.86715737819839,17118,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,2,79.13280428339229,20918,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,3,85.75806663456066,22841,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,4,80.58192323565827,24230,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,5,82.35694822888283,24956,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,6,82.49659287634904,27149,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,7,83.0166055012536,27521,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,8,83.32158217584433,28366,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,9,83.90389395194697,30175,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,10,81.43055341452134,32435,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),49,11,82.63707571801567,33704,er__ember__seed_49.json,V15.4
+EMBER,ER (standard),50,1,94.64660601819455,14290,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,2,87.5086309710627,15931,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,3,87.08397999655114,17397,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,4,88.15532172455536,21478,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,5,83.86426898776124,22633,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,6,85.87558401107458,23116,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,7,81.26041319560147,24008,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,8,82.53445403604422,26412,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,9,83.12653371582623,28933,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,10,66.47073305841079,32494,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),50,11,81.80334678376454,33704,er__ember__seed_50.json,V15.4
+EMBER,ER (standard),51,1,94.9903554698264,18145,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,2,63.39818917356964,20764,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,3,85.0441707104641,24111,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,4,86.61523244312562,25275,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,5,87.08752847798927,27214,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,6,84.30556560758487,27634,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,7,86.20290465165228,28506,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,8,82.83110298129071,31161,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,9,82.88408864541833,32128,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,10,79.40014586118876,32908,er__ember__seed_51.json,V15.4
+EMBER,ER (standard),51,11,82.94564443389508,33704,er__ember__seed_51.json,V15.4

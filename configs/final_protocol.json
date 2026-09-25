@@ -1,0 +1,13 @@
+{
+  "datasets": {
+    "EMBER": {"feature_dim": 2381, "train_shape": [303331, 2381], "test_shape": [33704, 2381], "k_per_class": 100},
+    "AZ-Class": {"feature_dim": 2439, "train_shape": [257023, 2439], "test_shape": [28559, 2439], "k_per_class": 200}
+  },
+  "seeds": [42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
+  "class_order": "numpy.random.RandomState(seed).permutation(100)",
+  "task_sizes": [50, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+  "full_data": true,
+  "evaluate_all_seen_classes_after_each_task": true,
+  "ahr": {"variant": "hybrid_random_buffer", "gan_epochs": 3, "classifier_epochs": 3, "gan_mode": "wgan_gp", "critic_mode": "projection"},
+  "adapted_malcl": {"label": "protocol-matched adapted MalCL baseline", "epochs_per_task": 3, "batch_size": 256, "generator_loss": "FML", "sample_selection": "L1_C_Mean", "k": 3}
+}

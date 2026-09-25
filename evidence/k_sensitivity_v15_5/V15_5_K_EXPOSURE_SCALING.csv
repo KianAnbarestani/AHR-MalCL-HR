@@ -1,0 +1,7 @@
+dataset,k_level,K,N_new,mean_total_optimizer_steps,mean_classifier_pool_size,mean_actual_anchor_draws,mean_generated_draws,mean_current_draws,exposure_source
+ember,LOW,25,5,4632.6,35814.181818181816,12136.672727272728,48680.72727272727,46625.145454545454,serialized replay_exposure.csv for new T4 rows
+ember,MAIN,100,0,not serialized,not serialized,not serialized,not serialized,not serialized,historical exposure reconstruction not serialized in compact reuse source
+ember,HIGH,200,10,6119.7,47348.27272727273,60925.263636363634,30481.71818181818,50637.836363636365,serialized replay_exposure.csv for new T4 rows
+az_class,LOW,100,5,4727.4,36547.545454545456,34210.43636363636,34207.07272727273,41225.12727272727,serialized replay_exposure.csv for new T4 rows
+az_class,MAIN,200,0,not serialized,not serialized,not serialized,not serialized,not serialized,historical exposure reconstruction not serialized in compact reuse source
+az_class,HIGH,400,10,7016.4,54301.24545454545,92925.8,25980.090909090908,43997.84545454545,serialized replay_exposure.csv for new T4 rows

@@ -1,0 +1,41 @@
+run_id,dataset,seed,variant,resumed,resume_events,resume_boundaries,checkpoint_present,checkpoint_boundary_legitimate,validation
+anchor_only__ember__seed_42,ember,42,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_43,ember,43,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_44,ember,44,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_45,ember,45,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_46,ember,46,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_47,ember,47,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_48,ember,48,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_49,ember,49,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_50,ember,50,anchor_only,no,0,,False,yes,PASS
+anchor_only__ember__seed_51,ember,51,anchor_only,no,0,,False,yes,PASS
+current_only__ember__seed_47,ember,47,current_only,no,0,,False,yes,PASS
+generated_only__ember__seed_47,ember,47,generated_only,no,0,,False,yes,PASS
+current_only__ember__seed_48,ember,48,current_only,no,0,,False,yes,PASS
+generated_only__ember__seed_48,ember,48,generated_only,no,0,,False,yes,PASS
+current_only__ember__seed_49,ember,49,current_only,no,0,,False,yes,PASS
+generated_only__ember__seed_49,ember,49,generated_only,yes,2,RESUME next_task=5 | RESUME next_task=10,False,yes,PASS
+current_only__ember__seed_50,ember,50,current_only,no,0,,False,yes,PASS
+generated_only__ember__seed_50,ember,50,generated_only,yes,1,RESUME next_task=11,False,yes,PASS
+current_only__ember__seed_51,ember,51,current_only,no,0,,False,yes,PASS
+generated_only__ember__seed_51,ember,51,generated_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_42,az_class,42,anchor_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_43,az_class,43,anchor_only,yes,1,RESUME next_task=5,False,yes,PASS
+anchor_only__az_class__seed_44,az_class,44,anchor_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_45,az_class,45,anchor_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_46,az_class,46,anchor_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_47,az_class,47,anchor_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_48,az_class,48,anchor_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_49,az_class,49,anchor_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_50,az_class,50,anchor_only,no,0,,False,yes,PASS
+anchor_only__az_class__seed_51,az_class,51,anchor_only,no,0,,False,yes,PASS
+current_only__az_class__seed_47,az_class,47,current_only,no,0,,False,yes,PASS
+generated_only__az_class__seed_47,az_class,47,generated_only,no,0,,False,yes,PASS
+current_only__az_class__seed_48,az_class,48,current_only,no,0,,False,yes,PASS
+generated_only__az_class__seed_48,az_class,48,generated_only,no,0,,False,yes,PASS
+current_only__az_class__seed_49,az_class,49,current_only,no,0,,False,yes,PASS
+generated_only__az_class__seed_49,az_class,49,generated_only,no,0,,False,yes,PASS
+current_only__az_class__seed_50,az_class,50,current_only,no,0,,False,yes,PASS
+generated_only__az_class__seed_50,az_class,50,generated_only,no,0,,False,yes,PASS
+current_only__az_class__seed_51,az_class,51,current_only,no,0,,False,yes,PASS
+generated_only__az_class__seed_51,az_class,51,generated_only,yes,1,RESUME next_task=3,False,yes,PASS

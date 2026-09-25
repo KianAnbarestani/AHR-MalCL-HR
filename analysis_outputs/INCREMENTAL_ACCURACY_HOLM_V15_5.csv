@@ -1,0 +1,25 @@
+dataset,metric,method,comparator,wilcoxon_p,holm_adjusted_wilcoxon_p,correction_family
+EMBER,sw_aia,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.232421875,0.232421875,EMBER:sw_aia:three planned comparator contrasts
+EMBER,sw_aia,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.037109375,0.07421875,EMBER:sw_aia:three planned comparator contrasts
+EMBER,sw_aia,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,EMBER:sw_aia:three planned comparator contrasts
+EMBER,tm_aia,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.037109375,0.037109375,EMBER:tm_aia:three planned comparator contrasts
+EMBER,tm_aia,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,EMBER:tm_aia:three planned comparator contrasts
+EMBER,tm_aia,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,EMBER:tm_aia:three planned comparator contrasts
+EMBER,final_task_macro_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.001953125,0.005859375,EMBER:final_task_macro_accuracy:three planned comparator contrasts
+EMBER,final_task_macro_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,EMBER:final_task_macro_accuracy:three planned comparator contrasts
+EMBER,final_task_macro_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,EMBER:final_task_macro_accuracy:three planned comparator contrasts
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.001953125,0.005859375,EMBER:forgetting:three planned comparator contrasts
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,EMBER:forgetting:three planned comparator contrasts
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,EMBER:forgetting:three planned comparator contrasts
+AZ-Class,sw_aia,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.76953125,1.0,AZ-Class:sw_aia:three planned comparator contrasts
+AZ-Class,sw_aia,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.76953125,1.0,AZ-Class:sw_aia:three planned comparator contrasts
+AZ-Class,sw_aia,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,AZ-Class:sw_aia:three planned comparator contrasts
+AZ-Class,tm_aia,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.083984375,0.16796875,AZ-Class:tm_aia:three planned comparator contrasts
+AZ-Class,tm_aia,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.130859375,0.16796875,AZ-Class:tm_aia:three planned comparator contrasts
+AZ-Class,tm_aia,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,AZ-Class:tm_aia:three planned comparator contrasts
+AZ-Class,final_task_macro_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.431640625,0.86328125,AZ-Class:final_task_macro_accuracy:three planned comparator contrasts
+AZ-Class,final_task_macro_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.4921875,0.86328125,AZ-Class:final_task_macro_accuracy:three planned comparator contrasts
+AZ-Class,final_task_macro_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,AZ-Class:final_task_macro_accuracy:three planned comparator contrasts
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.001953125,0.005859375,AZ-Class:forgetting:three planned comparator contrasts
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,AZ-Class:forgetting:three planned comparator contrasts
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.00390625,0.005859375,AZ-Class:forgetting:three planned comparator contrasts

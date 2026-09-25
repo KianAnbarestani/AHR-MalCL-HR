@@ -1,0 +1,2 @@
+from v15_5_checks import check_malcl_provenance
+def test_all_malcl_preserved_output_chains(): check_malcl_provenance()

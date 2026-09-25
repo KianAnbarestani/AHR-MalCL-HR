@@ -1,0 +1,3 @@
+# Historical/new K-sensitivity continuity audit
+
+Classification: **MINOR_UNCERTAINTY**. The 30 historical rows are the approved reuse set: MAIN-K rows are authoritative exact V15.5 evidence; LOW-K rows retain `LIKELY_COMPATIBLE_WITH_RECONSTRUCTED_EVIDENCE`. The 30 new T4 rows serialize the audited V15.5 classifier, sampler, GAN, replay timing, task schedule, and metric-lock semantics. Thus LOW seeds 42–46 and new LOW seeds 47–51 are scientifically combinable as a native-protocol sensitivity trajectory, with the LOW provenance qualification preserved. Historical literal class-order vectors and per-run environment/exposure/checkpoint payloads are not fully serialized, so their evidence is inferred/compatible rather than upgraded to exact.

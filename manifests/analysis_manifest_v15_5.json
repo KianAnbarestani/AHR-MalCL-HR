@@ -1,0 +1,25 @@
+{
+  "release_package_version": "V15.5",
+  "manuscript_version": "V15.5",
+  "scope": "clean-room analysis reproduction",
+  "training_executed": false,
+  "inputs": [
+    "task_matrices/task_matrix_manifest.csv",
+    "analysis_outputs/TASK_TEST_SUPPORTS_V15_4.csv",
+    "manifests/raw_result_manifest_v15_5.csv",
+    "reports/MALCL_MATRIX_PROVENANCE_CHAIN_V15_5.csv"
+  ],
+  "outputs": [
+    "analysis_outputs/INCREMENTAL_ACCURACY_PER_SEED_V15_5.csv",
+    "analysis_outputs/INCREMENTAL_ACCURACY_SUMMARY_V15_5.csv",
+    "analysis_outputs/STAGE_LEVEL_SW_TM_ACCURACY_V15_5.csv",
+    "analysis_outputs/INCREMENTAL_ACCURACY_PAIRED_TESTS_V15_5.csv",
+    "analysis_outputs/INCREMENTAL_ACCURACY_HOLM_V15_5.csv",
+    "analysis_outputs/STABILITY_PLASTICITY_ANALYSIS_V15_5.csv",
+    "analysis_outputs/STABILITY_PLASTICITY_SUMMARY_V15_5.csv",
+    "results/final_all_methods_seed_level_v15_5.csv",
+    "figures/stability_plasticity_v15_5.csv",
+    "figures/stability_plasticity_v15_5.pdf",
+    "figures/stability_plasticity_v15_5.png"
+  ]
+}

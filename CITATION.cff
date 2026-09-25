@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying manuscript."
+title: "Anchored Hybrid Replay for Class-Incremental Malware Classification: Evaluating the Stability–Plasticity Trade-off"
+version: "V15.5"
+license: MIT
+authors:
+  - family-names: "Anbarestani"
+    given-names: "Kian"
+    orcid: "https://orcid.org/0009-0003-2772-5554"
+  - family-names: "Manavi"
+    given-names: "Farnoush"
+abstract: "Analysis code, validated result artifacts, provenance records, and a verified V15.5 Standard-A runner handoff for class-incremental malware classification. The release supports analysis reproduction from packaged evidence and does not claim exact end-to-end reproduction of every historical training run."

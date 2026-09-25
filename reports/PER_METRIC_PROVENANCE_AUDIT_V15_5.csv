@@ -1,0 +1,5 @@
+metric_category,metrics,required_source_field,source_semantics,coverage
+task_matrix,"sw_aia,tm_aia,forgetting,bwt,task_acquisition,old_new_task_accuracy",task_matrix_source,Separate provenance field; never inferred from task matrices.,80/80 seed-method-dataset records where the metric is reported.
+prediction_or_classification_report,"macro_f1,weighted_f1,balanced_accuracy",classification_report_source,Separate provenance field; never inferred from task matrices.,80/80 seed-method-dataset records where the metric is reported.
+resource_artifact,"memory,gpu_peak,parameter_counts",resource_measurement_source,Separate provenance field; never inferred from task matrices.,80/80 seed-method-dataset records where the metric is reported.
+diagnostic_output,"biased_rbf_mmd2,sliced_wasserstein,feature_center_l2",diagnostic_source,Separate provenance field; never inferred from task matrices.,80/80 seed-method-dataset records where the metric is reported.

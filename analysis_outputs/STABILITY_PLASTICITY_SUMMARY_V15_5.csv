@@ -1,0 +1,65 @@
+dataset,method,metric,mean,sd,n
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),task_acquisition,81.55700818181819,1.8681464772761374,10
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),bwt,-8.851255,1.5034984528185515,10
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),forgetting,9.159115000000002,1.4925473137949998,10
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),sw_aia,75.90771200345355,1.7136507011756124,10
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),tm_aia,78.11478705781845,2.1626423574063622,10
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),final_task_macro_accuracy,73.51041272727274,2.1964817973650783,10
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),final_old_task_accuracy,70.69065542069532,0.5053508112062113,10
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),final_new_task_accuracy,79.94836,15.712500704866951,10
+AZ-Class,DER++ (standard),task_acquisition,96.59291846356015,0.5359373824989859,10
+AZ-Class,DER++ (standard),bwt,-25.201312382435024,8.646683460027807,10
+AZ-Class,DER++ (standard),forgetting,25.271900617729138,8.615713352039776,10
+AZ-Class,DER++ (standard),sw_aia,75.64045055220701,2.568021469497477,10
+AZ-Class,DER++ (standard),tm_aia,79.44330383121601,2.5747001381790615,10
+AZ-Class,DER++ (standard),final_task_macro_accuracy,73.68263447952832,7.810488747709561,10
+AZ-Class,DER++ (standard),final_old_task_accuracy,70.24444641265919,6.288666692145102,10
+AZ-Class,DER++ (standard),final_new_task_accuracy,97.2978693390412,2.5600867120915893,10
+AZ-Class,ER (standard),task_acquisition,96.74114220650381,0.4568612791694408,10
+AZ-Class,ER (standard),bwt,-24.762418895699184,4.614287735619285,10
+AZ-Class,ER (standard),forgetting,24.76626504954534,4.612366780336259,10
+AZ-Class,ER (standard),sw_aia,76.05447385370036,1.7690944222636817,10
+AZ-Class,ER (standard),tm_aia,79.15379978888966,2.090535401981616,10
+AZ-Class,ER (standard),final_task_macro_accuracy,74.22985230132272,4.268356257117265,10
+AZ-Class,ER (standard),final_old_task_accuracy,71.00396798885528,3.2525943468276375,10
+AZ-Class,ER (standard),final_new_task_accuracy,97.37105298718836,2.570260883739966,10
+AZ-Class,protocol-matched adapted MalCL baseline,task_acquisition,43.36059588479048,6.182161440971272,10
+AZ-Class,protocol-matched adapted MalCL baseline,bwt,-15.410354817220924,5.5203047062770345,10
+AZ-Class,protocol-matched adapted MalCL baseline,forgetting,15.712215430197384,5.516346197872007,10
+AZ-Class,protocol-matched adapted MalCL baseline,sw_aia,44.19966572503553,3.8116818539100303,10
+AZ-Class,protocol-matched adapted MalCL baseline,tm_aia,38.77808934551815,4.813294528134085,10
+AZ-Class,protocol-matched adapted MalCL baseline,final_task_macro_accuracy,29.35118241458963,4.325226403756393,10
+AZ-Class,protocol-matched adapted MalCL baseline,final_old_task_accuracy,35.83840994775528,3.245401164188904,10
+AZ-Class,protocol-matched adapted MalCL baseline,final_new_task_accuracy,42.98401696906653,28.623369963191507,10
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),task_acquisition,87.08724545454545,1.0244968477172345,10
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),bwt,-9.168019000000001,1.8139328060411226,10
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),forgetting,9.22352,1.8098752460321679,10
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),sw_aia,83.04707448878534,1.3631462953105005,10
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),tm_aia,82.17656728725566,2.8249096473060193,10
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),final_task_macro_accuracy,78.75268272727274,2.1628255974373505,10
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),final_old_task_accuracy,78.68072624964582,0.9714155094936207,10
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),final_new_task_accuracy,87.07539,8.400344942447964,10
+EMBER,DER++ (standard),task_acquisition,95.38631442040688,0.5157005776126872,10
+EMBER,DER++ (standard),bwt,-15.303364834773953,2.1901858744062,10
+EMBER,DER++ (standard),forgetting,15.303364834773953,2.1901858744062,10
+EMBER,DER++ (standard),sw_aia,84.16017383343258,0.7102666909022595,10
+EMBER,DER++ (standard),tm_aia,84.04243739176454,2.355586501846807,10
+EMBER,DER++ (standard),final_task_macro_accuracy,81.47416457061236,2.0000112805634727,10
+EMBER,DER++ (standard),final_old_task_accuracy,81.53534231755656,2.0699949194047056,10
+EMBER,DER++ (standard),final_new_task_accuracy,96.78233878845461,1.9394037070962162,10
+EMBER,ER (standard),task_acquisition,95.74330216921176,0.49818886489838937,10
+EMBER,ER (standard),bwt,-16.559208677815906,2.160216168024443,10
+EMBER,ER (standard),forgetting,16.559208677815906,2.160216168024443,10
+EMBER,ER (standard),sw_aia,83.63052218954746,0.6754307882607888,10
+EMBER,ER (standard),tm_aia,83.00009711181586,2.495520590383177,10
+EMBER,ER (standard),final_task_macro_accuracy,80.68947609847001,2.015876470147143,10
+EMBER,ER (standard),final_old_task_accuracy,80.84393952583034,2.1373000989584936,10
+EMBER,ER (standard),final_new_task_accuracy,96.92008531720391,2.0371916695402783,10
+EMBER,protocol-matched adapted MalCL baseline,task_acquisition,52.975912968706595,5.256950838177034,10
+EMBER,protocol-matched adapted MalCL baseline,bwt,-18.525434845764703,7.609247351291795,10
+EMBER,protocol-matched adapted MalCL baseline,forgetting,19.062367343973712,7.494187676145405,10
+EMBER,protocol-matched adapted MalCL baseline,sw_aia,61.016576527309326,4.247857490433013,10
+EMBER,protocol-matched adapted MalCL baseline,tm_aia,51.12050845851313,6.345085257185672,10
+EMBER,protocol-matched adapted MalCL baseline,final_task_macro_accuracy,36.13460856346596,7.39496989962954,10
+EMBER,protocol-matched adapted MalCL baseline,final_old_task_accuracy,47.62758902671317,10.000938152131651,10
+EMBER,protocol-matched adapted MalCL baseline,final_new_task_accuracy,52.7710144226791,29.01845747917328,10

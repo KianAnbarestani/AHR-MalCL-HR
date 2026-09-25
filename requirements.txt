@@ -1,0 +1,3 @@
+# Convenience bundle for non-training verification and analysis.
+-r requirements-verification.txt
+-r requirements-analysis.txt

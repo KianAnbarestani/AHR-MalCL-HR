@@ -1,0 +1,37 @@
+dataset,metric,method_a,method_b,wilcoxon_p,wilcoxon_holm_p,wilcoxon_holm_significant_0_05,holm_family
+EMBER,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.001953125,0.005859375,True,EMBER::final_taskwise_accuracy
+EMBER,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,True,EMBER::final_taskwise_accuracy
+EMBER,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,EMBER::final_taskwise_accuracy
+EMBER,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.232421875,0.232421875,False,EMBER::mean_seen_accuracy
+EMBER,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.037109375,0.07421875,False,EMBER::mean_seen_accuracy
+EMBER,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,EMBER::mean_seen_accuracy
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.001953125,0.005859375,True,EMBER::forgetting
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,True,EMBER::forgetting
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,EMBER::forgetting
+EMBER,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.001953125,0.005859375,True,EMBER::macro_f1
+EMBER,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,True,EMBER::macro_f1
+EMBER,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,EMBER::macro_f1
+EMBER,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.064453125,0.064453125,False,EMBER::weighted_f1
+EMBER,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.01953125,0.0390625,True,EMBER::weighted_f1
+EMBER,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,EMBER::weighted_f1
+EMBER,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.00390625,0.005859375,True,EMBER::balanced_accuracy
+EMBER,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,True,EMBER::balanced_accuracy
+EMBER,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,EMBER::balanced_accuracy
+AZ-Class,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.431640625,0.86328125,False,AZ-Class::final_taskwise_accuracy
+AZ-Class,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.4921875,0.86328125,False,AZ-Class::final_taskwise_accuracy
+AZ-Class,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,AZ-Class::final_taskwise_accuracy
+AZ-Class,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.76953125,1.0,False,AZ-Class::mean_seen_accuracy
+AZ-Class,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.76953125,1.0,False,AZ-Class::mean_seen_accuracy
+AZ-Class,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,AZ-Class::mean_seen_accuracy
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.001953125,0.005859375,True,AZ-Class::forgetting
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.001953125,0.005859375,True,AZ-Class::forgetting
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.00390625,0.005859375,True,AZ-Class::forgetting
+AZ-Class,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.00390625,0.0078125,True,AZ-Class::macro_f1
+AZ-Class,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.009765625,0.009765625,True,AZ-Class::macro_f1
+AZ-Class,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,AZ-Class::macro_f1
+AZ-Class,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.193359375,0.38671875,False,AZ-Class::weighted_f1
+AZ-Class,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.431640625,0.431640625,False,AZ-Class::weighted_f1
+AZ-Class,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,AZ-Class::weighted_f1
+AZ-Class,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),0.921875,1.0,False,AZ-Class::balanced_accuracy
+AZ-Class,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),0.76953125,1.0,False,AZ-Class::balanced_accuracy
+AZ-Class,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,0.001953125,0.005859375,True,AZ-Class::balanced_accuracy

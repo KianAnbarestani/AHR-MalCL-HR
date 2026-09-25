@@ -4,6 +4,14 @@
 venv/
 env/
 
+# Local secrets and machine-specific files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.token
+
 # Large/generated experiment outputs
 result/
 result_external_baselines/
@@ -13,7 +21,13 @@ paper_ready/**/outputs/
 paper_ready/**/output*/
 paper_ready/**/downloaded/
 
-# Binary/package artifacts
+# Local-only datasets and training outputs; released evidence stays tracked
+/data/
+/datasets/
+/local_data/
+/checkpoints/
+
+# Binary/package artifacts and prepared model/dataset files
 *.npz
 *.pt
 *.pth
@@ -22,8 +36,14 @@ paper_ready/**/downloaded/
 *.tar
 *.tar.gz
 *.pdf
+# Keep the three analytical result figures in this release trackable.
+!figures/*.pdf
+!results/figures/*.pdf
 
 # Caches
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .ipynb_checkpoints/

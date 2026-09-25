@@ -1,0 +1,3 @@
+# K Pareto analysis
+
+The three K levels are compared jointly on final TM, lower-is-better forgetting, final-old accuracy, anchor capacity, and optimizer exposure. Because higher K necessarily costs memory and native update exposure, a level is Pareto-dominated only when it is no better on every performance metric and strictly worse on at least one without a compensating resource advantage. The supplied summary and exposure tables should be used for the final manuscript-facing tradeoff; historical exposure is not fully serialized, so cross-level resource claims involving historical rows are descriptive.

@@ -1,0 +1,9 @@
+{
+  "classifier_parameter_memory_mb": 16.226242065429688,
+  "copied_past_generator_classifier_memory_mb": 223.86933517456055,
+  "discriminator_parameter_memory_mb": 2440.5263710021973,
+  "generated_replay_tensor_memory_mb": 3564.2407035827637,
+  "generator_parameter_memory_mb": 207.64309310913086,
+  "memory_mb_total_method_side_estimate": 6452.505744934082,
+  "peak_gpu_memory_mb": 30308.78466796875
+}

@@ -1,0 +1,9 @@
+dataset,method,retained_real_per_class,generated_selected_per_previous_class,generated_candidates_per_previous_class,classifier_batch_size,classifier_epochs,gan_epochs,critic_updates_per_generator_update,equal_retained_real_vs_main,equal_replay_examples,equal_classifier_updates,equal_compute,persistent_memory_boundary,transient_gpu_boundary,compute_time_comparable,notes
+EMBER,Anchored hybrid replay,100,100,1000,256,3,3,5,yes,no,no,no,"classifier+anchors+legacy model aggregate","generated tensors+optimizer state+peak allocation",no,"K is per class; replay/current ratio changes by task"
+EMBER,ER,100,0,0,256,3,0,0,yes,no,no,no,"classifier+features+labels","training tensors+peak allocation",no,"real replay only"
+EMBER,DER++,100,0,0,256,3,0,0,yes,no,no,no,"classifier+features+labels+logits","training tensors+peak allocation",no,"real replay and stored logits"
+EMBER,Adapted MalCL,3,implementation-selected,implementation-selected,256,3,3,implementation-specific,no,no,no,no,"classifier+generator+discriminator+snapshot","generated tensors+peak allocation",no,"k=3 is the official-style selection parameter, not AHR K"
+AZ-Class,Anchored hybrid replay,200,100,1000,256,3,3,5,yes,no,no,no,"classifier+anchors+legacy model aggregate","generated tensors+optimizer state+peak allocation",no,"K is per class; replay/current ratio changes by task"
+AZ-Class,ER,200,0,0,256,3,0,0,yes,no,no,no,"classifier+features+labels","training tensors+peak allocation",no,"real replay only"
+AZ-Class,DER++,200,0,0,256,3,0,0,yes,no,no,no,"classifier+features+labels+logits","training tensors+peak allocation",no,"real replay and stored logits"
+AZ-Class,Adapted MalCL,3,implementation-selected,implementation-selected,256,3,3,implementation-specific,no,no,no,no,"classifier+generator+discriminator+snapshot","generated tensors+peak allocation",no,"k=3 is the official-style selection parameter, not AHR K"

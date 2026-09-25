@@ -1,0 +1,7 @@
+dataset,k_level,K,theoretical_anchor_capacity_at_100_seen_classes,actual_retained_anchor_count,anchor_array_bytes,generated_replay_count,generated_replay_bytes,model_state_bytes
+ember,LOW,25,2500,serialized per task only for new rows,not serialized,serialized per task only for new rows,not serialized,not serialized
+ember,MAIN,100,10000,serialized per task only for new rows,not serialized,serialized per task only for new rows,not serialized,not serialized
+ember,HIGH,200,20000,serialized per task only for new rows,not serialized,serialized per task only for new rows,not serialized,not serialized
+az_class,LOW,100,10000,serialized per task only for new rows,not serialized,serialized per task only for new rows,not serialized,not serialized
+az_class,MAIN,200,20000,serialized per task only for new rows,not serialized,serialized per task only for new rows,not serialized,not serialized
+az_class,HIGH,400,40000,serialized per task only for new rows,not serialized,serialized per task only for new rows,not serialized,not serialized

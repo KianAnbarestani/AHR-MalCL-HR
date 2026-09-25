@@ -1,0 +1,49 @@
+dataset,method,metric,n,mean,sample_sd,definition_version
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),aia,10,75.90771200345355,1.7136507011756066,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),forgetting,10,9.159115000000002,1.4925473137949996,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),bwt,10,-8.851255,1.5034984528185515,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),task_acquisition,10,81.55700818181819,1.8681464772761374,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),final_old_task_accuracy,10,70.69065542069532,0.5053508112062114,V15.4
+AZ-Class,AHR-MalCL-HR (hybrid_random_buffer),final_new_task_accuracy,10,79.94836000000001,15.712500704866953,V15.4
+AZ-Class,DER++ (standard),aia,10,75.640450552207,2.5680214694974777,V15.4
+AZ-Class,DER++ (standard),forgetting,10,25.271900617729138,8.615713352039776,V15.4
+AZ-Class,DER++ (standard),bwt,10,-25.20131238243502,8.646683460027807,V15.4
+AZ-Class,DER++ (standard),task_acquisition,10,96.59291846356015,0.5359373824989859,V15.4
+AZ-Class,DER++ (standard),final_old_task_accuracy,10,70.24444641265919,6.288666692145102,V15.4
+AZ-Class,DER++ (standard),final_new_task_accuracy,10,97.29786933904118,2.5600867120915893,V15.4
+AZ-Class,ER (standard),aia,10,76.05447385370037,1.7690944222636804,V15.4
+AZ-Class,ER (standard),forgetting,10,24.766265049545336,4.612366780336259,V15.4
+AZ-Class,ER (standard),bwt,10,-24.762418895699184,4.614287735619285,V15.4
+AZ-Class,ER (standard),task_acquisition,10,96.74114220650382,0.4568612791694408,V15.4
+AZ-Class,ER (standard),final_old_task_accuracy,10,71.00396798885527,3.2525943468276375,V15.4
+AZ-Class,ER (standard),final_new_task_accuracy,10,97.37105298718836,2.5702608837399654,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,aia,10,44.19966572503553,3.81168185391003,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,forgetting,10,15.712215430197382,5.516346197872006,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,bwt,10,-15.410354817220922,5.5203047062770345,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,task_acquisition,10,43.36059588479047,6.182161440971273,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,final_old_task_accuracy,10,35.838409947755274,3.2454011641889036,V15.4
+AZ-Class,protocol-matched adapted MalCL baseline,final_new_task_accuracy,10,42.98401696906653,28.623369963191507,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),aia,10,83.04707448878536,1.3631462953105058,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),forgetting,10,9.22352,1.8098752460321679,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),bwt,10,-9.168019000000001,1.8139328060411226,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),task_acquisition,10,87.08724545454545,1.0244968477172345,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),final_old_task_accuracy,10,78.68072624964582,0.9714155094936207,V15.4
+EMBER,AHR-MalCL-HR (hybrid_random_buffer),final_new_task_accuracy,10,87.07539,8.400344942447964,V15.4
+EMBER,DER++ (standard),aia,10,84.16017383343257,0.7102666909022574,V15.4
+EMBER,DER++ (standard),forgetting,10,15.303364834773955,2.1901858744062,V15.4
+EMBER,DER++ (standard),bwt,10,-15.303364834773955,2.1901858744062,V15.4
+EMBER,DER++ (standard),task_acquisition,10,95.38631442040688,0.5157005776126872,V15.4
+EMBER,DER++ (standard),final_old_task_accuracy,10,81.53534231755654,2.0699949194047056,V15.4
+EMBER,DER++ (standard),final_new_task_accuracy,10,96.78233878845462,1.9394037070962165,V15.4
+EMBER,ER (standard),aia,10,83.63052218954746,0.6754307882607894,V15.4
+EMBER,ER (standard),forgetting,10,16.559208677815903,2.160216168024443,V15.4
+EMBER,ER (standard),bwt,10,-16.559208677815903,2.160216168024443,V15.4
+EMBER,ER (standard),task_acquisition,10,95.74330216921174,0.4981888648983894,V15.4
+EMBER,ER (standard),final_old_task_accuracy,10,80.84393952583034,2.1373000989584936,V15.4
+EMBER,ER (standard),final_new_task_accuracy,10,96.92008531720391,2.037191669540278,V15.4
+EMBER,protocol-matched adapted MalCL baseline,aia,10,61.01657652730933,4.247857490433009,V15.4
+EMBER,protocol-matched adapted MalCL baseline,forgetting,10,19.062367343973715,7.494187676145405,V15.4
+EMBER,protocol-matched adapted MalCL baseline,bwt,10,-18.525434845764707,7.609247351291795,V15.4
+EMBER,protocol-matched adapted MalCL baseline,task_acquisition,10,52.97591296870661,5.256950838177034,V15.4
+EMBER,protocol-matched adapted MalCL baseline,final_old_task_accuracy,10,47.62758902671316,10.000938152131651,V15.4
+EMBER,protocol-matched adapted MalCL baseline,final_new_task_accuracy,10,52.7710144226791,29.01845747917328,V15.4

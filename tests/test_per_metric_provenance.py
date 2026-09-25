@@ -1,0 +1,2 @@
+from v15_5_checks import check_per_metric_provenance
+def test_per_metric_provenance_fields_and_hashes(): check_per_metric_provenance()

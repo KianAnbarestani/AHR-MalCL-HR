@@ -1,0 +1,37 @@
+dataset,metric,method_a,method_b,difference_definition,wins_ahr,ties,losses_ahr
+EMBER,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,0,0,10
+EMBER,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,0,0,10
+EMBER,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+EMBER,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,4,0,6
+EMBER,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,2,0,8
+EMBER,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),comparator minus AHR forgetting; positive favors AHR,10,0,0
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),comparator minus AHR forgetting; positive favors AHR,10,0,0
+EMBER,forgetting,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,comparator minus AHR forgetting; positive favors AHR,10,0,0
+EMBER,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,0,0,10
+EMBER,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,0,0,10
+EMBER,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+EMBER,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,1,0,9
+EMBER,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,1,0,9
+EMBER,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+EMBER,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,1,0,9
+EMBER,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,0,0,10
+EMBER,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+AZ-Class,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,3,0,7
+AZ-Class,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,3,0,7
+AZ-Class,final_taskwise_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+AZ-Class,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,4,0,6
+AZ-Class,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,4,0,6
+AZ-Class,mean_seen_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),comparator minus AHR forgetting; positive favors AHR,10,0,0
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),comparator minus AHR forgetting; positive favors AHR,10,0,0
+AZ-Class,forgetting,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,comparator minus AHR forgetting; positive favors AHR,9,0,1
+AZ-Class,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,1,0,9
+AZ-Class,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,1,0,9
+AZ-Class,macro_f1,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+AZ-Class,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,3,0,7
+AZ-Class,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,2,0,8
+AZ-Class,weighted_f1,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
+AZ-Class,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),ER (standard),AHR minus comparator; positive favors AHR,4,0,6
+AZ-Class,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),DER++ (standard),AHR minus comparator; positive favors AHR,4,0,6
+AZ-Class,balanced_accuracy,AHR-MalCL-HR (hybrid_random_buffer),protocol-matched adapted MalCL baseline,AHR minus comparator; positive favors AHR,10,0,0
