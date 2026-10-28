@@ -47,6 +47,7 @@ ZIP_ARCHIVE_GROWTH_MARGIN = 0.01
 TASK_BOUNDARY_GENERATIONS_PER_RUN = 11
 RECOVERY_GENERATIONS_PER_RUN = 2
 DRIVE_WRITE_PROBE_BYTES = b"revision_R1 shared-folder capacity probe v1\n"
+DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0, 8.0, 15.0)
 _DRIVE_WRITE_PROBE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 V62_RECOVERY_BUILD_ID = "revision_R1_colab_validation_v6_2_final_gan_recovery_qa"
 V62_RECOVERY_WORKFLOW_ID = "2b4d8f5f1f29a938"
@@ -732,9 +733,22 @@ def _write_capability_probe(
             os.fsync(stream.fileno())
         if probe_path.read_bytes() != DRIVE_WRITE_PROBE_BYTES:
             raise StorageCapacityError("mounted Drive write-capability probe failed byte-for-byte read-back")
-        metadata = lookup(service, parent_id, name)
+        metadata = None
+        lookup_attempts = 0
+        for retry_delay in (0.0, *DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS):
+            if retry_delay:
+                time.sleep(retry_delay)
+            lookup_attempts += 1
+            metadata = lookup(service, parent_id, name)
+            if metadata is not None:
+                break
         if not isinstance(metadata, dict):
-            raise StorageCapacityError("Drive API cannot see the mounted write-capability probe in its exact parent")
+            raise StorageCapacityError(
+                "Drive API could not verify the mounted write-capability probe in its exact parent "
+                f"after {lookup_attempts} attempts; probe_name={name!r}, parent_id={parent_id!r}, "
+                f"mounted_path={str(probe_path)!r}. Mounted write/read-back succeeded, but API visibility, "
+                "new-file ownership, and quota attribution remain unverified."
+            )
         file_owner = _owner_email(metadata)
         parents = [str(value) for value in metadata.get("parents", [])]
         quota_bytes = _optional_nonnegative_int(metadata.get("quotaBytesUsed"), "probe file quotaBytesUsed")

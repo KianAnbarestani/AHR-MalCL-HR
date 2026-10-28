@@ -861,6 +861,69 @@ def test_viewer_is_rejected_before_probe_and_unknown_quota_stays_unknown(tmp_pat
         }, projection, scope="first_run")
 
 
+def test_drive_probe_retries_exact_parent_lookup_after_mount_write(tmp_path, monkeypatch):
+    monkeypatch.setattr(production_workflow, "_DRIVE_WRITE_PROBE_CACHE", {})
+    sleeps = []
+    monkeypatch.setattr(production_workflow.time, "sleep", sleeps.append)
+    drive_root = tmp_path / "MyDrive"
+    destination_path = drive_root / "ReVision" / "results"
+    destination_path.mkdir(parents=True)
+    attempts = []
+
+    def delayed_metadata(service, parent_id, name):
+        attempts.append((parent_id, name))
+        if len(attempts) < 3:
+            return None
+        return _verified_probe_metadata(service, parent_id, name)
+
+    destination = inspect_drive_destination(
+        destination_path,
+        drive_root=drive_root,
+        api_factory=lambda: _drive_service(
+            target_owner="owner@example.org", authenticated_user="editor@example.org",
+        ),
+        probe_metadata_lookup=delayed_metadata,
+    )
+
+    assert destination["write_capability_verified"] is True
+    assert len(attempts) == 3
+    assert attempts[0][0] == attempts[1][0] == attempts[2][0] == "results-folder"
+    assert attempts[0][1] == attempts[1][1] == attempts[2][1]
+    assert sleeps == [1.0, 2.0]
+    assert list(destination_path.iterdir()) == []
+
+
+def test_drive_probe_visibility_timeout_reports_target_and_cleans_only_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(production_workflow, "_DRIVE_WRITE_PROBE_CACHE", {})
+    sleeps = []
+    monkeypatch.setattr(production_workflow.time, "sleep", sleeps.append)
+    drive_root = tmp_path / "MyDrive"
+    destination_path = drive_root / "ReVision" / "results"
+    destination_path.mkdir(parents=True)
+    (destination_path / "keep.txt").write_text("preserve", encoding="utf-8")
+    attempts = []
+
+    def invisible_metadata(_service, parent_id, name):
+        attempts.append((parent_id, name))
+        return None
+
+    with pytest.raises(StorageCapacityError, match=r"6 attempts.*results-folder") as error:
+        inspect_drive_destination(
+            destination_path,
+            drive_root=drive_root,
+            api_factory=lambda: _drive_service(
+                target_owner="owner@example.org", authenticated_user="editor@example.org",
+            ),
+            probe_metadata_lookup=invisible_metadata,
+        )
+
+    assert len(attempts) == 6
+    assert len({name for _parent, name in attempts}) == 1
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 15.0]
+    assert attempts[0][1] in str(error.value)
+    assert sorted(path.name for path in destination_path.iterdir()) == ["keep.txt"]
+
+
 def test_drive_insufficient_quota_stops_with_reserve_preserved():
     projection = project_storage({"run_count": 100}, observed_checkpoint_bytes=1000)
     low_quota_snapshot = {
