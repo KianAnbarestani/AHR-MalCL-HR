@@ -6,6 +6,8 @@ The current repository is public, so the notebook fetches without a GitHub token
 
 The Colab account can be any account with Editor access to the existing shared ReVision folder. The workflow resolves the shared destination, verifies the current account’s actual write capability, and reports quota ownership/availability from evidence. A folder owner is not assumed to be the account charged for newly created files. If quota ownership or sufficient available capacity cannot be established, readiness stops safely. No sharing permissions or ownership are changed.
 
+Cell A accepts only the observed handoff runtime: Python 3.12.13, NumPy 2.0.2, preinstalled PyTorch 2.11.0+cu128, and its CUDA 12.8 build with an available GPU. The notebook checks these versions in place and never pip-installs or replaces the CUDA PyTorch package. A Colab image mismatch stops before production and requires a reviewed, tested update.
+
 ## Colab execution order
 
 1. **A** — mount the existing Drive, resolve any required GitHub Secret, fetch the notebook-pinned full commit once, check it out detached, verify package/training/schedule identities, and set up the imports.

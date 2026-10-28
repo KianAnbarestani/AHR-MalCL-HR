@@ -135,7 +135,13 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "verify_package_integrity(PACKAGE_ROOT)" in cells[1]
     assert EXPECTED_TRAINING_SOURCE_SHA256 in cells[1]
     assert EXPECTED_EFFECTIVE_SCHEDULE_SHA256 in cells[1]
+    assert "EXPECTED_PYTHON_VERSION = (3, 12, 13)" in cells[1]
+    assert "sys.version_info[:3] != EXPECTED_PYTHON_VERSION" in cells[1]
     assert "np.__version__ != \"2.0.2\"" in cells[1]
+    assert 'EXPECTED_TORCH_VERSION = "2.11.0+cu128"' in cells[1]
+    assert "torch.__version__ != EXPECTED_TORCH_VERSION" in cells[1]
+    assert 'EXPECTED_CUDA_VERSION = "12.8"' in cells[1]
+    assert "torch.version.cuda != EXPECTED_CUDA_VERSION" in cells[1]
     assert "torch.cuda.is_available()" in cells[1]
     assert "revision_R1_production_v1_4_1_20261028.zip" not in all_source
     assert "revision_R1_production_v1_4_1_20261028.zip.sha256" not in all_source
@@ -148,3 +154,13 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "LAUNCH_REMAINING_MATRIX = False" in cells[6]
     assert "fine-grained read-only" in cells[0]
     assert "GITHUB_READ_TOKEN" in cells[0]
+
+
+def test_production_readme_has_one_github_execution_order_and_no_zip_setup():
+    readme = (ROOT / "PRODUCTION_COLAB_README.md").read_text(encoding="utf-8")
+
+    assert readme.count("## Exact execution order") == 1
+    assert "verify the distributed ZIP" not in readme
+    assert "My Drive/ReVision/Revision_R1_Production_Colab.ipynb" in readme
+    assert "PyTorch 2.11.0+cu128" in readme
+    assert "PyTorch CUDA build 12.8" in readme

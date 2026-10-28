@@ -1,5 +1,7 @@
-# Matched to the verified V15.5 Standard-A GPU handoff utilities.
-# The Colab CUDA-enabled PyTorch build is checked in-place and is NEVER replaced here.
+# Colab runtime contract checked in-place by Cell A; PyTorch is not installed/replaced.
+# Python 3.12.13; preinstalled torch==2.11.0+cu128 (torch.version.cuda == 12.8).
+# Keep the GPU runtime's CUDA build intact; a mismatch fails closed before launch.
+# Matched to the verified V15.5 Standard-A GPU handoff utility pins.
 numpy==2.0.2
 pytest==8.3.5
 tqdm==4.67.1

@@ -3,20 +3,20 @@
   "expected_effective_schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
   "files": {
     "COMPATIBILITY_REPORT.md": {
-      "bytes": 12469,
-      "sha256": "b963a64c8c78cf7c9a0c9bff05be9092a1287a24d0dd9330528884d6902f554c"
+      "bytes": 12466,
+      "sha256": "27181a8c71eeede5e3d505a5971aeec336d17db630026b32247659164b5befe3"
     },
     "FROZEN_PROTOCOL.md": {
       "bytes": 1727,
       "sha256": "c6118ca7e356726f0646259da9f3bd49d2922f908dcdea2e7dc3ae08a93e5263"
     },
     "PRODUCTION_COLAB_README.md": {
-      "bytes": 15474,
-      "sha256": "4f3f7f49c1e52b6e775b7bfb48ce7bf3f40c7bc1cd24f2d39aa6fafc80d93d48"
+      "bytes": 15136,
+      "sha256": "e8f7e538825d1f0a914fa1d5fb10583359f53e6a987075e679f78b6a0388d3d4"
     },
     "README_GITHUB_COLAB.md": {
-      "bytes": 3534,
-      "sha256": "1fbc33cdfe5fde88b41933cdad5a6ee7919ddd2ad9fdb1c07478d9480debb9d5"
+      "bytes": 3888,
+      "sha256": "ffe4732e1b21b0e87ba61d49c7aad5b4a69f9098cb60036f8928c851b3687d2c"
     },
     "configs/legacy_v1_2_first_run_identity.json": {
       "bytes": 7695,
@@ -39,8 +39,8 @@
       "sha256": "3302907af840a04146eca7f10773243b5c3252d053744a5fc11e820e504588fa"
     },
     "requirements-colab.txt": {
-      "bytes": 193,
-      "sha256": "39bc40c6ab17ea7d8b0003a328cc59ce305a1f62ba41f841e6db93c264e09bc7"
+      "bytes": 361,
+      "sha256": "6e3628faea83f439dfa8f85e2d090e5c3214be415f43012e111a659ee8ee1f31"
     },
     "requirements-test.txt": {
       "bytes": 107,
@@ -155,8 +155,8 @@
       "sha256": "1caddd38f54e6557604f25abc14ba0cafbdb20011d562989b041eb0be8421753"
     },
     "scripts/build_github_handoff.py": {
-      "bytes": 26106,
-      "sha256": "e37bc96e3d790716b6c1c4de52ddd3a3ec4ce21784e32e17abfb985eb38540c9"
+      "bytes": 26472,
+      "sha256": "298ea7bd4cf606bffd3cc2431051cef19a6580a0e6aa2137223f35870df17542"
     },
     "scripts/build_production_handoff.py": {
       "bytes": 59721,
@@ -195,8 +195,8 @@
       "sha256": "78e918528307fc9d672745512ffdac621e0d46ac6b81a5ecabff16cb7d5f5403"
     },
     "tests/test_github_handoff.py": {
-      "bytes": 6578,
-      "sha256": "f0c8078eca59cf841947a887abcaf5721f9017931f1b85fb4b5e93865e7e49bc"
+      "bytes": 7411,
+      "sha256": "cb7a1b73823149f9ec53e0b79103a46aec5025aaae8e26e6488520cc0cb05ff4"
     },
     "tests/test_live_progress.py": {
       "bytes": 9566,

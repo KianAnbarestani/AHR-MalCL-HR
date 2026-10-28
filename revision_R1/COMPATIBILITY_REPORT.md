@@ -27,15 +27,15 @@ production gating. It does not copy or overwrite their source/result trees.
 The V15.5 handoff lock records a Colab Linux/T4 target, Python 3.12, NumPy
 2.0.2, tqdm 4.67.1, pytest 8.3.5, and a CUDA PyTorch build (2.6+ in that
 handoff). The later V15.5 release records Python 3.12, PyTorch 2.11.0, CUDA
-12.8 for its final evidence. Those are separate observed environments, not a
-single universal lock. This notebook therefore pins the small installable
-utilities to the handoff values, checks Python/NumPy/tqdm, and retains the
-Colab-provided CUDA PyTorch installation. The targeted continuation does not
-rerun pytest; focused storage/workflow/package regressions are checked during
-package preparation. PyTorch-dependent tests require a PyTorch runtime. It never installs a CPU torch
-wheel or silently replaces a CUDA build. It refuses an incompatible Python,
-PyTorch, or CUDA runtime for author review rather than guessing at a future
-Colab image.
+12.8 for its final evidence; the observed Colab interpreter was Python
+3.12.13 and PyTorch was `2.11.0+cu128`. The production Cell A now checks those
+exact Python, PyTorch, and CUDA versions, along with NumPy 2.0.2 and CUDA
+availability, without installing/replacing the platform CUDA build. A future
+Colab image mismatch stops before production and requires review and testing.
+The targeted continuation does not rerun pytest; focused
+storage/workflow/package regressions are checked during package preparation.
+PyTorch-dependent tests require a PyTorch runtime. The notebook never installs
+a CPU torch wheel or silently replaces a CUDA build.
 
 ## Data and schedule compatibility
 

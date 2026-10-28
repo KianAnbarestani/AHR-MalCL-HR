@@ -363,12 +363,17 @@ for module_name in list(sys.modules):
 from scripts.build_github_handoff import verify_package_integrity
 PACKAGE_MANIFEST, BUILD_MANIFEST, PACKAGE_MANIFEST_SHA256 = verify_package_integrity(PACKAGE_ROOT)
 import numpy as np, platform, torch
-if sys.version_info[:2] != (3, 12):
-    raise RuntimeError(f"Expected Colab Python 3.12, got {platform.python_version()}")
+EXPECTED_PYTHON_VERSION = (3, 12, 13)
+EXPECTED_TORCH_VERSION = "2.11.0+cu128"
+EXPECTED_CUDA_VERSION = "12.8"
+if sys.version_info[:3] != EXPECTED_PYTHON_VERSION:
+    raise RuntimeError(f"Expected Colab Python {'.'.join(map(str, EXPECTED_PYTHON_VERSION))}, got {platform.python_version()}")
 if np.__version__ != "2.0.2":
     raise RuntimeError(f"Expected pinned NumPy 2.0.2, got {np.__version__}; no packages were changed")
-if tuple(int(part) for part in torch.__version__.split("+")[0].split(".")[:2]) < (2, 6):
-    raise RuntimeError(f"Unsupported PyTorch version: {torch.__version__}")
+if torch.__version__ != EXPECTED_TORCH_VERSION:
+    raise RuntimeError(f"Expected preinstalled CUDA PyTorch {EXPECTED_TORCH_VERSION}, got {torch.__version__}; no packages were changed")
+if torch.version.cuda != EXPECTED_CUDA_VERSION:
+    raise RuntimeError(f"Expected PyTorch CUDA build {EXPECTED_CUDA_VERSION}, got {torch.version.cuda}; no packages were changed")
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA is unavailable. No training started; select a GPU Colab runtime and rerun Cell A.")
 from scripts.production_workflow import training_source_sha256

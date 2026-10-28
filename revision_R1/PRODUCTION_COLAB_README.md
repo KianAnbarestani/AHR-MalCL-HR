@@ -26,6 +26,14 @@ established, it fails closed; it never substitutes folder-owner quota or
 changes sharing/ownership. All Drive paths and existing run/checkpoint
 identities remain unchanged.
 
+## Colab runtime contract
+
+Cell A requires Python 3.12.13, NumPy 2.0.2, PyTorch 2.11.0+cu128, and the
+PyTorch CUDA build 12.8 with an available CUDA device. These are the observed
+Colab/T4 runtime values used to prepare this handoff. PyTorch is checked
+in-place and is not installed or replaced by the notebook, so a different
+Colab image fails closed and must be reviewed and tested before production.
+
 ## Exact execution order
 
 Run Cells A → B → C → D. Cell D is read-only. Cells E and F remain disabled
@@ -35,19 +43,6 @@ checkpoint, and capacity evidence. E resumes the first
 exports lightweight results. See `README_GITHUB_COLAB.md` for the Secret
 setup and routine pinned-commit update procedure. No production run has been
 launched by this handoff.
-
-## Exact execution order
-
-Run Cells A, B, and C in order. They mount/authenticate Drive, verify the
-distributed ZIP and every extracted member, verify that the loaded training
-source hash matches the unchanged `revision_r1.runner` identity, locate the
-exact 220-row effective schedule and manifest from the existing preflight,
-bind all 100 run records to that schedule and preflight, verify the successful
-v6.2 recovery report as a checkpoint-size reference, and check Drive owner,
-quota, local capacity, and storage projections. The preflight-reuse cell
-checks the exact NPZ filenames but does not reread their payloads. The first
-dataset load for an actual run verifies the current NPZ hashes and shapes
-against preflight before training.
 
 Cell C persists an immutable runtime-bound plan in the configured production
 results root. It reports both the first-run requirement and the projected
