@@ -1,0 +1,5 @@
+# Matched to the verified V15.5 Standard-A GPU handoff utilities.
+# The Colab CUDA-enabled PyTorch build is checked in-place and is NEVER replaced here.
+numpy==2.0.2
+pytest==8.3.5
+tqdm==4.67.1

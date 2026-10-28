@@ -1,0 +1,36 @@
+{
+  "baseline_build_id": "revision_R1_colab_validation_v5",
+  "baseline_code_sha256": "adb4ee76f1d7fb82a35ffaf4f38f5ddaa9b7649c36098f6110f47a938f9faf88",
+  "core_files": {
+    "revision_r1/__init__.py": "2c941bbf57d0d315b21e2160377ab0e8f7eff18a67a4e15340e0ed078811288f",
+    "revision_r1/archives.py": "5d159fa12989587ed5620a2234a84c979ec903cce35879de11ba4eea7a9db161",
+    "revision_r1/checkpointing.py": "3f89f55d6bb00ca19ea6ed1fdb937f7d25f6d75d7b4d34be105d0eddcbbc156a",
+    "revision_r1/cli.py": "c3da1546f47964b6b6ccd929a687430e47bbc567aed35b8050e82409692e5fe7",
+    "revision_r1/config.py": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608",
+    "revision_r1/data.py": "639de25ad57358ac4be523d2449ea9e75e9edab6f3849f28100a6c8f5647e537",
+    "revision_r1/engine.py": "ccd55f5cf3726d18604c547a123537b498cb4ba438cef8e68475321156df1d68",
+    "revision_r1/exports.py": "8825439a6372b2b7167aa31a6509cf9a9fc1e2b42ff7c346c9aefec414f94816",
+    "revision_r1/generative.py": "80c4d1c1a6e93776a93ce2bd95c24bc1f45c2ab49447a57fc25c94548b93bc6c",
+    "revision_r1/locking.py": "96fb9f5b177cd4558bcd36ccaa4d97f13dd905bcdbc0578ff56b56dc9320761f",
+    "revision_r1/losses.py": "a6650c4871edcb1e27df618eac14024e39a3b606f29dafecdbb41331ed139c8c",
+    "revision_r1/metrics.py": "17c48794e5f79a345f4c0f879acc6608acb9c40925f578f30178bdcf80595912",
+    "revision_r1/models.py": "c2b72005c25fb50e311706bb4990bca9d30a4ceff0fcda12937b706d93a19823",
+    "revision_r1/preprocessing.py": "bf68ac27437d1ef0ea8c9cef3f7cdf2a1cc2b0165d85f74b6cf58f577f2c3b9a",
+    "revision_r1/registry.py": "93874c1a724004fc74a66609aac66e80a977cd3f5397d87f2110e5277a8c27ce",
+    "revision_r1/replay.py": "72c563140b60ee0e42839a51ce5c2360bfaa1190780306da6bc265f25eed607c",
+    "revision_r1/resources.py": "62107a3e3be6b903c223a937d172fe94f18150338bd3c650bde740c596af1d60",
+    "revision_r1/rng.py": "ce8895b6fd26872b9ef92d7795b762a9220c362eed0bbe582891047dc9067cb4",
+    "revision_r1/runner.py": "a2c16684818571e740ebf92a5623a05598357d1f05d075e8be25a4c91b022f27",
+    "revision_r1/sampling.py": "f9ee9357b9646b820324340bf9ae17af99a666896c582d7d5d0f61185ad91497",
+    "revision_r1/schedule.py": "7662a431186141a250e07419df06c3353c73df680bb667b07ae6d7adbe87cb73",
+    "revision_r1/state.py": "d06f304f43ae12f22a35893e674b2803ea5886b1b610f05cf6bbb68ccb9b18e5",
+    "revision_r1/storage.py": "738546b6328f47a1e2cbd66a48e7af4e61ab3d3ef5874250bd60c54eabc891f3",
+    "revision_r1/task_stream.py": "2e31c460fd4b8d14e94b2d782ca01d18bb962dcd6c1b8b0ba2cff26542d83f24",
+    "revision_r1/validation.py": "9ffc65ddf62a254c3bc45365bc57107504ea1ede566eadb2356c7d015728d97f"
+  },
+  "excluded_validation_modules": [
+    "validation_workflow.py",
+    "validation_worker.py"
+  ],
+  "schema_version": 1
+}

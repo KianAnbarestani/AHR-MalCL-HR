@@ -1,0 +1,306 @@
+{
+  "automatic_resume_compatibility": "INSPECT_ONLY; not asserted compatible with a different source hash",
+  "first_run_record": {
+    "arm": "full_hybrid",
+    "class_order": [
+      83,
+      53,
+      70,
+      45,
+      44,
+      39,
+      22,
+      80,
+      10,
+      0,
+      18,
+      30,
+      73,
+      33,
+      90,
+      4,
+      76,
+      77,
+      12,
+      31,
+      55,
+      88,
+      26,
+      42,
+      69,
+      15,
+      40,
+      96,
+      9,
+      72,
+      11,
+      47,
+      85,
+      28,
+      93,
+      5,
+      66,
+      65,
+      35,
+      16,
+      49,
+      34,
+      7,
+      95,
+      27,
+      19,
+      81,
+      25,
+      62,
+      13,
+      24,
+      3,
+      17,
+      38,
+      8,
+      78,
+      6,
+      64,
+      36,
+      89,
+      56,
+      99,
+      54,
+      43,
+      50,
+      67,
+      46,
+      68,
+      61,
+      97,
+      79,
+      41,
+      58,
+      48,
+      98,
+      57,
+      75,
+      32,
+      94,
+      59,
+      63,
+      84,
+      37,
+      29,
+      1,
+      52,
+      21,
+      2,
+      23,
+      87,
+      91,
+      74,
+      86,
+      82,
+      20,
+      60,
+      71,
+      14,
+      92,
+      51
+    ],
+    "class_order_sha256": "04b000b56a91f35b971f5297eaab4279245789dfee40b74a026b0381d5f11fe7",
+    "config": {
+      "anchor_k": 100,
+      "arm": "full_hybrid",
+      "batch_size": 256,
+      "checkpoint_interval_seconds": 60,
+      "checkpoint_interval_updates": 25,
+      "classifier_embedding_dim": 512,
+      "classifier_epochs_equivalent": 3,
+      "classifier_hidden": [
+        1024,
+        512,
+        256
+      ],
+      "classifier_lr": 0.001,
+      "classifier_weight_decay": 0.0001,
+      "critic_lr": 0.0002,
+      "critic_steps": 5,
+      "dataset": "ember",
+      "diversity_lambda": 0.25,
+      "drive_sync_interval_seconds": 300,
+      "dropout": 0.25,
+      "feature_matching_weight": 1.0,
+      "gan_batch_size": 256,
+      "gan_betas": [
+        0.0,
+        0.9
+      ],
+      "gan_epochs": 3,
+      "generated_candidates_per_class": 1000,
+      "generated_k": 100,
+      "generator_lr": 0.0002,
+      "gradient_clip_norm": 10.0,
+      "gradient_penalty_weight": 10.0,
+      "noise_dim": 128,
+      "remainder_policy": "none_full_256_example_updates",
+      "sampler": "mixed_pool_inverse_class_frequency_with_replacement",
+      "sampler_replacement": true,
+      "scaler_policy": "taskwise_training_only_replay_raw_coordinates",
+      "seed": 42,
+      "task_sizes": [
+        50,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "update_schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
+      "version": "revision_R1.0.1"
+    },
+    "config_sha256": "c7d090e9ae61bc8b24edebc58c25454ffc994ba514322d50f403ec9c838811df",
+    "dataset": "ember",
+    "dataset_reference": {
+      "feature_dim": 2381,
+      "test_md5": "9a844162d5ccca20987ce520d6355f33",
+      "test_shape": [
+        33704,
+        2381
+      ],
+      "train_md5": "27e39d1cb697434107f92a8084128734",
+      "train_shape": [
+        303331,
+        2381
+      ]
+    },
+    "initial_state_sha256": null,
+    "is_first_run": true,
+    "run_index": 1,
+    "run_key": "ember_seed42_full_hybrid",
+    "schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
+    "seed": 42,
+    "training_source_sha256": "bd175dcc27492f848459653536c63aa7bed8421bc16c60d7141fa359004e8660",
+    "update_budgets_by_task": null
+  },
+  "plan_sha256": "85ed314737aa7d4b6dbae8ad027132242c67d1d3d02ee2c6624ba7e0c95ed10d",
+  "production_build_id": "revision_R1_production_v1_2_20261027",
+  "schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
+  "schema_version": 1,
+  "source": "authentic distributed v1.2 ZIP, checksum sidecar, build manifest, and included run plan",
+  "training_source_sha256": "bd175dcc27492f848459653536c63aa7bed8421bc16c60d7141fa359004e8660",
+  "verified_training_core_file_count": 27,
+  "verified_training_core_file_hashes": [
+    {
+      "filename": "__init__.py",
+      "sha256": "2c941bbf57d0d315b21e2160377ab0e8f7eff18a67a4e15340e0ed078811288f"
+    },
+    {
+      "filename": "archives.py",
+      "sha256": "5d159fa12989587ed5620a2234a84c979ec903cce35879de11ba4eea7a9db161"
+    },
+    {
+      "filename": "checkpointing.py",
+      "sha256": "3f89f55d6bb00ca19ea6ed1fdb937f7d25f6d75d7b4d34be105d0eddcbbc156a"
+    },
+    {
+      "filename": "cli.py",
+      "sha256": "c3da1546f47964b6b6ccd929a687430e47bbc567aed35b8050e82409692e5fe7"
+    },
+    {
+      "filename": "config.py",
+      "sha256": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608"
+    },
+    {
+      "filename": "data.py",
+      "sha256": "639de25ad57358ac4be523d2449ea9e75e9edab6f3849f28100a6c8f5647e537"
+    },
+    {
+      "filename": "engine.py",
+      "sha256": "ccd55f5cf3726d18604c547a123537b498cb4ba438cef8e68475321156df1d68"
+    },
+    {
+      "filename": "exports.py",
+      "sha256": "8825439a6372b2b7167aa31a6509cf9a9fc1e2b42ff7c346c9aefec414f94816"
+    },
+    {
+      "filename": "generative.py",
+      "sha256": "80c4d1c1a6e93776a93ce2bd95c24bc1f45c2ab49447a57fc25c94548b93bc6c"
+    },
+    {
+      "filename": "locking.py",
+      "sha256": "96fb9f5b177cd4558bcd36ccaa4d97f13dd905bcdbc0578ff56b56dc9320761f"
+    },
+    {
+      "filename": "losses.py",
+      "sha256": "a6650c4871edcb1e27df618eac14024e39a3b606f29dafecdbb41331ed139c8c"
+    },
+    {
+      "filename": "metrics.py",
+      "sha256": "17c48794e5f79a345f4c0f879acc6608acb9c40925f578f30178bdcf80595912"
+    },
+    {
+      "filename": "models.py",
+      "sha256": "c2b72005c25fb50e311706bb4990bca9d30a4ceff0fcda12937b706d93a19823"
+    },
+    {
+      "filename": "preprocessing.py",
+      "sha256": "bf68ac27437d1ef0ea8c9cef3f7cdf2a1cc2b0165d85f74b6cf58f577f2c3b9a"
+    },
+    {
+      "filename": "registry.py",
+      "sha256": "93874c1a724004fc74a66609aac66e80a977cd3f5397d87f2110e5277a8c27ce"
+    },
+    {
+      "filename": "replay.py",
+      "sha256": "72c563140b60ee0e42839a51ce5c2360bfaa1190780306da6bc265f25eed607c"
+    },
+    {
+      "filename": "resources.py",
+      "sha256": "62107a3e3be6b903c223a937d172fe94f18150338bd3c650bde740c596af1d60"
+    },
+    {
+      "filename": "rng.py",
+      "sha256": "ce8895b6fd26872b9ef92d7795b762a9220c362eed0bbe582891047dc9067cb4"
+    },
+    {
+      "filename": "runner.py",
+      "sha256": "a2c16684818571e740ebf92a5623a05598357d1f05d075e8be25a4c91b022f27"
+    },
+    {
+      "filename": "sampling.py",
+      "sha256": "f9ee9357b9646b820324340bf9ae17af99a666896c582d7d5d0f61185ad91497"
+    },
+    {
+      "filename": "schedule.py",
+      "sha256": "7662a431186141a250e07419df06c3353c73df680bb667b07ae6d7adbe87cb73"
+    },
+    {
+      "filename": "state.py",
+      "sha256": "d06f304f43ae12f22a35893e674b2803ea5886b1b610f05cf6bbb68ccb9b18e5"
+    },
+    {
+      "filename": "storage.py",
+      "sha256": "738546b6328f47a1e2cbd66a48e7af4e61ab3d3ef5874250bd60c54eabc891f3"
+    },
+    {
+      "filename": "task_stream.py",
+      "sha256": "2e31c460fd4b8d14e94b2d782ca01d18bb962dcd6c1b8b0ba2cff26542d83f24"
+    },
+    {
+      "filename": "validation.py",
+      "sha256": "9ffc65ddf62a254c3bc45365bc57107504ea1ede566eadb2356c7d015728d97f"
+    },
+    {
+      "filename": "validation_worker.py",
+      "sha256": "8a7d76aefda3d1aad9ee58413abb464a1675e1c6713b9d76f5c414c8278b2746"
+    },
+    {
+      "filename": "validation_workflow.py",
+      "sha256": "1caddd38f54e6557604f25abc14ba0cafbdb20011d562989b041eb0be8421753"
+    }
+  ],
+  "zip_filename": "revision_R1_production_v1_2_20261027.zip",
+  "zip_sha256": "2647c6bb51b3e3c28fd3009008f6f616deac5e73f725fd20e66aebbb23097d9c"
+}

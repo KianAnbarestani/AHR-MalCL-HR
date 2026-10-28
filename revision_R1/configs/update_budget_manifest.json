@@ -1,0 +1,18 @@
+{
+  "artifact_id": "revision_R1_proposed_classifier_update_budget",
+  "status": "PROPOSED_BUDGET_ONLY_NOT_HISTORICAL_TRAINING",
+  "training_reproduction_claimed": false,
+  "row_count": 220,
+  "batch_size": 256,
+  "classifier_epochs_equivalent": 3,
+  "formula": "3 * ceil(full_hybrid_pool_size / 256)",
+  "source_csv_path": "resubmission/analysis/outputs/proposed_classifier_update_budget.csv",
+  "source_csv_sha256": "e719a3a6673edf98d2178a3d3bb666278788b09f26d92689d7aec75bf0f379ed",
+  "source_manifest_path": "resubmission/analysis/outputs/proposed_classifier_update_budget_manifest.json",
+  "source_manifest_sha256": "94cb6f573d70e060d3be1dc4e434c205221938ecbf0287c323fe132e2f104ceb",
+  "provenance_counts": {
+    "REUSE_EXPOSURE_AUDIT_SEEDS_42_46_RECONSTRUCTED": 110,
+    "STANDARD_A_T4_COMPONENT_POOLS_SEEDS_47_51_RECONSTRUCTED": 110
+  },
+  "launch_gate": "reconstruct current/anchor/generated pool counts from checksum-verified actual dataset and exact seed order, compare every row, then require this CSV SHA-256"
+}
