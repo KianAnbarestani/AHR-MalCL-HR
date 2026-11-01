@@ -14,6 +14,18 @@ COMPATIBILITY_MANIFEST_NAME = "checkpoint_compatibility.json"
 INFRASTRUCTURE_ONLY_CHANGES = {"checkpointing.py", "resources.py", "runner.py"}
 
 
+def _stable_ast_dump(node: ast.AST) -> str:
+    """Render empty AST fields consistently across supported Python versions."""
+    try:
+        # Python 3.13+ defaults to omitting empty fields; 3.12 includes them.
+        # Pin the newer behavior explicitly so the stored fingerprint is portable.
+        return ast.dump(node, annotate_fields=True, include_attributes=False, show_empty=True)
+    except TypeError as exc:
+        if "show_empty" not in str(exc):
+            raise
+        return ast.dump(node, annotate_fields=True, include_attributes=False)
+
+
 def runtime_module_hashes(package_root: str | Path | None = None) -> dict[str, str]:
     root = Path(package_root).resolve() if package_root is not None else Path(__file__).resolve().parents[1]
     source = root / "revision_r1"
@@ -80,7 +92,7 @@ def training_behavior_fingerprint(source: str | bytes) -> str:
                     )
                 ])
     phase_blocks = [
-        (phase, ast.dump(node, annotate_fields=True, include_attributes=False))
+        (phase, _stable_ast_dump(node))
         for phase, node in phase_nodes
     ]
     payload = json.dumps(phase_blocks, separators=(",", ":"), ensure_ascii=True).encode("ascii")

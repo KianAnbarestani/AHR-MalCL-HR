@@ -1,6 +1,6 @@
 {
   "checkpoint_compatibility_baseline_commit": "e7bea685827137a1ea48c5886db22518d68a6b06",
-  "checkpoint_compatibility_manifest_sha256": "81fdf86e1508211235db1eed37082b9def26a05762e934b004863042d7b7a107",
+  "checkpoint_compatibility_manifest_sha256": "83f204f785a00d48f178c5243c2e2d2763dcbe383ee2d5665a1984f8ca3dde25",
   "credential_policy": "no credential for public repository; private read-only token only via Colab Secrets",
   "expected_effective_schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
   "files": {
@@ -26,7 +26,7 @@
     },
     "checkpoint_compatibility.json": {
       "bytes": 6040,
-      "sha256": "81fdf86e1508211235db1eed37082b9def26a05762e934b004863042d7b7a107"
+      "sha256": "83f204f785a00d48f178c5243c2e2d2763dcbe383ee2d5665a1984f8ca3dde25"
     },
     "configs/legacy_v1_2_first_run_identity.json": {
       "bytes": 7695,
@@ -73,8 +73,8 @@
       "sha256": "c3da1546f47964b6b6ccd929a687430e47bbc567aed35b8050e82409692e5fe7"
     },
     "revision_r1/compatibility.py": {
-      "bytes": 6529,
-      "sha256": "8cc2a17285406efc1a29e77a079dc65f99a45e1db230f0ea389eb2e71643502c"
+      "bytes": 7047,
+      "sha256": "f82962114a058721951dd42cb374d66250b9b01a808c194cab41f1cf2aeaa2b0"
     },
     "revision_r1/config.py": {
       "bytes": 5116,
@@ -197,8 +197,8 @@
       "sha256": "b070d994aa826a9cfbea7896cc21b5acde41c1da85dd30711209a6bca35a65bd"
     },
     "tests/test_checkpoint_compatibility.py": {
-      "bytes": 1874,
-      "sha256": "f782ddda7ab664d29eb9f1813ba8be53677186c1cc1fd205261819d1f950df2c"
+      "bytes": 2097,
+      "sha256": "69ead016bf059721c50dc5a8c2f167dca0dc7873314a627f27b735aed026c04d"
     },
     "tests/test_checkpoint_storage_policy.py": {
       "bytes": 9491,
@@ -323,7 +323,7 @@
   "release_kind": "GITHUB_PINNED_COLAB_RUNNER",
   "repository": "KianAnbarestani/AHR-MalCL-HR",
   "run_count": 100,
-  "runtime_source_sha256": "c6cc9dae444dbc66a0897d244eabf45071a3ddb8767b37ea6a0fecc7a5686fa1",
+  "runtime_source_sha256": "2316e9947a1c34f9e75d22c2e6c81a93ffbbf4babc6e7377d535e40858c52c26",
   "schema_version": 1,
   "training_source_sha256": "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
 }

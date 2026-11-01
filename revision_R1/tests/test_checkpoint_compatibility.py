@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from revision_r1.compatibility import verify_checkpoint_compatibility
+from revision_r1.compatibility import training_behavior_fingerprint, verify_checkpoint_compatibility
 from scripts.build_checkpoint_compatibility import (
     AUTHENTIC_BASELINE_COMMIT,
     build_manifest,
@@ -41,5 +41,7 @@ def test_runtime_compatibility_verifier_rejects_any_unmanifested_module_change(t
 
 def test_compatibility_manifest_is_machine_readable_and_matches_verified_runtime():
     manifest = json.loads((ROOT / "checkpoint_compatibility.json").read_text(encoding="utf-8"))
+    observed_fingerprint = training_behavior_fingerprint((ROOT / "revision_r1" / "runner.py").read_bytes())
+    assert observed_fingerprint == manifest["training_behavior_fingerprint_sha256"]
     verified = verify_checkpoint_compatibility(ROOT)
     assert manifest == verified

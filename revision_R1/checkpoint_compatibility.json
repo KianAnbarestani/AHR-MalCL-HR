@@ -32,7 +32,7 @@
     "validation_worker.py": "2ce2c13435f97a036a4d6a1ab233c2eef020be989788fe873da9e83ac8f9d095",
     "validation_workflow.py": "1caddd38f54e6557604f25abc14ba0cafbdb20011d562989b041eb0be8421753"
   },
-  "baseline_training_behavior_fingerprint_sha256": "68fc7df3d79122385649eea4aa5eb56b04c80ca2a246ab5bbcb4757c2ab41bab",
+  "baseline_training_behavior_fingerprint_sha256": "63b1d7656cd1c2474920d79c8c569b29c8724b56d2f8d1223290d00a1c1dbacb",
   "baseline_training_source_sha256": "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c",
   "changed_infrastructure_modules": [
     "checkpointing.py",
@@ -52,7 +52,7 @@
     "archives.py": "5d159fa12989587ed5620a2234a84c979ec903cce35879de11ba4eea7a9db161",
     "checkpointing.py": "36373d9e79ae05f715e4adc3df5c75adc3b09436f6ec4afb0464cbb899d006be",
     "cli.py": "c3da1546f47964b6b6ccd929a687430e47bbc567aed35b8050e82409692e5fe7",
-    "compatibility.py": "8cc2a17285406efc1a29e77a079dc65f99a45e1db230f0ea389eb2e71643502c",
+    "compatibility.py": "f82962114a058721951dd42cb374d66250b9b01a808c194cab41f1cf2aeaa2b0",
     "config.py": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608",
     "data.py": "3acecda586b9c2a97a5d39888ffc8b0e54af3295e16f0d034a77122454e20ac5",
     "engine.py": "ccd55f5cf3726d18604c547a123537b498cb4ba438cef8e68475321156df1d68",
@@ -77,8 +77,8 @@
     "validation_worker.py": "2ce2c13435f97a036a4d6a1ab233c2eef020be989788fe873da9e83ac8f9d095",
     "validation_workflow.py": "1caddd38f54e6557604f25abc14ba0cafbdb20011d562989b041eb0be8421753"
   },
-  "runtime_source_sha256": "c6cc9dae444dbc66a0897d244eabf45071a3ddb8767b37ea6a0fecc7a5686fa1",
+  "runtime_source_sha256": "2316e9947a1c34f9e75d22c2e6c81a93ffbbf4babc6e7377d535e40858c52c26",
   "schema_version": 1,
-  "training_behavior_fingerprint_sha256": "68fc7df3d79122385649eea4aa5eb56b04c80ca2a246ab5bbcb4757c2ab41bab",
+  "training_behavior_fingerprint_sha256": "63b1d7656cd1c2474920d79c8c569b29c8724b56d2f8d1223290d00a1c1dbacb",
   "training_behavior_matches_baseline": true
 }
