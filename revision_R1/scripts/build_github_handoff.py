@@ -375,6 +375,7 @@ for module_name in list(sys.modules):
         del sys.modules[module_name]
 from scripts.build_github_handoff import verify_package_integrity
 PACKAGE_MANIFEST, BUILD_MANIFEST, PACKAGE_MANIFEST_SHA256 = verify_package_integrity(PACKAGE_ROOT)
+from scripts.build_production_handoff import PRODUCTION_BUILD_ID as EXPECTED_BUILD_ID
 import numpy as np, platform, torch
 EXPECTED_PYTHON_VERSION = (3, 12, 13)
 EXPECTED_TORCH_VERSION = "2.11.0+cu128"

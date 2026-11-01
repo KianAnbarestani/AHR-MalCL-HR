@@ -134,6 +134,8 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "sys.dont_write_bytecode = True" in cells[1]
     assert "git pull" not in cells[1]
     assert "verify_package_integrity(PACKAGE_ROOT)" in cells[1]
+    assert "from scripts.build_production_handoff import PRODUCTION_BUILD_ID as EXPECTED_BUILD_ID" in cells[1]
+    assert '"production_build_id": EXPECTED_BUILD_ID' in cells[4]
     assert EXPECTED_TRAINING_SOURCE_SHA256 in cells[1]
     assert EXPECTED_EFFECTIVE_SCHEDULE_SHA256 in cells[1]
     assert "EXPECTED_PYTHON_VERSION = (3, 12, 13)" in cells[1]

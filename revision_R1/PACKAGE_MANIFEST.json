@@ -173,8 +173,8 @@
       "sha256": "84a2ed79dd962450d6ec1925fc440c349f12e35b042b754128669d9772195f97"
     },
     "scripts/build_github_handoff.py": {
-      "bytes": 28078,
-      "sha256": "e1416fe8fe3ddc420e7787e5eaddae9453c34a84ef2ccd475da09c778ac03083"
+      "bytes": 28164,
+      "sha256": "dcee6011b4bf8b4e9941b077fc4fddbf4d114433f58e1260bb8118dff9456466"
     },
     "scripts/build_production_handoff.py": {
       "bytes": 61739,
@@ -217,8 +217,8 @@
       "sha256": "78e918528307fc9d672745512ffdac621e0d46ac6b81a5ecabff16cb7d5f5403"
     },
     "tests/test_github_handoff.py": {
-      "bytes": 7472,
-      "sha256": "b340b8153037a4d667e9e47e8f0e0d3c2122c408e2c2e0e03f1b3fb5b264d1a5"
+      "bytes": 7649,
+      "sha256": "4d183972f99e2ae68ee29c5c97683518ec22894e6c2720855a776028e701ef5b"
     },
     "tests/test_live_progress.py": {
       "bytes": 9566,
