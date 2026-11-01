@@ -342,6 +342,16 @@ def test_npz_preflight_fails_closed_for_hash_shape_labels_and_ambiguous_keys(tmp
 
 def test_npz_cache_streams_compressed_members_without_decoding_full_archive(tmp_path, monkeypatch):
     import numpy.lib.npyio
+    import revision_r1.resources as resources
+
+    # This small fixture validates streaming behavior, not the host's live RAM
+    # capacity; keep it deterministic while production reserve checks remain intact.
+    monkeypatch.setattr(resources, "read_host_memory_snapshot", lambda: {
+        "effective_available_bytes": 8 << 30,
+        "host_available_bytes": 8 << 30,
+        "cgroup_available_bytes": 8 << 30,
+        "memory_status": "synthetic_fixture_capacity_only",
+    })
 
     load_npz_arrays = _api("data", "load_npz_arrays")
     path = tmp_path / "compressed.npz"

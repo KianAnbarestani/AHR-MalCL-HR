@@ -36,13 +36,29 @@ Colab image fails closed and must be reviewed and tested before production.
 
 ## Exact execution order
 
-Run Cells A → B → C → D. Cell D is read-only. Cells E and F remain disabled
-until the user explicitly enables them after reviewing current lease,
-checkpoint, and capacity evidence. E resumes the first
-`ember_seed42_full_hybrid` run; F continues the remaining matrix. Cell G
+Run Cells A → B → C → D. Cell D is read-only. For the already-completed first
+run whose matrix finalization found four recovery generations, use Cell H
+only: it revalidates the completed outputs, inventories and hashes the
+recovery files against Drive metadata, preserves the newest complete
+generation and its valid fallback, and prunes only stale recovery files for
+which Drive confirms exact-file `canDelete`. A small identity-bound journal is
+verified through Drive API metadata and byte read-back before pruning; each
+deletion is bound to its exact journaled Drive file ID and parent-folder ID.
+This makes interrupted pruning safe to retry without risking a same-name
+replacement. It then reuses the existing storage measurement and idempotent
+completion registration. If deletion is denied,
+integrity is uncertain, or the matrix lease is owned elsewhere, it stops
+without pruning. Cell H does not load data/checkpoints into the model, create
+replay, initialize a model, or train. It records the complete initial
+inventory and the source progress evidence explaining deferred pruning in its
+report. This is not a launch/resume cell.
+
+Cells E and F remain disabled until the user explicitly enables them after
+reviewing current lease, checkpoint, and capacity evidence. E resumes the
+first `ember_seed42_full_hybrid` run; F continues the remaining matrix. Cell G
 exports lightweight results. See `README_GITHUB_COLAB.md` for the Secret
-setup and routine pinned-commit update procedure. No production run has been
-launched by this handoff.
+setup and routine pinned-commit update procedure. No new production training
+is launched by this finalization handoff.
 
 Cell C persists an immutable runtime-bound plan in the configured production
 results root. It reports both the first-run requirement and the projected

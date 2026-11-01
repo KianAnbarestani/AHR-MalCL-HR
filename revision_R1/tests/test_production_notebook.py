@@ -59,6 +59,18 @@ def _bound_plan_for_archive_fixture(tmp_path, monkeypatch):
     )
 
 
+def _allow_test_checkpoint_memory(monkeypatch):
+    """Make tiny serialized fixtures deterministic without changing production guards."""
+    import revision_r1.resources as resources
+
+    monkeypatch.setattr(resources, "read_host_memory_snapshot", lambda: {
+        "effective_available_bytes": 8 << 30,
+        "host_available_bytes": 8 << 30,
+        "cgroup_available_bytes": 8 << 30,
+        "memory_status": "synthetic_fixture_capacity_only",
+    })
+
+
 def test_production_notebook_cells_parse_and_are_ordered_with_launches_disabled():
     pinned_zip_sha256 = "a" * 64
     document = notebook_document(pinned_zip_sha256)
@@ -67,9 +79,9 @@ def test_production_notebook_cells_parse_and_are_ordered_with_launches_disabled(
         ast.parse(source)
     joined = "\n".join(code_cells)
 
-    assert len(code_cells) == 7
+    assert len(code_cells) == 8
     assert [source.splitlines()[0].split("—")[0].strip() for source in code_cells] == [
-        "# Cell A", "# Cell B", "# Cell C", "# Cell D", "# Cell E", "# Cell F", "# Cell G",
+        "# Cell A", "# Cell B", "# Cell C", "# Cell D", "# Cell E", "# Cell F", "# Cell G", "# Cell H",
     ]
     assert "inspect_first_run_lease_and_progress(" in code_cells[3]
     assert "READ-ONLY DIAGNOSTIC SAVED" in code_cells[3]
@@ -99,8 +111,16 @@ def test_production_notebook_cells_parse_and_are_ordered_with_launches_disabled(
     assert "from pathlib import Path, PurePosixPath" in code_cells[0]
     assert "PurePosixPath(member.filename)" in code_cells[0]
     assert f'EXPECTED_ZIP_SHA256 = "{pinned_zip_sha256}"' in code_cells[0]
-    assert "revision_R1_production_v1_4_1_20261028" in joined
-    assert "Revision_R1_Production_Colab_v1_4_1_20261028" not in joined
+    assert "revision_R1_production_v1_4_5_20261101" in joined
+    assert "Revision_R1_Production_Colab_v1_4_5_20261101" not in joined
+    assert "FINALIZE_COMPLETED_FIRST_RUN = False" in code_cells[7]
+    assert "finalize_completed_production_run(" in code_cells[7]
+    assert "FINALIZATION_REPORT" in code_cells[7]
+    assert "execute_frozen_plan_record(" not in code_cells[7]
+    assert "execute_first_production_run(" not in code_cells[7]
+    assert "continue_production_matrix(" not in code_cells[7]
+    assert "load_validated_dataset_bundle(" not in code_cells[7]
+    assert "initialize_models" not in code_cells[7]
     assert "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212" in joined
     assert "training_reproduction_claimed" in joined
 
@@ -237,6 +257,7 @@ def test_production_handoff_builder_emits_unique_verified_zip_and_plan(tmp_path)
 
 
 def test_checkpoint_backup_checks_capacity_before_publication_and_binds_identity(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     preflight = _preflight()
     schedule_dir = tmp_path / "effective"
     schedule_dir.mkdir()
@@ -302,6 +323,7 @@ def test_checkpoint_backup_checks_capacity_before_publication_and_binds_identity
 
 
 def test_checkpoint_backup_rejects_identity_mismatch_without_creating_archive(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     preflight = _preflight()
     schedule_dir = tmp_path / "effective"
     schedule_dir.mkdir()

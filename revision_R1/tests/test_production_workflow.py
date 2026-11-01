@@ -704,14 +704,27 @@ class _FakeFiles:
         self.queries.append(q)
         self.list_fields.append(_kwargs.get("fields", ""))
         parent = re.search(r"'([^']+)' in parents", q).group(1)
-        name = re.search(r"name='((?:\\'|[^'])*)'", q).group(1).replace("\\'", "'")
+        name_match = re.search(r"name='((?:\\'|[^'])*)'", q)
+        name = name_match.group(1).replace("\\'", "'") if name_match else None
         values = [
             record for record in self.records.values()
-            if parent in record.get("parents", []) and record["name"] == name and not record.get("trashed", False)
+            if parent in record.get("parents", [])
+            and (name is None or record["name"] == name)
+            and not record.get("trashed", False)
         ]
         return _FakeRequest({"files": values})
 
-    def get(self, *, fileId, **_kwargs):
+    def get(self, *, fileId, alt=None, **_kwargs):
+        if alt == "media":
+            record = self.records[fileId]
+            path = getattr(self, "local_paths", {}).get(fileId)
+            if path is None or not path.is_file():
+                raise FileNotFoundError(record.get("name", fileId))
+            return _FakeRequest(path.read_bytes())
+        path = getattr(self, "local_paths", {}).get(fileId)
+        if path is not None and path.is_file():
+            self.records[fileId]["size"] = str(path.stat().st_size)
+            self.records[fileId]["quotaBytesUsed"] = str(path.stat().st_size)
         return _FakeRequest(self.records[fileId])
 
     def delete(self, *, fileId, **_kwargs):
@@ -914,7 +927,7 @@ def test_recovery_pruner_deletes_exact_generation_when_drive_confirms_delete_cap
         "parents": ["checkpoints-folder"], "owners": [{"emailAddress": "folder-owner@example.org"}],
         "capabilities": {"canAddChildren": True},
     }
-    monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path: ("/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery", ("ReVision", "revision_R1", "production", "checkpoints", "recovery")))
+    monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path, **_kwargs: ("/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery", ("ReVision", "revision_R1", "production", "checkpoints", "recovery")))
     monkeypatch.setattr(production_workflow, "_drive_account_snapshot", lambda _service: {"authenticated_user": "editor@example.org"})
     monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, _components: {"folder_id": "recovery-folder", "path_exists": True})
     monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _service, parent, name: next((row for row in service.records.values() if parent in row.get("parents", []) and row.get("name") == name), None))
@@ -947,7 +960,7 @@ def test_recovery_pruner_defers_exact_legacy_file_when_drive_denies_delete(monke
         "parents": ["checkpoints-folder"], "owners": [{"emailAddress": "folder-owner@example.org"}],
         "capabilities": {"canAddChildren": True},
     }
-    monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path: (
+    monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path, **_kwargs: (
         "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery",
         ("ReVision", "revision_R1", "production", "checkpoints", "recovery"),
     ))
@@ -974,6 +987,33 @@ def test_recovery_pruner_defers_exact_legacy_file_when_drive_denies_delete(monke
 
     assert result is False
     assert "legacy-checkpoint" in service.records
+    assert service.deleted_ids == set()
+
+
+def test_recovery_pruner_rejects_replaced_file_id_before_delete(monkeypatch):
+    service = _drive_service(target_owner="folder-owner@example.org", authenticated_user="editor@example.org")
+    service.records["replacement-file"] = {
+        "id": "replacement-file", "name": "generation-000001.pt",
+        "mimeType": "application/octet-stream", "parents": ["recovery-folder"],
+        "owners": [{"emailAddress": "editor@example.org"}], "ownedByMe": True,
+        "capabilities": {"canDelete": True},
+    }
+    monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path, **_kwargs: (
+        "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery",
+        ("ReVision", "revision_R1", "production", "checkpoints", "recovery"),
+    ))
+    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda *_args: {
+        "folder_id": "recovery-folder", "path_exists": True,
+    })
+    monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _service, _parent, _name:
+                        service.records["replacement-file"])
+
+    with pytest.raises(StorageCapacityError, match="file ID differs from the retention journal"):
+        production_workflow.permanently_delete_recovery_checkpoint(
+            "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/run/recovery/generation-000001.pt",
+            api_factory=lambda: service, expected_drive_file_id="original-file",
+            expected_parent_id="recovery-folder",
+        )
     assert service.deleted_ids == set()
 
 
@@ -1732,4 +1772,455 @@ def test_frozen_record_rejects_source_identity_mismatch_before_creating_outputs(
             synthetic=True, test_only=True, device="cpu", update_counts=[1] * 11,
         )
     assert not (tmp_path / "SYNTHETIC_NONREPORTABLE_TEST_ONLY").exists()
+
+
+def _finalization_plan(tmp_path, monkeypatch):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    preflight = _preflight()
+    schedule_path, schedule_manifest_path = _write_effective_schedule(tmp_path, preflight)
+    schedule_sha = hashlib.sha256(schedule_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(production_workflow, "EXPECTED_EFFECTIVE_SCHEDULE_SHA256", schedule_sha)
+    preflight["schedule"]["sha256"] = schedule_sha
+    plan = build_frozen_run_plan(
+        Path(__file__).resolve().parents[1], schedule_sha256=schedule_sha,
+        dataset_references=DATASET_REFERENCES,
+    )
+    plan = bind_runtime_schedule(
+        plan, schedule_path, schedule_manifest_path, preflight,
+        expected_anchor_corrections=0, expected_budget_changes=0,
+    )
+    return plan, plan["runs"][0]
+
+
+def _allow_test_checkpoint_memory(monkeypatch):
+    """Make fixture serialization deterministic; production RAM guards remain unmodified."""
+    import revision_r1.resources as resources
+
+    monkeypatch.setattr(resources, "read_host_memory_snapshot", lambda: {
+        "effective_available_bytes": 8 << 30,
+        "host_available_bytes": 8 << 30,
+        "cgroup_available_bytes": 8 << 30,
+        "memory_status": "synthetic_fixture_capacity_only",
+    })
+
+
+def _write_completed_production_fixture(output: Path, plan: dict, record: dict) -> dict:
+    from revision_r1.registry import RunRegistry
+    from revision_r1.validation import build_artifact_manifest
+
+    output.mkdir(parents=True)
+    order = record["class_order"]
+    task_matrix = [[0.5 if column <= row else None for column in range(11)] for row in range(11)]
+    boundary_stages = [
+        {"stage": stage, "test_example_count": 1, "prediction_prefix": f"stage_{stage:02d}"}
+        for stage in range(1, 12)
+    ]
+    for name, value in {
+        "config.json": {
+            "config_sha256": record["config_sha256"],
+            "code_sha256": plan["training_source_sha256"], "namespace": "PRODUCTION",
+        },
+        "environment.json": {"fixture": "completed-output-only; no model was initialized"},
+        "class_order.json": {"class_order": order, "sha256": record["class_order_sha256"]},
+        "task_matrix.json": {"task_matrix": task_matrix},
+        "task_boundary_prediction_manifest.json": {"stages": boundary_stages},
+        "source_proportions.json": [
+            {"sampled_examples": 1, "realized_draws": {"current": 1}} for _ in range(11)
+        ],
+        "classifier_mode_trace.json": [
+            {"task_id": task, "phase": phase, "classifier_training": training,
+             "dropout_training": [training]}
+            for task in range(1, 12)
+            for phase, training in (("classifier_training", True), ("evaluation", False))
+        ],
+        "resource_metrics.json": {
+            "classifier_seconds": 11.0, "generator_seconds": 12.0, "critic_seconds": 13.0,
+            "checkpoint_seconds": 14.0, "active_seconds": 50.0,
+            "peak_cuda_allocated_bytes": 100, "peak_cuda_reserved_bytes": 200,
+        },
+        "full-result.json": {
+            "dataset": record["dataset"], "seed": record["seed"], "arm": record["arm"],
+            "schedule_sha256": plan["schedule_sha256"], "training_reproduction_claimed": False,
+            "namespace": "PRODUCTION", "classifier_updates": sum(record["update_budgets_by_task"]),
+            "generator_steps": 22, "critic_steps": 33,
+        },
+        "status.json": {"status": "COMPLETED_VALIDATED", "namespace": "PRODUCTION"},
+    }.items():
+        (output / name).write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
+    (output / "per_task_metrics.csv").write_text(
+        "task_id\n" + "".join(f"{task}\n" for task in range(1, 12)), encoding="utf-8",
+    )
+    (output / "classification_report.csv").write_text("class\n0\n", encoding="utf-8")
+    (output / "confusion_matrix.csv").write_text("0\n1\n", encoding="utf-8")
+    (output / "trace.jsonl").write_text("", encoding="utf-8")
+    (output / "selection_records.jsonl").write_text("", encoding="utf-8")
+    np.savez(output / "predictions.npz", y_true_global=np.array([0]), y_pred_global=np.array([0]))
+    boundary_arrays = {}
+    for stage in range(1, 12):
+        prefix = f"stage_{stage:02d}"
+        boundary_arrays[f"{prefix}_y_true_global"] = np.array([0])
+        boundary_arrays[f"{prefix}_y_pred_global"] = np.array([0])
+        boundary_arrays[f"{prefix}_test_indices"] = np.array([0])
+    np.savez(output / "task_boundary_predictions.npz", **boundary_arrays)
+    from revision_r1.validation import build_artifact_manifest
+    (output / "artifact_manifest.json").write_text(
+        json.dumps(build_artifact_manifest(output), sort_keys=True), encoding="utf-8",
+    )
+
+    run_id = production_workflow._run_id_for(record, synthetic=False)
+    identity = {
+        "runner_version": "revision_R1.0.2", "config_sha256": record["config_sha256"],
+        "dataset": {"namespace": "PRODUCTION", "dataset": record["dataset"], **record["dataset_identity"]},
+        "code_sha256": plan["training_source_sha256"], "schedule_sha256": plan["schedule_sha256"],
+        "execution_scope": "production", "run_id": run_id,
+    }
+    registry = RunRegistry(output / "registry")
+    registry.begin_attempt(run_id, identity=identity)
+    registry.complete(run_id, {
+        name: output / name for name in (
+            "artifact_manifest.json", "status.json", "full-result.json", "task_matrix.json",
+            "predictions.npz", "resource_metrics.json", "config.json", "environment.json",
+        )
+    })
+    return identity
+
+
+def _write_completed_checkpoint_trees(checkpoint_namespace: Path, identity: dict) -> tuple[Path, Path]:
+    from revision_r1.checkpointing import save_generation
+    from revision_r1.state import PhaseCursor, RunState
+
+    recovery = checkpoint_namespace / "recovery"
+    boundaries = checkpoint_namespace / "task_boundaries"
+    for generation in range(1, 5):
+        state = RunState(identity=identity, cursor=PhaseCursor(task_index=10, phase=f"recovery_{generation}"))
+        save_generation(
+            recovery, state, identity,
+            kind="complete" if generation == 4 else "recovery",
+            retain_generations=None,
+        )
+    for task in range(1, 12):
+        state = RunState(identity=identity, cursor=PhaseCursor(task_index=task, phase="task-boundary"))
+        save_generation(boundaries, state, identity, kind="task-boundary", retain_generations=None)
+    return recovery, boundaries
+
+
+class _FinalizationDriveFiles(_FakeFiles):
+    def __init__(self, records, deleted_ids, local_paths, fail_once_name=None, drive_root=None):
+        super().__init__(records, deleted_ids)
+        self.local_paths = local_paths
+        self.drive_root = drive_root
+        self.local_paths = local_paths
+        self.fail_once_name = fail_once_name
+        self.failed_once = False
+        self.fail_media_readback = False
+
+    def get(self, *, fileId, alt=None, **kwargs):
+        if alt == "media" and self.fail_media_readback:
+            raise OSError("injected Drive media read-back failure")
+        return super().get(fileId=fileId, alt=alt, **kwargs)
+
+    def delete(self, *, fileId, **kwargs):
+        name = self.records[fileId]["name"]
+        if name == self.fail_once_name and not self.failed_once:
+            self.failed_once = True
+            raise RuntimeError("injected transient Drive delete failure")
+        request = super().delete(fileId=fileId, **kwargs)
+        self.local_paths[fileId].unlink(missing_ok=True)
+        return request
+
+    def list(self, *, q, **kwargs):
+        parent = re.search(r"'([^']+)' in parents", q).group(1)
+        if self.drive_root is not None:
+            if parent == "root":
+                local_dir = self.drive_root
+            else:
+                folder = self.records.get(parent)
+                components = []
+                cursor = folder
+                while cursor and cursor.get("id") != "root":
+                    components.append(cursor["name"])
+                    parent_ids = cursor.get("parents", [])
+                    cursor = self.records.get(parent_ids[0]) if parent_ids else {"id": "root"}
+                local_dir = self.drive_root.joinpath(*reversed(components))
+            existing = {
+                record.get("name"): record for record in self.records.values()
+                if parent in record.get("parents", [])
+            }
+            for path in local_dir.iterdir() if local_dir.is_dir() else ():
+                record = existing.get(path.name)
+                if path.is_dir():
+                    if record is None:
+                        file_id = f"mounted-folder-{parent}-{path.name}"
+                        self.records[file_id] = {
+                            "id": file_id, "name": path.name,
+                            "mimeType": "application/vnd.google-apps.folder", "parents": [parent],
+                            "owners": [{"emailAddress": "current-editor@example.org"}],
+                            "ownedByMe": True, "capabilities": {"canAddChildren": True},
+                        }
+                    continue
+                if not path.is_file():
+                    continue
+                if record is None:
+                    file_id = f"mounted-{parent}-{path.name}"
+                    record = {
+                        "id": file_id, "name": path.name, "mimeType": "application/json",
+                        "parents": [parent], "owners": [{"emailAddress": "current-editor@example.org"}],
+                        "ownedByMe": True, "capabilities": {"canDelete": True},
+                    }
+                    self.records[file_id] = record
+                record["size"] = str(path.stat().st_size)
+                record["quotaBytesUsed"] = str(path.stat().st_size)
+                self.local_paths[record["id"]] = path
+        return super().list(q=q, **kwargs)
+
+
+def _finalization_drive_service(recovery: Path, drive_root: Path, *, denied_names=(), fail_once_name=None):
+    components = _logical_drive_path_components(recovery, drive_root=drive_root)[1]
+    records = {}
+    parent = "root"
+    for index, name in enumerate(components):
+        folder_id = f"folder-{index}"
+        records[folder_id] = {
+            "id": folder_id, "name": name, "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent], "owners": [{"emailAddress": "folder-owner@example.org"}],
+            "ownedByMe": False, "capabilities": {"canAddChildren": True},
+        }
+        parent = folder_id
+    local_paths = {}
+    for path in sorted(recovery.iterdir()):
+        file_id = f"file-{path.name}"
+        local_paths[file_id] = path
+        records[file_id] = {
+            "id": file_id, "name": path.name, "mimeType": "application/octet-stream",
+            "parents": [parent], "owners": [{"emailAddress": "previous-editor@example.org"}],
+            "ownedByMe": False, "size": str(path.stat().st_size),
+            "quotaBytesUsed": str(path.stat().st_size),
+            "capabilities": {"canDelete": path.name not in denied_names},
+        }
+    service = _FakeDriveService(records, {
+        "user": {"emailAddress": "current-editor@example.org"},
+        "storageQuota": {"limit": "10000000000", "usage": "1000000000"},
+    })
+    service._files = _FinalizationDriveFiles(
+        records, service.deleted_ids, local_paths, fail_once_name=fail_once_name,
+        drive_root=drive_root,
+    )
+    return service
+
+
+def test_completed_run_with_four_recovery_generations_finalizes_and_reregisters_idempotently(tmp_path, monkeypatch):
+    from revision_r1.validation import file_sha256
+
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    boundary_hashes = {path.name: file_sha256(path) for path in boundaries.iterdir()}
+    events = output_root / "progress" / plan["plan_sha256"] / "events"
+    events.mkdir(parents=True)
+    event_path = events / f"{record['run_key']}_{record['config_sha256'][:12]}_attempt.jsonl"
+    event_path.write_text(json.dumps({
+        "last_verified_drive_checkpoint": {
+            "pruning_deferred_files": [
+                {"generation": 1, "file": "generation-000001.pt"},
+                {"generation": 1, "file": "generation-000001.manifest.json"},
+            ],
+        },
+    }) + "\n", encoding="utf-8")
+    assert production_workflow._validate_completed_run(plan, record, None, output, synthetic=False)["validation"]["valid"]
+    with pytest.raises(ValueError, match=r"recovery: expected 2, found 4"):
+        production_workflow.measure_completed_production_run(plan, record, None, output, checkpoint_namespace)
+
+    finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
+    assert callable(finalizer), "finalization-only recovery must reconcile the four verified generations"
+    service = _finalization_drive_service(recovery, drive_root)
+    monkeypatch.setattr(
+        production_workflow, "execute_frozen_plan_record",
+        lambda *_args, **_kwargs: pytest.fail("finalization must never invoke training"),
+    )
+    progress = []
+    first = finalizer(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root, progress_callback=progress.append,
+    )
+    second = finalizer(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+
+    assert first["status"] == "FINALIZED_COMPLETED_RUN"
+    assert first["completion_registered"] is True
+    assert first["recovery_retention"]["retained_generations"] == [3, 4]
+    assert first["recovery_retention"]["rotation_explanation"]["status"] == "CONFIRMED_FROM_RUN_PROGRESS"
+    assert len(first["recovery_retention"]["rotation_explanation"]["deferred_files_still_present"]) == 2
+    assert [row["generation"] for row in first["recovery_inventory"]] == [1, 2, 3, 4]
+    assert all(row["integrity_status"] == "PASS_MANIFEST_AND_PAYLOAD_HASH" for row in first["recovery_inventory"])
+    assert all(file["owners"] for row in first["recovery_inventory"] for file in row["files"].values())
+    assert len(list(recovery.glob("generation-*.manifest.json"))) == 2
+    assert sorted(path.name for path in recovery.glob("generation-*.pt")) == [
+        "generation-000003.pt", "generation-000004.pt",
+    ]
+    assert {path.name: file_sha256(path) for path in boundaries.iterdir()} == boundary_hashes
+    assert second["completion_registered"] is False
+    assert first["storage_measurement"] == second["storage_measurement"]
+    assert production_workflow._read_matrix_registry(output_root, plan)["completed_runs"][record["run_key"]]["storage_measurement"] == first["storage_measurement"]
+    assert any(row.get("stage") == "recovery_inventory_complete" for row in progress)
+
+
+def test_finalization_partial_drive_cleanup_is_safe_to_retry(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    service = _finalization_drive_service(
+        recovery, drive_root, fail_once_name="generation-000001.manifest.json",
+    )
+    finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
+    assert callable(finalizer), "partial-cleanup retry requires the finalization-only operation"
+
+    with pytest.raises(StorageCapacityError, match="Drive delete failure"):
+        finalizer(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+    journal = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    assert journal.is_file()
+    assert not (recovery / "generation-000001.pt").exists()
+    assert (recovery / "generation-000001.manifest.json").is_file()
+
+    retried = finalizer(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+    assert retried["status"] == "FINALIZED_COMPLETED_RUN"
+    assert retried["completion_registered"] is True
+    assert retried["recovery_retention"]["retained_generations"] == [3, 4]
+    assert len(list(recovery.glob("generation-*.manifest.json"))) == 2
+
+
+def test_finalization_requires_drive_journal_payload_readback_before_pruning(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    service = _finalization_drive_service(recovery, drive_root)
+    service.files().fail_media_readback = True
+    finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
+    assert callable(finalizer)
+
+    with pytest.raises(StorageCapacityError, match="Drive journal publication/read-back failed"):
+        finalizer(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+    assert len(list(recovery.glob("generation-*.manifest.json"))) == 4
+    assert service.deleted_ids == set()
+
+    service.files().fail_media_readback = False
+    retried = finalizer(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+    assert retried["status"] == "FINALIZED_COMPLETED_RUN"
+    assert retried["recovery_retention"]["retained_generations"] == [3, 4]
+
+
+def test_finalization_refuses_unverified_drive_delete_capability_without_mutation(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    before = {path.name: path.read_bytes() for path in recovery.iterdir()}
+    service = _finalization_drive_service(
+        recovery, drive_root, denied_names={"generation-000001.pt"},
+    )
+    finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
+    assert callable(finalizer), "retention must have a fail-closed finalization gate"
+
+    with pytest.raises(StorageCapacityError, match="canDelete"):
+        finalizer(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    assert {path.name: path.read_bytes() for path in recovery.iterdir()} == before
+    assert not (checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json").exists()
+    assert service.deleted_ids == set()
+
+
+def test_finalization_hash_failure_preserves_every_recovery_file(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    damaged = recovery / "generation-000001.pt"
+    payload = bytearray(damaged.read_bytes())
+    payload[-1] ^= 0x01
+    damaged.write_bytes(payload)
+    before = {path.name: path.read_bytes() for path in recovery.iterdir()}
+    service = _finalization_drive_service(recovery, drive_root)
+    finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
+    assert callable(finalizer)
+
+    with pytest.raises(ValueError, match="SHA-256 differs from its manifest"):
+        finalizer(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    assert {path.name: path.read_bytes() for path in recovery.iterdir()} == before
+    assert service.deleted_ids == set()
+    assert not (checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json").exists()
+
+
+def test_finalization_preflights_all_task_boundaries_before_pruning_recovery(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    (boundaries / "generation-000001.pt").unlink()
+    recovery_before = {path.name: path.read_bytes() for path in recovery.iterdir()}
+    service = _finalization_drive_service(recovery, drive_root)
+    finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
+    assert callable(finalizer)
+
+    with pytest.raises(ValueError, match="payload is missing or size-mismatched"):
+        finalizer(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    assert {path.name: path.read_bytes() for path in recovery.iterdir()} == recovery_before
+    assert service.deleted_ids == set()
+    assert not (checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json").exists()
 

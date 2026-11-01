@@ -18,9 +18,9 @@ from scripts.production_workflow import (
 )
 
 
-PRODUCTION_BUILD_ID = "revision_R1_production_v1_4_1_20261028"
-CODE_ZIP_FILENAME = "revision_R1_production_v1_4_1_20261028.zip"
-DISTRIBUTED_NOTEBOOK_FILENAME = "Revision_R1_Production_Colab_v1_4_1_20261028.ipynb"
+PRODUCTION_BUILD_ID = "revision_R1_production_v1_4_5_20261101"
+CODE_ZIP_FILENAME = "revision_R1_production_v1_4_5_20261101.zip"
+DISTRIBUTED_NOTEBOOK_FILENAME = "Revision_R1_Production_Colab_v1_4_5_20261101.ipynb"
 LEGACY_IDENTITY_FILENAME = "legacy_v1_2_first_run_identity.json"
 AUTHENTIC_V1_2_ZIP_SHA256 = "2647c6bb51b3e3c28fd3009008f6f616deac5e73f725fd20e66aebbb23097d9c"
 AUTHENTIC_V1_2_SOURCE_SHA256 = "bd175dcc27492f848459653536c63aa7bed8421bc16c60d7141fa359004e8660"
@@ -75,7 +75,7 @@ def notebook_document(expected_zip_sha256: str) -> dict:
 
 This notebook runs the frozen 100-run revision_R1 experiment only when the corresponding cell switch is explicitly changed to `True`. The first counted run (`ember`, seed 42, `full_hybrid`) and the remaining 99 runs are separate cells. Setup does not train or run pytest. The protocol and effective schedule are fixed; this is a new revision experiment, not a historical V15.5/V16 reproduction.
 
-Run Cells A → B → C, then run Cell D for a read-only RAM/lease/checkpoint diagnosis and an exact v1.3 resume summary. Do not enable production Cell E until the report is reviewed and no other Colab worker owns the matrix lease. Cell E remains explicitly disabled by default and refuses a fresh first-run start. Cell F continues the matrix; Cell G exports compact results.
+Run Cells A → B → C, then run Cell D for a read-only RAM/lease/checkpoint diagnosis. The finalization-only Cell H is separate from training: set its explicit switch to `True` only to reconcile the already-completed first run's recovery retention, measure storage, and register completion. It never loads datasets or initializes/trains models. Do not enable production Cell E or matrix Cell F for this task. Cell G remains the compact-results export.
 """),
         _cell("code", f'''# Cell A — paths, Drive setup, exact package verification, runtime and source identity.
 from pathlib import Path, PurePosixPath
@@ -655,6 +655,55 @@ if EXPORT_CHECKPOINT_BACKUP:
 else:
     print("Full checkpoint archive: NOT_REQUESTED (no checkpoint files copied).")
 print("No completion files or checkpoints were deleted. Reset loss is bounded by the latest verified Drive synchronization, not guaranteed zero.")
+'''),
+        _cell("code", '''# Cell H — finalization ONLY for the already-completed first run; never launches training.
+import hashlib, json, os, time
+
+FINALIZE_COMPLETED_FIRST_RUN = False
+if not FINALIZE_COMPLETED_FIRST_RUN:
+    print("NOT_RUN: set FINALIZE_COMPLETED_FIRST_RUN = True, then rerun this cell to reconcile verified recovery retention only.")
+else:
+    if globals().get("LAUNCH_FIRST_PRODUCTION_RUN") is True or globals().get("LAUNCH_REMAINING_MATRIX") is True:
+        raise RuntimeError("Finalization-only cell refuses to run while a production launch switch is enabled.")
+    if "RUNTIME_PLAN" not in globals() or "OUTPUT_ROOT" not in globals() or "CHECKPOINT_ROOT" not in globals():
+        raise RuntimeError("Run setup Cells A–C first; finalization requires the exact runtime-bound plan and Drive paths.")
+    from scripts.production_workflow import finalize_completed_production_run
+
+    def finalization_live_log(event):
+        print("FINALIZATION", json.dumps(event, sort_keys=True, default=str), flush=True)
+
+    FIRST_RUN = RUNTIME_PLAN["runs"][0]
+    FINALIZATION_REPORT = finalize_completed_production_run(
+        RUNTIME_PLAN, FIRST_RUN,
+        output_root=OUTPUT_ROOT,
+        checkpoint_root=CHECKPOINT_ROOT,
+        progress_callback=finalization_live_log,
+    )
+    FINALIZATION_REPORT_ROOT = OUTPUT_ROOT / "finalization_reports"
+    FINALIZATION_REPORT_ROOT.mkdir(parents=True, exist_ok=True)
+    FINALIZATION_REPORT_PATH = FINALIZATION_REPORT_ROOT / (
+        f"finalization_{RUNTIME_PLAN['plan_sha256'][:12]}_{time.time_ns()}.json"
+    )
+    FINALIZATION_REPORT_BYTES = (json.dumps(
+        FINALIZATION_REPORT, sort_keys=True, indent=2, default=str, allow_nan=False,
+    ) + "\\n").encode("utf-8")
+    with FINALIZATION_REPORT_PATH.open("xb") as report_stream:
+        report_stream.write(FINALIZATION_REPORT_BYTES)
+        report_stream.flush()
+        os.fsync(report_stream.fileno())
+    if hashlib.sha256(FINALIZATION_REPORT_PATH.read_bytes()).digest() != hashlib.sha256(FINALIZATION_REPORT_BYTES).digest():
+        raise IOError("Finalization report read-back SHA-256 mismatch; preserved checkpoints and report path for inspection.")
+    print("FINALIZATION ONLY COMPLETE — no data/model/training path was invoked.")
+    print("Report:", FINALIZATION_REPORT_PATH)
+    print(json.dumps({
+        "status": FINALIZATION_REPORT["status"],
+        "run_key": FINALIZATION_REPORT["run_key"],
+        "recovery_retention": FINALIZATION_REPORT["recovery_retention"],
+        "task_boundary_checkpoint_count": FINALIZATION_REPORT["task_boundary_checkpoint_count"],
+        "storage_measurement": FINALIZATION_REPORT["storage_measurement"],
+        "completion_registered": FINALIZATION_REPORT["completion_registered"],
+        "validated_completion_count": FINALIZATION_REPORT["validated_completion_count"],
+    }, sort_keys=True, indent=2, default=str))
 '''),
     ]
     document = {

@@ -119,11 +119,11 @@ def test_private_repository_missing_or_invalid_secret_fails_without_token_leak(
 def test_stable_notebook_pins_commit_and_keeps_production_gated():
     commit = "0123456789abcdef0123456789abcdef01234567"
     notebook = notebook_document(commit)
-    assert len(notebook["cells"]) == 8  # opening markdown, then Cells A through G
+    assert len(notebook["cells"]) == 9  # opening markdown, then Cells A through H
     cells = ["".join(cell.get("source", [])) for cell in notebook["cells"]]
     all_source = "\n".join(cells)
 
-    assert [f"Cell {letter}" in cells[index] for index, letter in enumerate("ABCDEFG", start=1)] == [True] * 7
+    assert [f"Cell {letter}" in cells[index] for index, letter in enumerate("ABCDEFGH", start=1)] == [True] * 8
     assert commit in cells[1]
     assert '_git(["checkout", "--detach", "FETCH_HEAD"]' in cells[1]
     assert "GITHUB_READ_TOKEN" in cells[1]
@@ -155,6 +155,10 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "quota_account_email" in cells[3]
     assert "LAUNCH_FIRST_PRODUCTION_RUN = False" in cells[5]
     assert "LAUNCH_REMAINING_MATRIX = False" in cells[6]
+    assert "FINALIZE_COMPLETED_FIRST_RUN = False" in cells[8]
+    assert "finalize_completed_production_run(" in cells[8]
+    assert "execute_first_production_run(" not in cells[8]
+    assert "continue_production_matrix(" not in cells[8]
     assert "fine-grained read-only" in cells[0]
     assert "GITHUB_READ_TOKEN" in cells[0]
 

@@ -609,7 +609,10 @@ def _drive_api_service(*, scopes: tuple[str, ...] = (DRIVE_METADATA_SCOPE,)):
         ) from exc
 
 
-def permanently_delete_recovery_checkpoint(path: str | Path, *, api_factory=None) -> bool:
+def permanently_delete_recovery_checkpoint(
+    path: str | Path, *, api_factory=None, drive_root: str | Path = "/content/drive/MyDrive",
+    expected_drive_file_id: str | None = None, expected_parent_id: str | None = None,
+) -> bool:
     """Delete one exact recovery file when Drive confirms this account can delete it.
 
     Drive Trash still consumes quota, so recovery rotation uses files.delete rather
@@ -631,14 +634,18 @@ def permanently_delete_recovery_checkpoint(path: str | Path, *, api_factory=None
         raise StorageCapacityError(f"refusing checkpoint deletion outside ReVision production/checkpoints: {target}")
     if target.parent.name != "recovery":
         raise StorageCapacityError(f"refusing to prune non-recovery checkpoint artifacts: {target}")
-    _, components = _logical_drive_path_components(target.parent)
+    _, components = _logical_drive_path_components(target.parent, drive_root=drive_root)
     service = (api_factory or (lambda: _drive_api_service(scopes=(DRIVE_FILE_WRITE_SCOPE,))))()
     location = resolve_drive_folder(service, components)
     parent_id = location.get("folder_id")
     if not parent_id or location.get("path_exists") is not True:
         raise StorageCapacityError(f"cannot resolve exact recovery folder before pruning: {target.parent}")
+    if expected_parent_id is not None and str(parent_id) != str(expected_parent_id):
+        raise StorageCapacityError("recovery folder ID differs from the retention journal; no file was deleted")
     metadata = _lookup_drive_child(service, str(parent_id), target.name)
     if not isinstance(metadata, dict):
+        if expected_drive_file_id is not None:
+            raise StorageCapacityError(f"journaled Drive recovery file is missing before delete: {target.name}")
         if target.exists():
             raise StorageCapacityError(f"Drive API cannot verify checkpoint file before pruning: {target}")
         return True
@@ -651,6 +658,8 @@ def permanently_delete_recovery_checkpoint(path: str | Path, *, api_factory=None
         raise StorageCapacityError(
             "refusing checkpoint pruning: exact parent, name, and file identity were not verified"
         )
+    if expected_drive_file_id is not None and str(metadata["id"]) != str(expected_drive_file_id):
+        raise StorageCapacityError(f"Drive file ID differs from the retention journal for {target.name}; no file was deleted")
     capabilities = metadata.get("capabilities")
     can_delete = capabilities.get("canDelete") if isinstance(capabilities, dict) else None
     if can_delete is False:
@@ -2327,6 +2336,756 @@ def measure_completed_production_run(
         "measurement_source": "resource_metrics.json and exact identity-bound Drive checkpoint manifests/payload sizes",
     }
     return measurement
+
+
+def _list_drive_folder_files(service, parent_id: str) -> list[dict[str, Any]]:
+    query = f"'{_drive_query_literal(parent_id)}' in parents and trashed=false"
+    fields = (
+        "nextPageToken,files(id,name,mimeType,parents,owners(emailAddress,displayName),ownedByMe,"
+        "size,quotaBytesUsed,capabilities(canDelete))"
+    )
+    rows: list[dict[str, Any]] = []
+    page_token = None
+    try:
+        while True:
+            response = service.files().list(
+                q=query, pageSize=1000, pageToken=page_token, fields=fields,
+                includeItemsFromAllDrives=True, supportsAllDrives=True,
+            ).execute()
+            rows.extend(response.get("files", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return rows
+    except Exception as exc:
+        raise StorageCapacityError(f"cannot inventory exact Drive recovery folder {parent_id}: {exc}") from exc
+
+
+def _drive_checkpoint_file_record(
+    path: Path, metadata: dict[str, Any], parent_id: str, *, expected_bytes: int | None = None,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    from revision_r1.validation import file_sha256
+
+    owners = metadata.get("owners") or []
+    owner_records = [
+        {
+            "email": str(owner.get("emailAddress", "")).strip().lower() or None,
+            "display_name": owner.get("displayName"),
+        }
+        for owner in owners if isinstance(owner, dict)
+    ]
+    size = _optional_nonnegative_int(metadata.get("size"), "checkpoint file size")
+    if (
+        metadata.get("name") != path.name
+        or str(parent_id) not in [str(value) for value in metadata.get("parents", [])]
+        or not metadata.get("id")
+        or metadata.get("mimeType") == DRIVE_FOLDER_MIME
+        or size is None
+    ):
+        raise StorageCapacityError(f"Drive metadata does not prove the exact checkpoint file identity/size: {path.name}")
+    if expected_bytes is not None and size != int(expected_bytes):
+        raise StorageCapacityError(f"Drive checkpoint size differs from its verified generation record: {path.name}")
+    quota_bytes = _optional_nonnegative_int(metadata.get("quotaBytesUsed"), "checkpoint quota bytes")
+    local_hash = None
+    if path.is_file():
+        if path.stat().st_size != size:
+            raise StorageCapacityError(f"mounted Drive checkpoint size differs from API metadata: {path.name}")
+        local_hash = file_sha256(path)
+        if expected_sha256 is not None and local_hash != expected_sha256:
+            raise StorageCapacityError(f"mounted Drive checkpoint hash differs from its verified generation record: {path.name}")
+    elif expected_sha256 is not None:
+        raise StorageCapacityError(f"checkpoint file disappeared from the mounted Drive view: {path.name}")
+    return {
+        "name": path.name, "drive_file_id": str(metadata["id"]),
+        "parent_id": str(parent_id), "mime_type": metadata.get("mimeType"),
+        "owners": owner_records, "owned_by_authenticated_user": metadata.get("ownedByMe"),
+        "can_delete": (metadata.get("capabilities") or {}).get("canDelete"),
+        "size_bytes": size, "quota_bytes_used": quota_bytes,
+        "local_sha256": local_hash,
+    }
+
+
+def _inspect_verified_recovery_tree(
+    recovery: Path, identity: dict[str, Any], service, parent_id: str, *,
+    progress_callback=None,
+) -> list[dict[str, Any]]:
+    from revision_r1.validation import file_sha256
+
+    manifest_paths = sorted(recovery.glob("generation-*.manifest.json"))
+    local_generation_files = {
+        path.name for path in recovery.iterdir()
+        if path.is_file() and path.name.startswith("generation-")
+    }
+    remote_generation_files: dict[str, list[dict[str, Any]]] = {}
+    for metadata in _list_drive_folder_files(service, parent_id):
+        name = metadata.get("name")
+        if isinstance(name, str) and name.startswith("generation-"):
+            remote_generation_files.setdefault(name, []).append(metadata)
+    if set(remote_generation_files) != local_generation_files:
+        raise StorageCapacityError(
+            "mounted recovery generation inventory differs from exact Drive folder metadata; "
+            f"Drive-only={sorted(set(remote_generation_files) - local_generation_files)}, "
+            f"mount-only={sorted(local_generation_files - set(remote_generation_files))}"
+        )
+    duplicates = sorted(name for name, rows in remote_generation_files.items() if len(rows) != 1)
+    if duplicates:
+        raise StorageCapacityError(f"Drive returned duplicate generation filenames in the recovery folder: {duplicates}")
+    if not manifest_paths:
+        raise ValueError(f"no recovery manifests exist under {recovery}")
+
+    inventory: list[dict[str, Any]] = []
+    seen_generations: set[int] = set()
+    referenced_payloads: set[str] = set()
+    for manifest_path in manifest_paths:
+        match = re.fullmatch(r"generation-(\d+)\.manifest\.json", manifest_path.name)
+        if match is None:
+            raise ValueError(f"recovery manifest filename is malformed: {manifest_path.name}")
+        generation = int(match.group(1))
+        if generation < 1 or generation in seen_generations:
+            raise ValueError(f"recovery generation number is invalid or duplicated: {generation}")
+        seen_generations.add(generation)
+        if manifest_path.name != f"generation-{generation:06d}.manifest.json":
+            raise ValueError(f"recovery manifest does not use its canonical generation name: {manifest_path.name}")
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"recovery manifest is unreadable: {manifest_path}") from exc
+        expected_payload_name = f"generation-{generation:06d}.pt"
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("schema_version") != 1
+            or type(manifest.get("generation")) is not int
+            or manifest.get("generation") != generation
+            or manifest.get("identity") != identity
+            or manifest.get("identity_sha256") != _sha256_json(identity)
+            or manifest.get("payload_file") != expected_payload_name
+            or type(manifest.get("payload_bytes")) is not int
+            or manifest["payload_bytes"] <= 0
+            or not _is_sha256(manifest.get("payload_sha256"))
+            or not isinstance(manifest.get("kind"), str)
+        ):
+            raise ValueError(f"recovery manifest identity, generation, or payload metadata is invalid: {manifest_path}")
+        payload_path = recovery / expected_payload_name
+        if not payload_path.is_file():
+            raise ValueError(f"recovery manifest payload is missing: {payload_path}")
+        if payload_path.stat().st_size != manifest["payload_bytes"]:
+            raise ValueError(f"recovery payload byte count differs from its manifest: {payload_path}")
+        if progress_callback is not None:
+            progress_callback({"stage": "recovery_payload_hash_start", "generation": generation, "payload_file": expected_payload_name})
+        payload_hash = file_sha256(payload_path)
+        if payload_hash != manifest["payload_sha256"]:
+            raise ValueError(f"recovery payload SHA-256 differs from its manifest: {payload_path}")
+        manifest_hash = file_sha256(manifest_path)
+        manifest_metadata = remote_generation_files[manifest_path.name][0]
+        payload_metadata = remote_generation_files[expected_payload_name][0]
+        manifest_file = _drive_checkpoint_file_record(
+            manifest_path, manifest_metadata, parent_id,
+        )
+        payload_file = _drive_checkpoint_file_record(
+            payload_path, payload_metadata, parent_id,
+            expected_bytes=manifest["payload_bytes"], expected_sha256=manifest["payload_sha256"],
+        )
+        manifest_file["local_sha256"] = manifest_hash
+        row = {
+            "generation": generation, "kind": manifest["kind"],
+            "identity": manifest["identity"], "identity_sha256": manifest["identity_sha256"],
+            "manifest_sha256": manifest_hash, "payload_sha256": payload_hash,
+            "payload_bytes": manifest["payload_bytes"],
+            "integrity_status": "PASS_MANIFEST_AND_PAYLOAD_HASH",
+            "files": {"manifest": manifest_file, "payload": payload_file},
+        }
+        inventory.append(row)
+        referenced_payloads.add(expected_payload_name)
+        if progress_callback is not None:
+            progress_callback({
+                "stage": "recovery_generation_verified", "generation": generation,
+                "kind": manifest["kind"], "manifest_sha256": manifest_hash,
+                "payload_sha256": payload_hash, "payload_bytes": manifest["payload_bytes"],
+                "files": row["files"],
+            })
+    payload_names = {
+        path.name for path in recovery.glob("generation-*.pt") if path.is_file()
+    }
+    if payload_names != referenced_payloads:
+        raise ValueError(
+            "recovery payload inventory contains missing or unreferenced files: "
+            f"unreferenced={sorted(payload_names - referenced_payloads)}, "
+            f"missing={sorted(referenced_payloads - payload_names)}"
+        )
+    inventory.sort(key=lambda item: item["generation"])
+    return inventory
+
+
+def _rotation_deferred_pruning_evidence(
+    output_root: Path, plan: dict[str, Any], record: dict[str, Any], stale_generations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    expected_names = {
+        file_record["name"]
+        for generation in stale_generations for file_record in generation["files"].values()
+    }
+    event_root = output_root / "progress" / plan["plan_sha256"] / "events"
+    event_paths = sorted(event_root.glob(f"{record['run_key']}_{record['config_sha256'][:12]}_*.jsonl"))
+    matched: dict[tuple[int, str], str] = {}
+    for event_path in event_paths:
+        try:
+            lines = event_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            checkpoint = event.get("last_verified_drive_checkpoint")
+            deferred = checkpoint.get("pruning_deferred_files", []) if isinstance(checkpoint, dict) else []
+            for item in deferred if isinstance(deferred, list) else []:
+                if not isinstance(item, dict) or item.get("file") not in expected_names:
+                    continue
+                try:
+                    key = (int(item["generation"]), str(item["file"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                matched[key] = str(event_path)
+    if matched:
+        files = [
+            {"generation": generation, "file": filename, "event_log": event_path}
+            for (generation, filename), event_path in sorted(matched.items())
+        ]
+        return {
+            "status": "CONFIRMED_FROM_RUN_PROGRESS",
+            "reason": "checkpoint rotation recorded Drive deletion deferrals for files still present in this recovery inventory",
+            "deferred_files_still_present": files,
+        }
+    return {
+        "status": "CODE_PATH_CONFIRMED_RUN_LOG_NOT_CORROBORATED",
+        "reason": (
+            "the checkpoint rotation code retains stale files when Drive canDelete is false; "
+            "available per-attempt progress logs did not identify the currently present files"
+        ),
+        "deferred_files_still_present": [],
+    }
+
+
+def _finalization_journal_digest(document: dict[str, Any]) -> str:
+    payload = dict(document)
+    payload.pop("journal_sha256", None)
+    return _sha256_json(payload)
+
+
+def _save_recovery_finalization_journal(
+    path: Path, document: dict[str, Any], service, *, drive_root: Path,
+) -> int:
+    payload = dict(document)
+    payload.pop("journal_sha256", None)
+    document["journal_sha256"] = _sha256_json(payload)
+    serialized = json.dumps(document, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
+    quota = _drive_account_snapshot(service)
+    available = quota.get("available_bytes")
+    if available is None:
+        raise StorageCapacityError(
+            "Drive quota is unknown; cannot safely persist the recovery-retention journal before pruning"
+        )
+    required_bytes = max(1, len(serialized) * 2)
+    require_available_bytes(
+        path, required_bytes=required_bytes, reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
+        available_bytes=int(available), storage_kind="Drive recovery-finalization journal",
+    )
+    local_available = shutil.disk_usage(drive_root).free
+    require_available_bytes(
+        path, required_bytes=required_bytes, reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
+        available_bytes=local_available, storage_kind="Colab local journal staging",
+    )
+    _atomic_json(path, document)
+    try:
+        observed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StorageCapacityError("recovery-retention journal read-back failed; no additional checkpoint pruning will continue") from exc
+    if observed != document or observed.get("journal_sha256") != _finalization_journal_digest(observed):
+        raise StorageCapacityError("recovery-retention journal read-back/hash verification failed")
+
+    # A mounted-path read-back only verifies the Colab mount cache. Before any
+    # checkpoint is pruned, prove that Drive itself sees this exact journal and
+    # can return its exact bytes. Bind the Drive file/folder IDs into the journal
+    # so retries cannot silently switch to a same-name replacement.
+    _configured, components = _logical_drive_path_components(path.parent, drive_root=drive_root)
+    location = resolve_drive_folder(service, components)
+    parent_id = str(location.get("folder_id") or "")
+    if location.get("path_exists") is not True or not parent_id:
+        raise StorageCapacityError("cannot resolve the exact Drive folder for the recovery-retention journal")
+    deadline = time.monotonic() + 20.0
+    metadata = None
+    while time.monotonic() < deadline:
+        metadata = _lookup_drive_child(service, parent_id, path.name)
+        if isinstance(metadata, dict):
+            break
+        time.sleep(0.25)
+    if not isinstance(metadata, dict):
+        raise StorageCapacityError(
+            "Drive API cannot see the recovery-retention journal in its exact parent; no checkpoint pruning is allowed"
+        )
+    file_id = str(metadata.get("id") or "")
+    if (
+        not file_id
+        or metadata.get("name") != path.name
+        or parent_id not in [str(value) for value in metadata.get("parents", [])]
+        or metadata.get("mimeType") == DRIVE_FOLDER_MIME
+    ):
+        raise StorageCapacityError("Drive journal metadata does not match the exact journal path; pruning is blocked")
+    bound_id = document.get("journal_drive_file_id")
+    bound_parent = document.get("journal_drive_parent_id")
+    if (bound_id and str(bound_id) != file_id) or (bound_parent and str(bound_parent) != parent_id):
+        raise StorageCapacityError("Drive journal identity changed since its retention record was prepared")
+    if not bound_id or not bound_parent:
+        document["journal_drive_file_id"] = file_id
+        document["journal_drive_parent_id"] = parent_id
+        payload = dict(document)
+        payload.pop("journal_sha256", None)
+        document["journal_sha256"] = _sha256_json(payload)
+        serialized = json.dumps(document, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
+        _atomic_json(path, document)
+
+    try:
+        remote_metadata = service.files().get(
+            fileId=file_id, fields="id,name,mimeType,parents,size,owners(emailAddress),quotaBytesUsed",
+            supportsAllDrives=True,
+        ).execute()
+        remote_size = _optional_nonnegative_int(remote_metadata.get("size"), "recovery-retention journal size")
+        if (
+            remote_metadata.get("id") != file_id
+            or remote_metadata.get("name") != path.name
+            or parent_id not in [str(value) for value in remote_metadata.get("parents", [])]
+            or remote_size != len(serialized)
+        ):
+            raise StorageCapacityError("Drive journal metadata does not match the current journal bytes")
+        remote_payload = service.files().get(
+            fileId=file_id, alt="media", supportsAllDrives=True,
+        ).execute()
+    except StorageCapacityError:
+        raise
+    except Exception as exc:
+        raise StorageCapacityError(
+            f"Drive journal publication/read-back failed; no checkpoint pruning is allowed: {exc}"
+        ) from exc
+    if not isinstance(remote_payload, (bytes, bytearray)) or bytes(remote_payload) != serialized:
+        raise StorageCapacityError(
+            "Drive journal remote read-back differs from the local journal; no checkpoint pruning is allowed"
+        )
+    return len(serialized)
+
+
+def _validate_recovery_finalization_journal(
+    path: Path, plan: dict[str, Any], record: dict[str, Any], identity: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"recovery-retention journal is unreadable: {path}") from exc
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != 1
+        or document.get("plan_sha256") != plan["plan_sha256"]
+        or document.get("run_key") != record["run_key"]
+        or document.get("run_id") != _run_id_for(record, synthetic=False)
+        or document.get("identity") != identity
+        or document.get("identity_sha256") != _sha256_json(identity)
+        or document.get("journal_sha256") != _finalization_journal_digest(document)
+        or not isinstance(document.get("protected_generations"), list)
+        or len(document["protected_generations"]) != 2
+        or not isinstance(document.get("delete_generations"), list)
+        or not document.get("journal_drive_file_id")
+        or not document.get("journal_drive_parent_id")
+        or document.get("status") not in {"PREPARED", "RETENTION_VERIFIED"}
+    ):
+        raise ValueError(f"recovery-retention journal does not match the frozen run identity: {path}")
+    protected = document["protected_generations"]
+    if any(type(value) is not int or value < 1 for value in protected) or protected != sorted(set(protected)):
+        raise ValueError("recovery-retention journal protected-generation list is invalid")
+    for generation in document["delete_generations"]:
+        if (
+            not isinstance(generation, dict)
+            or type(generation.get("generation")) is not int
+            or generation["generation"] in protected
+            or not isinstance(generation.get("files"), list)
+            or {item.get("role") for item in generation["files"] if isinstance(item, dict)} != {"manifest", "payload"}
+        ):
+            raise ValueError("recovery-retention journal deletion target is invalid")
+        number = int(generation["generation"])
+        expected_names = {"manifest": f"generation-{number:06d}.manifest.json", "payload": f"generation-{number:06d}.pt"}
+        for item in generation["files"]:
+            if (
+                item.get("name") != expected_names[item["role"]]
+                or not item.get("drive_file_id")
+                or type(item.get("size_bytes")) is not int
+                or item["size_bytes"] <= 0
+                or not _is_sha256(item.get("local_sha256"))
+                or item.get("can_delete") is not True
+            ):
+                raise ValueError("recovery-retention journal contains unverified deletion metadata")
+    return document
+
+
+def _drive_recovery_folder(service, recovery: Path, drive_root: Path) -> dict[str, Any]:
+    _configured, components = _logical_drive_path_components(recovery, drive_root=drive_root)
+    location = resolve_drive_folder(service, components)
+    if location.get("path_exists") is not True or not location.get("folder_id"):
+        raise StorageCapacityError(f"exact Drive recovery folder could not be resolved: {recovery}")
+    return {
+        "folder_id": str(location["folder_id"]), "components": list(components),
+        "owner_email": location.get("owner_email"), "drive_id": location.get("drive_id"),
+    }
+
+
+def _resume_recovery_finalization_deletions(
+    recovery: Path, journal_path: Path, journal: dict[str, Any], identity: dict[str, Any],
+    service, drive_root: Path, *, api_factory, progress_callback=None,
+) -> None:
+    from revision_r1.validation import file_sha256
+
+    folder = _drive_recovery_folder(service, recovery, drive_root)
+    parent_id = folder["folder_id"]
+    journal_folder = journal.get("recovery_folder")
+    if (
+        not isinstance(journal_folder, dict)
+        or str(journal_folder.get("folder_id")) != str(parent_id)
+    ):
+        raise StorageCapacityError("recovery folder ID differs from the retention journal; no pruning is allowed")
+    expected_protected = journal["protected_generations"]
+    target_names = {
+        item["name"]
+        for generation in journal["delete_generations"] for item in generation["files"]
+    }
+    protected_names = {
+        file_record["name"]
+        for row in journal["initial_recovery_inventory"]
+        if row["generation"] in expected_protected
+        for file_record in row["files"].values()
+    }
+    allowed_names = target_names | protected_names
+    remote = _list_drive_folder_files(service, parent_id)
+    remote_generation_names = [row.get("name") for row in remote if str(row.get("name", "")).startswith("generation-")]
+    local_generation_names = [path.name for path in recovery.iterdir() if path.is_file() and path.name.startswith("generation-")]
+    if not set(remote_generation_names).issubset(allowed_names) or not set(local_generation_names).issubset(allowed_names):
+        raise StorageCapacityError("recovery folder contains generation files not authorized by the identity-bound retention journal")
+
+    names_to_records = {row.get("name"): row for row in remote if isinstance(row.get("name"), str)}
+    if len(names_to_records) != len(remote):
+        raise StorageCapacityError("Drive recovery folder contains duplicate names; refusing checkpoint cleanup")
+
+    # Retained generations are never inferred from a journal alone: recheck each full manifest/payload pair.
+    for generation in expected_protected:
+        row = next((item for item in journal["initial_recovery_inventory"] if item["generation"] == generation), None)
+        if row is None:
+            raise ValueError("retention journal omits a protected recovery generation")
+        manifest_path = recovery / row["files"]["manifest"]["name"]
+        payload_path = recovery / row["files"]["payload"]["name"]
+        if not manifest_path.is_file() or not payload_path.is_file():
+            raise ValueError(f"protected recovery generation {generation} is incomplete; refusing to prune")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (
+            manifest.get("identity") != identity
+            or manifest.get("identity_sha256") != _sha256_json(identity)
+            or manifest.get("generation") != generation
+            or manifest.get("payload_sha256") != row["payload_sha256"]
+            or file_sha256(payload_path) != row["payload_sha256"]
+            or file_sha256(manifest_path) != row["manifest_sha256"]
+        ):
+            raise ValueError(f"protected recovery generation {generation} changed since the retention journal was prepared")
+        for role in ("manifest", "payload"):
+            expected = row["files"][role]
+            metadata = names_to_records.get(expected["name"])
+            if metadata is None:
+                raise StorageCapacityError(f"Drive no longer has protected recovery file {expected['name']}")
+            actual = _drive_checkpoint_file_record(
+                recovery / expected["name"], metadata, parent_id,
+                expected_bytes=expected["size_bytes"], expected_sha256=expected["local_sha256"],
+            )
+            if actual["drive_file_id"] != expected["drive_file_id"]:
+                raise StorageCapacityError(f"Drive file ID changed for protected recovery file {expected['name']}")
+
+    deleted_names = set(journal.get("deleted_files", []))
+    for generation in sorted(journal["delete_generations"], key=lambda row: row["generation"]):
+        for item in sorted(generation["files"], key=lambda row: 0 if row["role"] == "payload" else 1):
+            path = recovery / item["name"]
+            metadata = _lookup_drive_child(service, parent_id, item["name"])
+            if metadata is None:
+                if path.exists():
+                    raise StorageCapacityError(f"Drive removed {item['name']} but the mounted view still exposes it; wait for Drive synchronization and retry")
+                deleted_names.add(item["name"])
+                continue
+            actual = _drive_checkpoint_file_record(
+                path, metadata, parent_id,
+                expected_bytes=item["size_bytes"], expected_sha256=item["local_sha256"] if path.is_file() else None,
+            )
+            if actual["drive_file_id"] != item["drive_file_id"] or actual["can_delete"] is not True:
+                raise StorageCapacityError(f"Drive identity or canDelete changed for stale recovery file {item['name']}; preserved")
+            if progress_callback is not None:
+                progress_callback({"stage": "recovery_stale_file_delete_start", "generation": generation["generation"], "file": actual})
+            try:
+                deleted = permanently_delete_recovery_checkpoint(
+                    path, api_factory=api_factory, drive_root=drive_root,
+                    expected_drive_file_id=item["drive_file_id"], expected_parent_id=parent_id,
+                )
+            except Exception as exc:
+                raise StorageCapacityError(f"Drive delete failure for {item['name']}; retention journal is preserved for a safe retry: {exc}") from exc
+            if deleted is not True:
+                raise StorageCapacityError(f"Drive no longer grants canDelete for {item['name']}; retention journal is preserved")
+            deadline = time.monotonic() + 15.0
+            while path.exists() and time.monotonic() < deadline:
+                time.sleep(0.25)
+            if path.exists():
+                raise StorageCapacityError(f"Drive API removed {item['name']} but the mounted path has not synchronized; retry after synchronization")
+            deleted_names.add(item["name"])
+            journal["deleted_files"] = sorted(deleted_names)
+            _save_recovery_finalization_journal(journal_path, journal, service, drive_root=drive_root)
+            if progress_callback is not None:
+                progress_callback({"stage": "recovery_stale_file_deleted", "generation": generation["generation"], "file": item["name"]})
+
+    final_inventory = _inspect_verified_recovery_tree(
+        recovery, identity, service, parent_id, progress_callback=progress_callback,
+    )
+    if [row["generation"] for row in final_inventory] != expected_protected:
+        raise StorageCapacityError(
+            "recovery retention read-back does not match the two journaled generations: "
+            f"expected={expected_protected}, found={[row['generation'] for row in final_inventory]}"
+        )
+    if final_inventory[-1]["kind"] != "complete":
+        raise ValueError("newest retained recovery point is not the terminal complete generation")
+    journal["deleted_files"] = sorted(deleted_names)
+    journal["status"] = "RETENTION_VERIFIED"
+    journal["retention_verified_inventory"] = final_inventory
+    _save_recovery_finalization_journal(journal_path, journal, service, drive_root=drive_root)
+
+
+def finalize_completed_production_run(
+    plan: dict[str, Any], record: dict[str, Any], *,
+    output_root: str | Path, checkpoint_root: str | Path,
+    progress_callback=None, api_factory=None,
+    drive_root: str | Path = "/content/drive/MyDrive",
+) -> dict[str, Any]:
+    """Finalize an already validated run without loading data or invoking training.
+
+    The operation is restricted to frozen run 1. It verifies every recovery
+    manifest/payload and Drive file identity before pruning only stale recovery
+    generations. A small identity-bound journal makes an interrupted pair
+    deletion retryable. Task-boundary artifacts and run outputs are read-only.
+    """
+    from revision_r1.registry import RunRegistry
+    from revision_r1.validation import file_sha256
+
+    package_root = Path(__file__).resolve().parents[1]
+    validate_frozen_plan(plan, expected_source_sha256=training_source_sha256(package_root))
+    if not plan.get("runs") or record != plan["runs"][0] or record.get("run_index") != 1:
+        raise ValueError("finalization-only recovery is restricted to frozen matrix run 1")
+    if (
+        (record.get("dataset"), int(record.get("seed", -1)), record.get("arm")) != FIRST_RUN
+        or record.get("effective_schedule_sha256") != plan["schedule_sha256"]
+        or not isinstance(record.get("update_budgets_by_task"), list)
+        or len(record["update_budgets_by_task"]) != 11
+    ):
+        raise ValueError("run 1 record is not bound to its exact frozen 11-task schedule")
+
+    output_root_path = Path(output_root).expanduser().resolve()
+    checkpoint_root_path = Path(checkpoint_root).expanduser()
+    drive_root_path = Path(drive_root).expanduser()
+    output = run_output_root(output_root_path, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root_path, record)
+    recovery = checkpoint_namespace / "recovery"
+    journal_path = checkpoint_root_path / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    matrix_lease = _MatrixLeaseHeartbeat(output_root_path / ".matrix_execution.lease.json")
+    callback = progress_callback or (lambda _event: None)
+
+    with matrix_lease as lease:
+        callback({"stage": "completed_output_validation_start", "run_key": record["run_key"]})
+        validated = _validate_completed_run(plan, record, None, output, synthetic=False)
+        run_state = RunRegistry(output / "registry").status(validated["run_id"])
+        identity = run_state.get("identity")
+        if not isinstance(identity, dict) or identity.get("execution_scope") != "production":
+            raise ValueError("completed runner registry has no exact production checkpoint identity")
+        task_boundary_preflight = _checkpoint_tree_measurement(
+            checkpoint_namespace, identity, kind="task_boundaries", expected_count=11,
+        )
+        callback({
+            "stage": "task_boundary_checkpoint_preflight_complete",
+            "generation_count": task_boundary_preflight["generation_count"],
+            "payload_bytes": task_boundary_preflight["payload_bytes"],
+            "manifest_bytes": task_boundary_preflight["manifest_bytes"],
+            "all_task_boundary_artifacts_preserved": True,
+        })
+        callback({
+            "stage": "completed_output_validated", "run_id": validated["run_id"],
+            "artifact_manifest_sha256": validated["artifact_manifest_sha256"],
+        })
+
+        service = (api_factory or (lambda: _drive_api_service(scopes=(DRIVE_FILE_WRITE_SCOPE,))))()
+        folder = _drive_recovery_folder(service, recovery, drive_root_path)
+        if journal_path.is_file():
+            # Re-publish/read back through Drive before trusting the retry log;
+            # this also completes ID binding if interrupted between initial write
+            # and the first verified API read-back.
+            _save_recovery_finalization_journal(journal_path, json.loads(journal_path.read_text(encoding="utf-8")), service, drive_root=drive_root_path)
+            journal = _validate_recovery_finalization_journal(journal_path, plan, record, identity)
+            initial_inventory = journal["initial_recovery_inventory"]
+            delete_generations = journal["delete_generations"]
+            rotation_explanation = journal["rotation_explanation"]
+            callback({
+                "stage": "recovery_retention_journal_resume", "journal_path": str(journal_path),
+                "journal_status": journal["status"], "deleted_files": journal.get("deleted_files", []),
+            })
+            _resume_recovery_finalization_deletions(
+                recovery, journal_path, journal, identity, service, drive_root_path,
+                api_factory=lambda: service, progress_callback=callback,
+            )
+        else:
+            initial_inventory = _inspect_verified_recovery_tree(
+                recovery, identity, service, folder["folder_id"], progress_callback=callback,
+            )
+            generations = [row["generation"] for row in initial_inventory]
+            callback({
+                "stage": "recovery_inventory_complete",
+                "generations": generations,
+                "generation_count": len(initial_inventory),
+                "manifest_and_payload_hashes_verified": True,
+                "drive_files_verified": True,
+            })
+            if len(initial_inventory) < RECOVERY_GENERATIONS_PER_RUN:
+                raise ValueError(
+                    f"cannot finalize: only {len(initial_inventory)} valid recovery generations exist; "
+                    f"at least {RECOVERY_GENERATIONS_PER_RUN} are required"
+                )
+            retained = initial_inventory[-RECOVERY_GENERATIONS_PER_RUN:]
+            if retained[-1]["kind"] != "complete":
+                raise ValueError("newest verified recovery point is not the terminal complete generation; no pruning performed")
+            delete_generations = initial_inventory[:-RECOVERY_GENERATIONS_PER_RUN]
+            rotation_explanation = _rotation_deferred_pruning_evidence(
+                output_root_path, plan, record, delete_generations,
+            )
+            if delete_generations:
+                for generation in delete_generations:
+                    for role in ("payload", "manifest"):
+                        item = generation["files"][role]
+                        if item.get("can_delete") is not True:
+                            raise StorageCapacityError(
+                                f"Drive canDelete is not verified true for stale recovery file {item['name']}; "
+                                "all checkpoints are preserved"
+                            )
+                delete_rows = [
+                    {
+                        "generation": row["generation"],
+                        "files": [
+                            {"role": role, **row["files"][role]}
+                            for role in ("manifest", "payload")
+                        ],
+                    }
+                    for row in delete_generations
+                ]
+                journal = {
+                    "schema_version": 1, "status": "PREPARED",
+                    "plan_sha256": plan["plan_sha256"], "run_key": record["run_key"],
+                    "run_id": validated["run_id"], "identity": identity,
+                    "identity_sha256": _sha256_json(identity),
+                    "recovery_folder": folder, "protected_generations": [row["generation"] for row in retained],
+                    "initial_recovery_inventory": initial_inventory,
+                    "delete_generations": delete_rows, "deleted_files": [],
+                    "rotation_explanation": rotation_explanation,
+                    "prepared_utc": datetime.now(timezone.utc).isoformat(),
+                }
+                callback({
+                    "stage": "recovery_retention_journal_write_start", "journal_path": str(journal_path),
+                    "protected_generations": journal["protected_generations"],
+                    "delete_generations": [row["generation"] for row in delete_rows],
+                })
+                _save_recovery_finalization_journal(
+                    journal_path, journal, service, drive_root=drive_root_path,
+                )
+                journal = _validate_recovery_finalization_journal(journal_path, plan, record, identity)
+                _resume_recovery_finalization_deletions(
+                    recovery, journal_path, journal, identity, service, drive_root_path,
+                    api_factory=lambda: service, progress_callback=callback,
+                )
+                delete_generations = journal["delete_generations"]
+                initial_inventory = journal["initial_recovery_inventory"]
+            else:
+                if [row["generation"] for row in retained] != generations:
+                    raise RuntimeError("recovery retention selection did not preserve the two latest valid generations")
+                if retained[-1]["kind"] != "complete":
+                    raise ValueError("newest retained recovery generation is not complete")
+
+        final_folder = _drive_recovery_folder(service, recovery, drive_root_path)
+        final_inventory = _inspect_verified_recovery_tree(
+            recovery, identity, service, final_folder["folder_id"], progress_callback=callback,
+        )
+        retained_generations = [row["generation"] for row in final_inventory]
+        if len(final_inventory) != RECOVERY_GENERATIONS_PER_RUN:
+            raise ValueError(
+                "recovery retention reconciliation did not converge to the required two verified generations: "
+                f"found {retained_generations}"
+            )
+        if final_inventory[-1]["kind"] != "complete":
+            raise ValueError("newest retained recovery generation is not the terminal complete checkpoint")
+        if lease.lost.is_set():
+            raise RuntimeError("matrix lease was lost during finalization; completion registration was not attempted")
+
+        callback({"stage": "completed_run_storage_measurement_start", "run_key": record["run_key"]})
+        measurement = measure_completed_production_run(
+            plan, record, None, output, checkpoint_namespace,
+        )
+        journal_size = journal_path.stat().st_size if journal_path.is_file() else 0
+        deleted_file_records = [
+            item
+            for row in delete_generations
+            for item in (row.get("files", []) if isinstance(row, dict) else [])
+        ]
+        # The journal is stable after RETENTION_VERIFIED; this compact addition keeps
+        # the registration measurement identical across a safe retry.
+        if journal_path.is_file():
+            journal_digest = json.loads(journal_path.read_text(encoding="utf-8"))["journal_sha256"]
+        else:
+            journal_digest = None
+        measurement["recovery_retention_finalization"] = {
+            "retained_generations": retained_generations,
+            "deleted_generations": [row["generation"] for row in delete_generations],
+            "deleted_file_count": len(deleted_file_records),
+            "deleted_payload_bytes": sum(
+                int(item["size_bytes"]) for item in deleted_file_records if item.get("role") == "payload"
+            ),
+            "deleted_manifest_bytes": sum(
+                int(item["size_bytes"]) for item in deleted_file_records if item.get("role") == "manifest"
+            ),
+            "retention_journal_path": str(journal_path) if journal_path.is_file() else None,
+            "retention_journal_sha256": journal_digest,
+            "retention_journal_bytes": journal_size,
+        }
+        callback({"stage": "completion_registration_start", "run_key": record["run_key"]})
+        registry, registered = _record_completed_run(
+            output_root_path, plan, record, validated, storage_measurement=measurement,
+        )
+        if lease.lost.is_set():
+            raise RuntimeError("matrix lease was lost after completion registration; the exact idempotent registry entry remains persisted")
+        callback({
+            "stage": "completion_registration_complete", "run_key": record["run_key"],
+            "newly_registered": registered,
+            "validated_completion_count": len(registry["completed_runs"]),
+        })
+        return {
+            "status": "FINALIZED_COMPLETED_RUN", "run_key": record["run_key"],
+            "run_id": validated["run_id"], "artifact_manifest_sha256": validated["artifact_manifest_sha256"],
+            "training_source_sha256": plan["training_source_sha256"],
+            "schedule_sha256": plan["schedule_sha256"],
+            "recovery_inventory": initial_inventory,
+            "recovery_retention": {
+                "expected_generation_count": RECOVERY_GENERATIONS_PER_RUN,
+                "retained_generations": retained_generations,
+                "deleted_generations": [row["generation"] for row in delete_generations],
+                "journal_path": str(journal_path) if journal_path.is_file() else None,
+                "rotation_explanation": rotation_explanation,
+            },
+            "task_boundary_checkpoint_count": measurement["task_boundary_checkpoints"]["generation_count"],
+            "task_boundary_checkpoint_preflight": task_boundary_preflight,
+            "storage_measurement": measurement,
+            "completion_registered": registered,
+            "validated_completion_count": len(registry["completed_runs"]),
+            "note": "finalization only; no dataset was loaded, model initialized, replay generated, or training run launched",
+        }
 
 
 def _record_completed_run(
