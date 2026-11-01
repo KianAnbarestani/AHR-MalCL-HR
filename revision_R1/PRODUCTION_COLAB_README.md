@@ -176,10 +176,16 @@ The displayed deficit includes the 512 MiB reserve. Configure the final
 output/checkpoint destination before Cell D; moving completed runs is
 unsupported because completion records contain absolute artifact paths.
 Only recovery generations rotate. A newly uploaded generation must pass
-read-back verification before the older exact-owned generations are
-permanently pruned; two verified Drive recovery generations remain. Task
-boundary snapshots are retained separately and are not pruned. Files already
-in Drive Trash are not removed automatically and continue to consume quota.
+read-back verification before stale recovery files are considered for
+permanent pruning. Deletion requires exact path/name/ID verification and
+Drive's `capabilities.canDelete == true` for the authenticated account; a
+shared-folder Editor may delete a file they do not own when Drive grants that
+capability. If Drive explicitly denies deletion, the generation is preserved
+and reported as deferred rather than aborting a resumed run. This can leave
+more than two physical recovery generations until a capable account can clean
+them; actual retained bytes are reported. Task-boundary snapshots remain
+separate and are never pruned. Files already in Drive Trash are not removed
+automatically and continue to consume quota.
 
 ## RAM/OOM safeguards
 

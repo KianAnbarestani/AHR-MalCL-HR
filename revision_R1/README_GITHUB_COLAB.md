@@ -36,13 +36,15 @@ rewritten. The actual runtime override (300-second local / 900-second Drive)
 is recorded separately in `resource_metrics.json` as `checkpoint_policy`.
 
 Drive recovery rotation publishes and verifies the new generation before it
-prunes older recovery generations, leaving two hash-verified generations. Cell
-C verifies exact-folder write capability, quota attribution, and permanent
-deletion of the authenticated account's tiny probe file; if safe cleanup
-cannot be established, the production gate fails closed. Pruning uses exact
-Drive file IDs only for files owned by the current account. It never removes
-task-boundary archives, foreign-owned files, or unrelated artifacts. Existing
-Drive Trash is not emptied automatically and continues to consume quota.
+prunes older recovery generations. Deletion is performed only by exact Drive
+file ID after exact-parent/name checks and an explicit `capabilities.canDelete`
+confirmation for the authenticated account. Files that Drive says this account
+cannot delete are preserved and reported as deferred; ownership metadata alone
+is not used to infer delete permission. Therefore, existing protected legacy
+generations may make physical retention temporarily exceed the two-generation
+target. Progress reports include deferred filenames and actual retained bytes;
+task-boundary archives and unrelated files are never pruned. Existing Drive
+Trash is not emptied automatically and continues to consume quota.
 
 Before resuming the first production run, the capacity envelope is sized from
 the maximum payload in the exact-identity recovery/task-boundary manifests

@@ -50,7 +50,7 @@
   "runtime_module_sha256": {
     "__init__.py": "59e86d6617f545baa26ba4a1c85c8aadad68af0b1febe0fbd835bbfe82f3e167",
     "archives.py": "5d159fa12989587ed5620a2234a84c979ec903cce35879de11ba4eea7a9db161",
-    "checkpointing.py": "36373d9e79ae05f715e4adc3df5c75adc3b09436f6ec4afb0464cbb899d006be",
+    "checkpointing.py": "1ff5e319d55616f6264bf8ec7c2ef698d73973e62c1b12ac3341bcc4ca8f1683",
     "cli.py": "c3da1546f47964b6b6ccd929a687430e47bbc567aed35b8050e82409692e5fe7",
     "compatibility.py": "f82962114a058721951dd42cb374d66250b9b01a808c194cab41f1cf2aeaa2b0",
     "config.py": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608",
@@ -77,7 +77,7 @@
     "validation_worker.py": "2ce2c13435f97a036a4d6a1ab233c2eef020be989788fe873da9e83ac8f9d095",
     "validation_workflow.py": "1caddd38f54e6557604f25abc14ba0cafbdb20011d562989b041eb0be8421753"
   },
-  "runtime_source_sha256": "2316e9947a1c34f9e75d22c2e6c81a93ffbbf4babc6e7377d535e40858c52c26",
+  "runtime_source_sha256": "2d0fde8a0ece583474fa9fe298c20c2a030a1764c2182f9597c2a32f59991da1",
   "schema_version": 1,
   "training_behavior_fingerprint_sha256": "63b1d7656cd1c2474920d79c8c569b29c8724b56d2f8d1223290d00a1c1dbacb",
   "training_behavior_matches_baseline": true

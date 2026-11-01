@@ -523,10 +523,12 @@ def _prune_verified_generations(
             "deleted_bytes": 0,
             "retained_bytes": sum(path.stat().st_size for path in root.glob("generation-*") if path.is_file()),
             "pruning_skipped": "fewer than keep verified recovery generations",
+            "pruning_deferred_files": [],
         }
 
     retained = {generation for generation, _, _ in valid[:keep]}
     deleted_bytes = 0
+    deferred_files: list[dict[str, Any]] = []
     pruning_started = time.monotonic()
     for generation, manifest_path, manifest in records:
         if generation in retained:
@@ -535,23 +537,36 @@ def _prune_verified_generations(
         if isinstance(payload_name, str) and re.fullmatch(r"generation-\d+\.pt", payload_name):
             payload_path = root / payload_name
             if payload_path.is_file():
-                deleted_bytes += payload_path.stat().st_size
+                payload_size = payload_path.stat().st_size
                 if delete_callback is None:
                     payload_path.unlink()
                 else:
-                    delete_callback(payload_path)
+                    if delete_callback(payload_path) is False:
+                        deferred_files.append({"generation": generation, "file": payload_path.name})
+                        # Leave the manifest paired with a payload that Drive
+                        # says this account cannot delete.
+                        continue
+                deleted_bytes += payload_size
         if manifest_path.is_file():
-            deleted_bytes += manifest_path.stat().st_size
+            manifest_size = manifest_path.stat().st_size
             if delete_callback is None:
                 manifest_path.unlink()
             else:
-                delete_callback(manifest_path)
+                if delete_callback(manifest_path) is False:
+                    deferred_files.append({"generation": generation, "file": manifest_path.name})
+                    continue
+            deleted_bytes += manifest_size
+    deferred_files.sort(key=lambda item: (item["generation"], item["file"]))
     return {
         "pruning_seconds": time.monotonic() - pruning_started,
         "verification_seconds": verification_seconds,
         "deleted_bytes": deleted_bytes,
         "retained_bytes": sum(path.stat().st_size for path in root.glob("generation-*") if path.is_file()),
-        "pruning_skipped": None,
+        "pruning_skipped": (
+            "Drive deletion capability was not granted for one or more stale checkpoint files"
+            if deferred_files else None
+        ),
+        "pruning_deferred_files": deferred_files,
     }
 
 
@@ -734,6 +749,7 @@ def mirror_checkpoint_generations(
         timings["pruning_seconds"] += prune["pruning_seconds"]
         timings["pruning_deleted_bytes"] = float(prune["deleted_bytes"])
         timings["pruning_skipped"] = prune["pruning_skipped"]
+        timings["pruning_deferred_files"] = prune["pruning_deferred_files"]
     retained_bytes = sum(
         path.stat().st_size for path in destination.glob("generation-*") if path.is_file()
     )

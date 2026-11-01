@@ -844,7 +844,8 @@ def _zip_members(revision_root: Path, files: list[Path], plan: dict) -> tuple[li
         "checkpoint_retention": {
             "task_boundary_generations_per_run": 11,
             "recovery_generations_per_run": 2,
-            "automatic_pruning": False,
+            "automatic_pruning": True,
+            "foreign_or_non_deletable_legacy_generations": "preserved and reported; physical retention may temporarily exceed target",
             "runtime_reset_can_lose_work_since_last_verified_drive_sync": True,
         },
         "host_ram_safety": {

@@ -378,6 +378,78 @@ def test_incremental_drive_publish_copies_one_new_generation_then_prunes_exact_o
     assert load_latest_valid(drive, identity).manifest["generation"] == 3
 
 
+def test_drive_pruning_defers_a_non_deletable_legacy_generation_and_reports_its_storage(tmp_path):
+    identity = {"run": "shared-account-retention"}
+    local, drive = tmp_path / "local", tmp_path / "drive"
+    for item_index in range(2):
+        state = _new_state(identity)
+        state.cursor.item_index = item_index
+        save_generation(local, state, identity, kind="recovery")
+    mirror_checkpoint_generations(local, drive, identity, keep=2)
+
+    state = _new_state(identity)
+    state.cursor.item_index = 2
+    newest = save_generation(local, state, identity, kind="recovery")
+    deferred = []
+
+    def delete_only_owned_file(path):
+        if path.name.startswith("generation-000001"):
+            deferred.append(path.name)
+            return False
+        path.unlink()
+
+    published = mirror_checkpoint_generations(
+        local, drive, identity, keep=2, generation=newest["generation"],
+        delete_callback=delete_only_owned_file,
+    )
+
+    assert [row["generation"] for row in published] == [3]
+    assert deferred == ["generation-000001.pt"]
+    assert (drive / "generation-000001.pt").is_file()
+    assert (drive / "generation-000001.manifest.json").is_file()
+    assert published.timings["pruning_deferred_files"] == [
+        {"generation": 1, "file": "generation-000001.pt"}
+    ]
+    assert published.retained_bytes == sum(path.stat().st_size for path in drive.glob("generation-*"))
+    assert load_latest_valid(drive, identity).manifest["generation"] == 3
+
+
+def test_drive_pruning_defers_an_unowned_orphan_manifest_without_aborting_publish(tmp_path):
+    identity = {"run": "shared-account-orphan-manifest"}
+    local, drive = tmp_path / "local", tmp_path / "drive"
+    for item_index in range(2):
+        state = _new_state(identity)
+        state.cursor.item_index = item_index
+        save_generation(local, state, identity, kind="recovery")
+    mirror_checkpoint_generations(local, drive, identity, keep=2)
+    (drive / "generation-000001.pt").unlink()
+
+    state = _new_state(identity)
+    state.cursor.item_index = 2
+    newest = save_generation(local, state, identity, kind="recovery")
+    attempts = []
+
+    def deny_orphan_manifest_deletion(path):
+        attempts.append(path.name)
+        if path.name == "generation-000001.manifest.json":
+            return False
+        path.unlink()
+
+    published = mirror_checkpoint_generations(
+        local, drive, identity, keep=2, generation=newest["generation"],
+        delete_callback=deny_orphan_manifest_deletion,
+    )
+
+    assert [row["generation"] for row in published] == [3]
+    assert attempts == ["generation-000001.manifest.json"]
+    assert (drive / "generation-000001.manifest.json").is_file()
+    assert not (drive / "generation-000001.pt").exists()
+    assert published.timings["pruning_deferred_files"] == [
+        {"generation": 1, "file": "generation-000001.manifest.json"}
+    ]
+    assert load_latest_valid(drive, identity).manifest["generation"] == 3
+
+
 def test_failed_drive_copy_preserves_existing_verified_recovery_and_skips_pruning(tmp_path, monkeypatch):
     identity = {"run": "failed-incremental-publish"}
     local, drive = tmp_path / "local", tmp_path / "drive"

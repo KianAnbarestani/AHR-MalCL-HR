@@ -634,9 +634,11 @@ class _FakeFiles:
         self.records = records
         self.deleted_ids = deleted_ids
         self.queries = []
+        self.list_fields = []
 
     def list(self, *, q, **_kwargs):
         self.queries.append(q)
+        self.list_fields.append(_kwargs.get("fields", ""))
         parent = re.search(r"'([^']+)' in parents", q).group(1)
         name = re.search(r"name='((?:\\'|[^'])*)'", q).group(1).replace("\\'", "'")
         values = [
@@ -835,12 +837,13 @@ def test_drive_destination_verifies_owner_and_shared_editor_by_new_file_owner(tm
     assert list(destination_path.iterdir()) == []
 
 
-def test_recovery_pruner_permanently_deletes_only_exact_owned_recovery_generations(monkeypatch):
+def test_recovery_pruner_deletes_exact_generation_when_drive_confirms_delete_capability(monkeypatch):
     service = _drive_service(target_owner="folder-owner@example.org", authenticated_user="editor@example.org")
     service.records["checkpoint-file"] = {
         "id": "checkpoint-file", "name": "generation-000001.pt",
         "mimeType": "application/octet-stream", "parents": ["recovery-folder"],
-        "owners": [{"emailAddress": "editor@example.org"}], "ownedByMe": True,
+        "owners": [{"emailAddress": "folder-owner@example.org"}], "ownedByMe": False,
+        "capabilities": {"canDelete": True},
     }
     service.records["recovery-folder"] = {
         "id": "recovery-folder", "name": "recovery", "mimeType": "application/vnd.google-apps.folder",
@@ -852,17 +855,71 @@ def test_recovery_pruner_permanently_deletes_only_exact_owned_recovery_generatio
     monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, _components: {"folder_id": "recovery-folder", "path_exists": True})
     monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _service, parent, name: next((row for row in service.records.values() if parent in row.get("parents", []) and row.get("name") == name), None))
 
-    production_workflow.permanently_delete_recovery_checkpoint(
+    result = production_workflow.permanently_delete_recovery_checkpoint(
         "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/run/recovery/generation-000001.pt",
         api_factory=lambda: service,
     )
 
+    assert result is True
     assert "checkpoint-file" not in service.records
+    assert service.deleted_ids == {"checkpoint-file"}
     with pytest.raises(StorageCapacityError, match="outside ReVision"):
         production_workflow.permanently_delete_recovery_checkpoint(
             "/content/drive/MyDrive/ReVision/revision_R1/production/results/generation-000001.pt",
             api_factory=lambda: service,
         )
+
+
+def test_recovery_pruner_defers_exact_legacy_file_when_drive_denies_delete(monkeypatch):
+    service = _drive_service(target_owner="folder-owner@example.org", authenticated_user="editor@example.org")
+    service.records["legacy-checkpoint"] = {
+        "id": "legacy-checkpoint", "name": "generation-000279.pt",
+        "mimeType": "application/x-zip", "parents": ["recovery-folder"],
+        "owners": [{"emailAddress": "previous-editor@example.org"}], "ownedByMe": False,
+        "capabilities": {"canDelete": False},
+    }
+    service.records["recovery-folder"] = {
+        "id": "recovery-folder", "name": "recovery", "mimeType": "application/vnd.google-apps.folder",
+        "parents": ["checkpoints-folder"], "owners": [{"emailAddress": "folder-owner@example.org"}],
+        "capabilities": {"canAddChildren": True},
+    }
+    monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path: (
+        "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery",
+        ("ReVision", "revision_R1", "production", "checkpoints", "recovery"),
+    ))
+    monkeypatch.setattr(
+        production_workflow, "_drive_account_snapshot",
+        lambda _service: {"authenticated_user": "editor@example.org"},
+    )
+    monkeypatch.setattr(
+        production_workflow, "resolve_drive_folder",
+        lambda _service, _components: {"folder_id": "recovery-folder", "path_exists": True},
+    )
+    monkeypatch.setattr(
+        production_workflow, "_lookup_drive_child",
+        lambda _service, parent, name: next((
+            row for row in service.records.values()
+            if parent in row.get("parents", []) and row.get("name") == name
+        ), None),
+    )
+
+    result = production_workflow.permanently_delete_recovery_checkpoint(
+        "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/run/recovery/generation-000279.pt",
+        api_factory=lambda: service,
+    )
+
+    assert result is False
+    assert "legacy-checkpoint" in service.records
+    assert service.deleted_ids == set()
+
+
+def test_recovery_child_lookup_requests_drive_can_delete_capability():
+    service = _drive_service()
+
+    production_workflow._lookup_drive_child(service, "results-folder", "generation-000279.pt")
+
+    assert len(service.files().list_fields) == 1
+    assert "capabilities(canDelete)" in service.files().list_fields[0]
 
 
 def test_viewer_is_rejected_before_probe_and_unknown_quota_stays_unknown(tmp_path, monkeypatch):

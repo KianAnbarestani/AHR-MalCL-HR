@@ -609,13 +609,18 @@ def _drive_api_service(*, scopes: tuple[str, ...] = (DRIVE_METADATA_SCOPE,)):
         ) from exc
 
 
-def permanently_delete_recovery_checkpoint(path: str | Path, *, api_factory=None) -> None:
-    """Permanently remove one exact owned recovery file after a newer verified generation exists.
+def permanently_delete_recovery_checkpoint(path: str | Path, *, api_factory=None) -> bool:
+    """Delete one exact recovery file when Drive confirms this account can delete it.
 
     Drive Trash still consumes quota, so recovery rotation uses files.delete rather
     than moving large payloads to Trash. The caller passes paths only from the
-    identity-validated recovery directory; this helper re-resolves parent, name,
-    account, and owner before deleting the exact Drive file ID.
+    identity-validated recovery directory; this helper re-resolves the exact
+    parent, name, and file ID. Drive's per-file canDelete capability is the
+    authority: shared-folder editors may delete files they do not own, while
+    legacy files they cannot delete are deferred without aborting the run.
+
+    Returns False when the exact file exists but Drive explicitly denies deletion;
+    structural ambiguity or unavailable permission evidence still fails closed.
     """
     target = Path(path).expanduser()
     if target.name.startswith(".") or not re.fullmatch(r"generation-\d+\.(?:pt|manifest\.json)", target.name):
@@ -628,7 +633,6 @@ def permanently_delete_recovery_checkpoint(path: str | Path, *, api_factory=None
         raise StorageCapacityError(f"refusing to prune non-recovery checkpoint artifacts: {target}")
     _, components = _logical_drive_path_components(target.parent)
     service = (api_factory or (lambda: _drive_api_service(scopes=(DRIVE_FILE_WRITE_SCOPE,))))()
-    account = _drive_account_snapshot(service)
     location = resolve_drive_folder(service, components)
     parent_id = location.get("folder_id")
     if not parent_id or location.get("path_exists") is not True:
@@ -637,18 +641,23 @@ def permanently_delete_recovery_checkpoint(path: str | Path, *, api_factory=None
     if not isinstance(metadata, dict):
         if target.exists():
             raise StorageCapacityError(f"Drive API cannot verify checkpoint file before pruning: {target}")
-        return
-    owner = _owner_email(metadata)
+        return True
     if (
         metadata.get("name") != target.name
         or str(parent_id) not in [str(value) for value in metadata.get("parents", [])]
         or metadata.get("mimeType") == DRIVE_FOLDER_MIME
-        or owner != account["authenticated_user"]
-        or metadata.get("ownedByMe") is not True
         or not metadata.get("id")
     ):
         raise StorageCapacityError(
-            "refusing checkpoint pruning: exact parent, authenticated owner, and file identity were not verified"
+            "refusing checkpoint pruning: exact parent, name, and file identity were not verified"
+        )
+    capabilities = metadata.get("capabilities")
+    can_delete = capabilities.get("canDelete") if isinstance(capabilities, dict) else None
+    if can_delete is False:
+        return False
+    if can_delete is not True:
+        raise StorageCapacityError(
+            "refusing checkpoint pruning: Drive did not verify canDelete for the exact checkpoint file"
         )
     file_id = str(metadata["id"])
     try:
@@ -661,6 +670,7 @@ def permanently_delete_recovery_checkpoint(path: str | Path, *, api_factory=None
         raise StorageCapacityError(
             f"Drive still reports recovery file {target.name!r} after delete request; no further pruning attempted"
         )
+    return True
 
 
 def _logical_drive_path_components(
@@ -744,7 +754,10 @@ def _lookup_drive_child(service, parent_id: str, name: str) -> dict[str, Any] | 
         while True:
             response = service.files().list(
                 q=query, pageSize=100, pageToken=page_token,
-                fields="nextPageToken,files(id,name,mimeType,parents,owners(emailAddress),ownedByMe,quotaBytesUsed,size)",
+                fields=(
+                    "nextPageToken,files(id,name,mimeType,parents,owners(emailAddress),ownedByMe,"
+                    "quotaBytesUsed,size,capabilities(canDelete))"
+                ),
                 includeItemsFromAllDrives=True, supportsAllDrives=True,
             ).execute()
             matches.extend(response.get("files", []))
@@ -2569,6 +2582,9 @@ def execute_frozen_plan_record(
                         "upload_seconds": float(timing.get("upload_seconds", 0.0)),
                         "verification_seconds": float(timing.get("verification_seconds", 0.0)),
                         "pruning_seconds": float(timing.get("pruning_seconds", 0.0)),
+                        "pruning_deferred_files": timing.get("pruning_deferred_files", []),
+                        "pruning_status": timing.get("pruning_skipped"),
+                        "retained_bytes_after_pruning": int(getattr(copied, "retained_bytes", 0) or 0),
                     }
                     drive_write_bytes += int(getattr(copied, "bytes_written", 0))
                 drive_write_seconds += elapsed
