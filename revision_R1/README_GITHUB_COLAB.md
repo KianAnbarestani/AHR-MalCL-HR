@@ -20,6 +20,49 @@ Cell A accepts only the observed handoff runtime: Python 3.12.13, NumPy 2.0.2, p
 
 No setup cell starts training. The notebook preserves the existing Drive output/checkpoint paths, run IDs, plan/config identities, integrity checks, RNG/state restore, checkpoint discovery, and lease protections.
 
+## Checkpoint cadence and storage behavior
+
+The production runner writes a local recovery generation every five minutes
+of monotonic time measured from the previous checkpoint's completion. It
+publishes only that new generation to Drive when the 15-minute publication
+deadline is due. Initial state, task boundaries, graceful interruption, and
+terminal completion still force the required writes. Task-boundary artifacts
+remain a separate retained archive. A long checkpoint cycle resets its timer
+at completion, so its own duration cannot make another checkpoint immediately
+due.
+The frozen RunConfig still contains legacy checkpoint-interval fields because
+they are part of the existing configuration/checkpoint identity; they are not
+rewritten. The actual runtime override (300-second local / 900-second Drive)
+is recorded separately in `resource_metrics.json` as `checkpoint_policy`.
+
+Drive recovery rotation publishes and verifies the new generation before it
+prunes older recovery generations, leaving two hash-verified generations. Cell
+C verifies exact-folder write capability, quota attribution, and permanent
+deletion of the authenticated account's tiny probe file; if safe cleanup
+cannot be established, the production gate fails closed. Pruning uses exact
+Drive file IDs only for files owned by the current account. It never removes
+task-boundary archives, foreign-owned files, or unrelated artifacts. Existing
+Drive Trash is not emptied automatically and continues to consume quota.
+
+Before resuming the first production run, the capacity envelope is sized from
+the maximum payload in the exact-identity recovery/task-boundary manifests
+already on Drive (the selected recovery payload is SHA-256 verified; the other
+payloads are size-checked without an extra multi-gigabyte read), combined with
+the v6.2 synthetic reference using the larger value and the existing 1.5x +
+16 MiB margin. All 11 task-boundary archives remain separate and retained; only
+recovery generations rotate. The gate subtracts bytes already occupying this
+run's exact namespace and checks the 512 MiB reserve before dataset loading or
+training. If remaining Drive/local capacity cannot support the frozen
+retention policy, the runner refuses to start; it does not prune boundaries or
+reduce the reserve to force a fit.
+
+Checkpoint reporting separates optimizer/training time, serialization,
+upload, verification, pruning, and local staging/copy time. It reports
+retained storage independently from cumulative successful payload/manifest
+write traffic. Legacy write traffic from before this build is labeled unknown.
+Subcomponent timings are included within total checkpoint wall time and should
+not be summed as disjoint elapsed time.
+
 ## Routine code update
 
 Push the tested runner changes to GitHub, record the resulting full 40-character commit SHA, and change only `PINNED_GIT_COMMIT` in the stable notebook. Re-run A–D in a fresh Colab session. A source change that alters the training-core hash from `1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c` or alters the frozen schedule/protocol is rejected before launch. Reporting-only commits can use the existing compatible checkpoints and are recorded separately from the training identity.

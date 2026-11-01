@@ -19,6 +19,7 @@ from revision_r1.runner import _code_sha256
 from revision_r1.data import DatasetBundle
 from scripts.production_workflow import (
     _SequentialDatasetBundleCache,
+    _checkpoint_payload_size_reference,
     bind_runtime_schedule,
     build_frozen_run_plan,
     _logical_drive_path_components,
@@ -629,8 +630,9 @@ class _FakeRequest:
 
 
 class _FakeFiles:
-    def __init__(self, records):
+    def __init__(self, records, deleted_ids):
         self.records = records
+        self.deleted_ids = deleted_ids
         self.queries = []
 
     def list(self, *, q, **_kwargs):
@@ -646,11 +648,17 @@ class _FakeFiles:
     def get(self, *, fileId, **_kwargs):
         return _FakeRequest(self.records[fileId])
 
+    def delete(self, *, fileId, **_kwargs):
+        self.deleted_ids.add(fileId)
+        self.records.pop(fileId, None)
+        return _FakeRequest({})
+
 
 class _FakeDriveService:
     def __init__(self, records, about):
         self.records = records
-        self._files = _FakeFiles(records)
+        self.deleted_ids = set()
+        self._files = _FakeFiles(records, self.deleted_ids)
         self._about = about
 
     def files(self):
@@ -712,6 +720,8 @@ def _drive_service(
 
 def _verified_probe_metadata(service, parent_id, name):
     """Mock only Drive's remote metadata response; probe file I/O stays real."""
+    if "probe-file-id" in service.deleted_ids:
+        return None
     authenticated_user = service._about["user"]["emailAddress"]
     return {
         "id": "probe-file-id", "name": name, "mimeType": "application/octet-stream",
@@ -805,6 +815,7 @@ def test_drive_destination_verifies_owner_and_shared_editor_by_new_file_owner(tm
     assert owner["destination_owner"] == "owner@example.org"
     assert owner["new_file_owner"] == "owner@example.org"
     assert owner["write_capability_verified"] is True
+    assert owner["permanent_recovery_delete_verified"] is True
     assert owner["available_bytes"] == 9_000_000_000
     assert owner["usage_in_drive_trash_bytes"] == 10_000_000
     assert owner["folder_id"] == "results-folder"
@@ -813,6 +824,7 @@ def test_drive_destination_verifies_owner_and_shared_editor_by_new_file_owner(tm
     assert shared_editor["destination_owned_by_authenticated_user"] is False
     assert shared_editor["new_file_owner"] == "editor@example.org"
     assert shared_editor["new_file_owned_by_authenticated_user"] is True
+    assert shared_editor["permanent_recovery_delete_verified"] is True
     assert shared_editor["quota_account_email"] == "editor@example.org"
     assert shared_editor["available_bytes"] == 9_000_000_000
     assert owner_cached["write_probe"]["probe_performed_this_check"] is False
@@ -821,6 +833,36 @@ def test_drive_destination_verifies_owner_and_shared_editor_by_new_file_owner(tm
     assert owner["quota_usage_during_probe_bytes"] == 1_000_000_000
     assert owner["quota_usage_after_probe_cleanup_bytes"] == 1_000_000_000
     assert list(destination_path.iterdir()) == []
+
+
+def test_recovery_pruner_permanently_deletes_only_exact_owned_recovery_generations(monkeypatch):
+    service = _drive_service(target_owner="folder-owner@example.org", authenticated_user="editor@example.org")
+    service.records["checkpoint-file"] = {
+        "id": "checkpoint-file", "name": "generation-000001.pt",
+        "mimeType": "application/octet-stream", "parents": ["recovery-folder"],
+        "owners": [{"emailAddress": "editor@example.org"}], "ownedByMe": True,
+    }
+    service.records["recovery-folder"] = {
+        "id": "recovery-folder", "name": "recovery", "mimeType": "application/vnd.google-apps.folder",
+        "parents": ["checkpoints-folder"], "owners": [{"emailAddress": "folder-owner@example.org"}],
+        "capabilities": {"canAddChildren": True},
+    }
+    monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path: ("/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery", ("ReVision", "revision_R1", "production", "checkpoints", "recovery")))
+    monkeypatch.setattr(production_workflow, "_drive_account_snapshot", lambda _service: {"authenticated_user": "editor@example.org"})
+    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, _components: {"folder_id": "recovery-folder", "path_exists": True})
+    monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _service, parent, name: next((row for row in service.records.values() if parent in row.get("parents", []) and row.get("name") == name), None))
+
+    production_workflow.permanently_delete_recovery_checkpoint(
+        "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/run/recovery/generation-000001.pt",
+        api_factory=lambda: service,
+    )
+
+    assert "checkpoint-file" not in service.records
+    with pytest.raises(StorageCapacityError, match="outside ReVision"):
+        production_workflow.permanently_delete_recovery_checkpoint(
+            "/content/drive/MyDrive/ReVision/revision_R1/production/results/generation-000001.pt",
+            api_factory=lambda: service,
+        )
 
 
 def test_viewer_is_rejected_before_probe_and_unknown_quota_stays_unknown(tmp_path, monkeypatch):
@@ -886,9 +928,9 @@ def test_drive_probe_retries_exact_parent_lookup_after_mount_write(tmp_path, mon
     )
 
     assert destination["write_capability_verified"] is True
-    assert len(attempts) == 3
-    assert attempts[0][0] == attempts[1][0] == attempts[2][0] == "results-folder"
-    assert attempts[0][1] == attempts[1][1] == attempts[2][1]
+    assert len(attempts) == 4  # 3 visibility retries plus deletion read-back.
+    assert all(parent == "results-folder" for parent, _name in attempts)
+    assert len({name for _parent, name in attempts}) == 1
     assert sleeps == [1.0, 2.0]
     assert list(destination_path.iterdir()) == []
 
@@ -1020,6 +1062,144 @@ def test_storage_projection_accounts_for_all_retained_slots_and_atomic_headroom(
     assert projection["local"]["dataset_cache_upper_bytes"] == 11_997_099_600
     assert projection["local"]["matrix_peak_bytes"] > projection["local"]["next_run_peak_with_reserve_bytes"]
     assert projection["checkpoint_size_provenance"].startswith("v6.2 GPU synthetic recovery reference")
+
+
+def test_storage_projection_reports_recovery_pruning_but_preserves_boundaries():
+    projection = project_storage(
+        {"run_count": 100}, observed_checkpoint_bytes=1_080_000_000,
+        checkpoint_reference_provenance="observed exact-identity production checkpoint",
+        checkpoint_size_evidence={"selected_recovery_generation": 202},
+    )
+
+    assert projection["checkpoint_payload_upper_bytes"] == (
+        int(np.ceil(1_080_000_000 * 1.5)) + production_workflow.CHECKPOINT_SIZE_FIXED_OVERHEAD_BYTES
+    )
+    assert projection["checkpoint_size_evidence"]["selected_recovery_generation"] == 202
+    assert projection["checkpoint_layout"]["recovery_generations_pruned"] is True
+    assert projection["checkpoint_layout"]["task_boundary_payloads_pruned"] is False
+    assert projection["accounting"]["task_boundary_archives_pruned"] is False
+
+
+def test_checkpoint_capacity_reference_uses_actual_matching_checkpoint_sizes(tmp_path):
+    identity = {"code_sha256": "a" * 64, "config_sha256": "b" * 64}
+    recovery = tmp_path / "recovery"
+    boundaries = tmp_path / "task_boundaries"
+    recovery.mkdir()
+    boundaries.mkdir()
+    candidate_payload = recovery / "generation-000042.pt"
+    candidate_payload.write_bytes(b"r" * 128)
+    candidate_manifest = {
+        "schema_version": 1, "generation": 42, "identity": identity,
+        "payload_file": candidate_payload.name, "payload_bytes": 128,
+        "payload_sha256": hashlib.sha256(candidate_payload.read_bytes()).hexdigest(),
+    }
+    candidate_manifest_path = recovery / "generation-000042.manifest.json"
+    candidate_manifest_path.write_text(json.dumps(candidate_manifest), encoding="utf-8")
+    boundary_payload = boundaries / "generation-000003.pt"
+    boundary_payload.write_bytes(b"t" * 512)
+    boundary_manifest_path = boundaries / "generation-000003.manifest.json"
+    boundary_manifest_path.write_text(json.dumps({
+        "schema_version": 1, "generation": 3, "kind": "task-boundary", "identity": identity,
+        "payload_file": boundary_payload.name, "payload_bytes": 512,
+        "payload_sha256": hashlib.sha256(boundary_payload.read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+
+    result = _checkpoint_payload_size_reference(
+        tmp_path, expected_identity=identity,
+        selected_recovery_candidate={
+            "generation": 42, "manifest_sha256": hashlib.sha256(candidate_manifest_path.read_bytes()).hexdigest(),
+            "payload_bytes_expected": 128, "payload_bytes_observed": 128,
+            "payload_sha256_expected": candidate_manifest["payload_sha256"],
+            "payload_sha256_observed": candidate_manifest["payload_sha256"],
+            "payload_hash_matches": True, "manifest_identity_matches": True,
+            "integrity_status": "PASS_MANIFEST_AND_PAYLOAD_HASH",
+        },
+    )
+
+    assert result["max_payload_bytes"] == 512
+    assert result["selected_recovery_payload_bytes"] == 128
+    assert result["matching_manifest_count"] == 2
+    assert result["size_evidence"] == "matching identity manifests plus max(manifest-declared, observed payload sizes); selected recovery candidate hash verified"
+
+    read_only_size = _checkpoint_payload_size_reference(tmp_path, expected_identity=identity)
+    assert read_only_size["max_payload_bytes"] == 512
+    assert read_only_size["latest_recovery_manifest_generation"] == 42
+    assert "payload hashes not checked here" in read_only_size["size_evidence"]
+
+
+def test_checkpoint_capacity_reference_uses_manifest_size_when_newest_payload_is_truncated(tmp_path):
+    identity = {"code_sha256": "a" * 64, "config_sha256": "b" * 64}
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+
+    def write_generation(generation: int, payload_bytes: bytes, declared_bytes: int):
+        payload = recovery / f"generation-{generation:06d}.pt"
+        payload.write_bytes(payload_bytes)
+        manifest = {
+            "schema_version": 1, "generation": generation, "kind": "recovery", "identity": identity,
+            "payload_file": payload.name, "payload_bytes": declared_bytes,
+            "payload_sha256": hashlib.sha256(b"full-payload-placeholder").hexdigest(),
+        }
+        path = recovery / f"generation-{generation:06d}.manifest.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        return path, manifest, payload
+
+    selected_path, selected_manifest, selected_payload = write_generation(41, b"v" * 64, 64)
+    _, _, damaged_newest_payload = write_generation(42, b"short", 128)
+    candidate = {
+        "generation": 41, "manifest_sha256": hashlib.sha256(selected_path.read_bytes()).hexdigest(),
+        "payload_bytes_expected": 64, "payload_bytes_observed": 64,
+        "payload_sha256_expected": hashlib.sha256(selected_payload.read_bytes()).hexdigest(),
+        "payload_sha256_observed": hashlib.sha256(selected_payload.read_bytes()).hexdigest(),
+        "payload_hash_matches": True, "manifest_identity_matches": True,
+        "integrity_status": "PASS_MANIFEST_AND_PAYLOAD_HASH",
+    }
+    selected_manifest["payload_sha256"] = candidate["payload_sha256_expected"]
+    selected_path.write_text(json.dumps(selected_manifest), encoding="utf-8")
+    candidate["manifest_sha256"] = hashlib.sha256(selected_path.read_bytes()).hexdigest()
+
+    result = _checkpoint_payload_size_reference(
+        tmp_path, expected_identity=identity, selected_recovery_candidate=candidate,
+    )
+
+    assert result["selected_recovery_generation"] == 41
+    assert result["latest_recovery_manifest_generation"] == 42
+    assert result["max_payload_bytes"] == 128
+    newest = next(item for item in result["observed_generations"] if item["generation"] == 42)
+    assert newest["payload_bytes"] == damaged_newest_payload.stat().st_size
+    assert newest["manifest_payload_bytes"] == 128
+    assert newest["payload_size_matches_manifest"] is False
+
+
+def test_checkpoint_capacity_reference_fails_closed_on_identity_or_size_mismatch(tmp_path):
+    identity = {"code_sha256": "a" * 64}
+    folder = tmp_path / "recovery"
+    folder.mkdir()
+    payload = folder / "generation-000001.pt"
+    payload.write_bytes(b"payload")
+    manifest_path = folder / "generation-000001.manifest.json"
+    manifest = {
+        "schema_version": 1, "generation": 1, "identity": identity,
+        "payload_file": payload.name, "payload_bytes": 7, "payload_sha256": "c" * 64,
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    candidate = {
+        "generation": 1, "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "payload_bytes_expected": 7, "payload_bytes_observed": 7,
+        "payload_sha256_expected": "c" * 64, "payload_sha256_observed": "c" * 64, "payload_hash_matches": True,
+        "manifest_identity_matches": True, "integrity_status": "PASS_MANIFEST_AND_PAYLOAD_HASH",
+    }
+
+    manifest["identity"] = {"code_sha256": "d" * 64}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(StorageCapacityError, match="identity"):
+        _checkpoint_payload_size_reference(tmp_path, expected_identity=identity, selected_recovery_candidate=candidate)
+
+    manifest["identity"] = identity
+    manifest["payload_bytes"] = 8
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(StorageCapacityError, match="changed"):
+        _checkpoint_payload_size_reference(tmp_path, expected_identity=identity, selected_recovery_candidate=candidate)
 
 
 def _write_v62_producer_report_fixture(tmp_path: Path) -> Path:
@@ -1295,6 +1475,7 @@ def test_production_capacity_failure_precedes_run_executor_and_writes(tmp_path, 
     projection = project_storage(plan, observed_checkpoint_bytes=1000)
     snapshot = {
         "destination_owner_verified": True, "write_capability_verified": True,
+        "permanent_recovery_delete_verified": True,
         "new_file_owner_verified": True, "quota_metadata_verified": True,
         "output_path": str(output_root.resolve()), "checkpoint_path": str(checkpoint_root.resolve()),
         "drive_available_bytes": 0, "local_available_bytes": 0,

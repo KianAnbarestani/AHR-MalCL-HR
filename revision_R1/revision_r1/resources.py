@@ -152,6 +152,25 @@ class ResourceTracker:
         self.cuda_synchronization_calls = 0
         self.cuda_synchronization_seconds = 0.0
         self.instrumentation_seconds = 0.0
+        self.checkpoint_accounting = {
+            "seconds": {
+                "snapshot_capture": 0.0, "serialization": 0.0,
+                "upload": 0.0, "verification": 0.0, "manifest_publication": 0.0,
+                "pruning": 0.0, "local_artifact_copy": 0.0, "local_recovery_stage": 0.0,
+                "state_restore": 0.0,
+            },
+            "write_bytes": {
+                "local_payload": 0, "local_manifest": 0,
+                "local_artifact_copy": 0, "local_recovery_stage": 0,
+                "drive_payload": 0, "drive_manifest": 0,
+            },
+            "retained_bytes": {
+                "local_recovery": 0, "drive_recovery": 0,
+                "local_task_boundaries": 0, "drive_task_boundaries": 0,
+            },
+            "policy": {},
+            "accounting_scope": "since the checkpoint-accounting build was installed; legacy prior write traffic is not inferable from retained files",
+        }
 
     def resume_active_clock(self) -> None:
         if self._last_resume is None:
@@ -215,6 +234,7 @@ class ResourceTracker:
             "cuda_synchronization_calls": self.cuda_synchronization_calls,
             "cuda_synchronization_seconds": self.cuda_synchronization_seconds,
             "instrumentation_seconds": self.instrumentation_seconds,
+            "checkpoint_accounting": self.checkpoint_accounting,
         }
 
     def load_state_dict(self, state: dict) -> None:
@@ -229,7 +249,34 @@ class ResourceTracker:
         self.cuda_synchronization_calls = int(state.get("cuda_synchronization_calls", 0))
         self.cuda_synchronization_seconds = float(state.get("cuda_synchronization_seconds", 0.0))
         self.instrumentation_seconds = float(state.get("instrumentation_seconds", 0.0))
+        checkpoint_accounting = state.get("checkpoint_accounting")
+        if isinstance(checkpoint_accounting, dict):
+            self.checkpoint_accounting = {
+                "seconds": {key: float(value) for key, value in checkpoint_accounting.get("seconds", {}).items()},
+                "write_bytes": {key: int(value) for key, value in checkpoint_accounting.get("write_bytes", {}).items()},
+                "retained_bytes": {key: int(value) for key, value in checkpoint_accounting.get("retained_bytes", {}).items()},
+                "policy": dict(checkpoint_accounting.get("policy", {})),
+                "accounting_scope": str(checkpoint_accounting.get("accounting_scope", "legacy_scope_unknown")),
+            }
+            for key in ("snapshot_capture", "serialization", "upload", "verification", "manifest_publication", "pruning", "local_artifact_copy", "local_recovery_stage", "state_restore"):
+                self.checkpoint_accounting["seconds"].setdefault(key, 0.0)
+            for key in ("local_payload", "local_manifest", "local_artifact_copy", "local_recovery_stage", "drive_payload", "drive_manifest"):
+                self.checkpoint_accounting["write_bytes"].setdefault(key, 0)
+            for key in ("local_recovery", "drive_recovery", "local_task_boundaries", "drive_task_boundaries"):
+                self.checkpoint_accounting["retained_bytes"].setdefault(key, 0)
         self._last_resume = None
+
+    def add_checkpoint_accounting(self, *, timings=None, write_bytes=None, retained_bytes=None) -> None:
+        """Accumulate checkpoint costs separately from optimizer/training time."""
+        for key, value in (timings or {}).items():
+            if key in self.checkpoint_accounting["seconds"]:
+                self.checkpoint_accounting["seconds"][key] += max(0.0, float(value))
+        for key, value in (write_bytes or {}).items():
+            if key in self.checkpoint_accounting["write_bytes"]:
+                self.checkpoint_accounting["write_bytes"][key] += max(0, int(value))
+        for key, value in (retained_bytes or {}).items():
+            if key in self.checkpoint_accounting["retained_bytes"]:
+                self.checkpoint_accounting["retained_bytes"][key] = max(0, int(value))
 
     def _sample_cuda(self) -> None:
         started = time.perf_counter()
@@ -253,6 +300,12 @@ class ResourceTracker:
             "cuda_synchronization_api_seconds": float(self.cuda_synchronization_seconds),
             "cuda_synchronization_api_seconds_overlaps_component_seconds": True,
             "checkpoint_scope": "checkpoint snapshot/capture, serialization, and local/Drive persistence; measured separately from optimizer updates",
+            "checkpoint_component_times_are_nested_not_additive": True,
+            "cumulative_write_bytes_scope": "successful payload and manifest bytes written by this build; legacy traffic before build installation is unknown",
+            "training_optimizer_seconds": float(sum(self.seconds.get(name, 0.0) for name in ("classifier", "generator", "critic"))),
+            "checkpoint_accounting_scope": self.checkpoint_accounting["accounting_scope"],
+            "checkpoint_policy": dict(self.checkpoint_accounting.get("policy", {})),
+            "checkpoint_state_restore_seconds": float(self.checkpoint_accounting["seconds"].get("state_restore", 0.0)),
         }
 
     def snapshot(self, *, artifact_root: str | Path | None = None, host_ram_bytes: int | None = None) -> dict:
@@ -269,4 +322,5 @@ class ResourceTracker:
             "host_memory": read_host_memory_snapshot(),
             "artifact_storage_bytes": storage,
             "timing_metadata": self.timing_metadata(),
+            "checkpoint_accounting": self.checkpoint_accounting,
         }

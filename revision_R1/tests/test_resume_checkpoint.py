@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import copy
-import gc
 import json
 import random
-import weakref
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,7 +11,9 @@ import torch
 
 from revision_r1.checkpointing import (
     CheckpointError,
+    CheckpointSchedule,
     CheckpointPolicy,
+    copy_generation_payload,
     load_latest_valid,
     mirror_checkpoint_generations,
     save_generation,
@@ -193,25 +194,33 @@ def test_checkpoint_identity_mismatch_never_loads_other_run(tmp_path):
         load_latest_valid(root, {"run": "B"})
 
 
-def test_save_releases_initial_readback_before_full_integrity_reload(tmp_path, monkeypatch):
-    identity = {"run": "bounded-readback"}
+def test_save_serializes_once_and_does_not_deserialize_the_full_state(tmp_path, monkeypatch):
+    identity = {"run": "single-serialization"}
     root = tmp_path / "checkpoints"
-    original_torch_load = checkpointing._torch_load
-    prior_readbacks = []
+    save_calls = 0
+    original_save = torch.save
 
-    def observed_torch_load(path):
-        gc.collect()
-        if prior_readbacks:
-            assert prior_readbacks[-1]() is None, "two deserialized RunState objects overlapped"
-        result = original_torch_load(path)
-        prior_readbacks.append(weakref.ref(result))
-        return result
+    def observed_save(*args, **kwargs):
+        nonlocal save_calls
+        save_calls += 1
+        return original_save(*args, **kwargs)
 
-    monkeypatch.setattr(checkpointing, "_torch_load", observed_torch_load)
+    def unexpected_load(*_args, **_kwargs):
+        raise AssertionError("checkpoint creation must not deserialize the full RunState")
+
+    monkeypatch.setattr(torch, "save", observed_save)
+    monkeypatch.setattr(checkpointing, "_torch_load", unexpected_load)
     manifest = save_generation(root, _new_state(identity), identity, kind="recovery")
     assert manifest["generation"] == 1
-    assert len(prior_readbacks) >= 2
-    assert all(reference() is None for reference in prior_readbacks)
+    assert save_calls == 1
+    assert manifest["checkpoint_accounting"]["serialization_seconds"] >= 0
+    manifest_path = root / "generation-000001.manifest.json"
+    accounting = manifest["checkpoint_accounting"]
+    assert accounting["local_manifest_write_bytes"] >= manifest_path.stat().st_size
+    assert accounting["local_manifest_write_bytes_since_policy_start"] == accounting["local_manifest_write_bytes"]
+    assert accounting["recovery_artifact_bytes_retained_after_pruning"] == sum(
+        path.stat().st_size for path in root.glob("generation-*") if path.is_file()
+    )
 
 
 def test_orphan_payload_without_manifest_is_not_published(tmp_path):
@@ -220,6 +229,21 @@ def test_orphan_payload_without_manifest_is_not_published(tmp_path):
     (root / "generation-000001.pt").write_bytes(b"partial payload")
     with pytest.raises(CheckpointError, match="no valid checkpoint"):
         load_latest_valid(root, {"run": "A"})
+
+
+def test_latest_valid_manifest_falls_back_without_deserializing_checkpoint_state(tmp_path, monkeypatch):
+    identity = {"run": "manifest-fallback"}
+    root = tmp_path / "recovery"
+    older = save_generation(root, _new_state(identity), identity, kind="recovery")
+    newer_state = _new_state(identity)
+    newer_state.cursor.item_index = 1
+    newer = save_generation(root, newer_state, identity, kind="recovery")
+    (root / newer["payload_file"]).write_bytes(b"tampered")
+    monkeypatch.setattr(checkpointing, "_torch_load", lambda *_a, **_k: pytest.fail("manifest selection must not deserialize state"))
+
+    selected = checkpointing.latest_valid_manifest(root, identity)
+
+    assert selected["generation"] == older["generation"]
 
 
 def test_checkpoint_mirror_copies_and_reverifies_two_generations(tmp_path):
@@ -233,6 +257,151 @@ def test_checkpoint_mirror_copies_and_reverifies_two_generations(tmp_path):
     copied = mirror_checkpoint_generations(local, drive, identity, keep=2)
     assert len(copied) == 2
     assert load_latest_valid(drive, identity).manifest["generation"] == 3
+
+
+def test_repeated_checkpoint_mirror_does_not_rewrite_existing_generations(tmp_path, monkeypatch):
+    identity = {"run": "idempotent-mirror"}
+    local, drive = tmp_path / "local", tmp_path / "drive"
+    for n in range(2):
+        state = _new_state(identity)
+        state.cursor.item_index = n
+        save_generation(local, state, identity, kind="recovery")
+    first = mirror_checkpoint_generations(local, drive, identity, keep=2)
+    assert len(first) == 2
+
+    def unexpected_copy(*_args, **_kwargs):
+        raise AssertionError("an already verified generation must not be uploaded again")
+
+    monkeypatch.setattr(checkpointing.shutil, "copyfileobj", unexpected_copy)
+    repeated = mirror_checkpoint_generations(local, drive, identity, keep=2)
+    assert repeated == []
+
+
+def test_mirror_rehashes_an_existing_same_size_destination_before_skipping(tmp_path):
+    identity = {"run": "idempotent-mirror-detects-corruption"}
+    local, drive = tmp_path / "local", tmp_path / "drive"
+    manifest = save_generation(local, _new_state(identity), identity, kind="recovery")
+    mirror_checkpoint_generations(local, drive, identity, keep=2)
+    destination_payload = drive / manifest["payload_file"]
+    payload = bytearray(destination_payload.read_bytes())
+    payload[-1] ^= 1
+    destination_payload.write_bytes(payload)
+
+    repaired = mirror_checkpoint_generations(local, drive, identity, keep=2, generation=manifest["generation"])
+
+    assert [item["generation"] for item in repaired] == [manifest["generation"]]
+    assert load_latest_valid(drive, identity).manifest["payload_sha256"] == manifest["payload_sha256"]
+
+
+def test_newly_serialized_payload_is_not_rehashed_before_drive_copy(tmp_path, monkeypatch):
+    identity = {"run": "preverified-publication"}
+    local, drive = tmp_path / "local", tmp_path / "drive"
+    calls = []
+    original_sha256 = checkpointing._sha256
+
+    def observed_hash(path):
+        calls.append(Path(path).resolve())
+        return original_sha256(Path(path))
+
+    monkeypatch.setattr(checkpointing, "_sha256", observed_hash)
+    manifest = save_generation(local, _new_state(identity), identity, kind="recovery")
+    assert len(calls) == 1  # the serialization output is hashed once
+
+    copied = mirror_checkpoint_generations(
+        local, drive, identity, keep=2, generation=manifest["generation"],
+        preverified_manifests=(manifest,),
+    )
+
+    assert [item["generation"] for item in copied] == [manifest["generation"]]
+    assert calls.count((local / manifest["payload_file"]).resolve()) == 0
+    assert calls.count((drive / manifest["payload_file"]).resolve()) == 1
+
+
+def test_task_boundary_generation_continues_remote_archive_without_copying_it_locally(tmp_path):
+    identity = {"run": "boundary-sequence"}
+    recovery, remote_boundaries = tmp_path / "recovery", tmp_path / "drive-boundaries"
+    first_state = _new_state(identity)
+    first_state.cursor.task_index = 0
+    first = save_generation(recovery, first_state, identity, kind="recovery")
+    boundary_one = copy_generation_payload(
+        recovery, first, remote_boundaries, identity, kind="task-boundary", generation=1,
+    )
+    first_hash = (remote_boundaries / boundary_one["payload_file"]).read_bytes()
+
+    second_state = _new_state(identity)
+    second_state.cursor.task_index = 1
+    second = save_generation(recovery, second_state, identity, kind="recovery")
+    # This mirrors the fresh-runtime case: no previous boundary payloads were
+    # downloaded to the local staging directory.
+    source_root = tmp_path / "empty-local-boundaries"
+    copied_boundary = copy_generation_payload(
+        recovery, second, source_root, identity, kind="task-boundary", generation=2,
+    )
+    assert copied_boundary["checkpoint_accounting"]["local_manifest_write_bytes"] == (
+        source_root / "generation-000002.manifest.json"
+    ).stat().st_size
+    mirrored = mirror_checkpoint_generations(
+        source_root, remote_boundaries, identity,
+        keep=None, prune_destination=False, generation=copied_boundary["generation"],
+    )
+
+    assert [item["generation"] for item in mirrored] == [2]
+    assert (remote_boundaries / "generation-000001.pt").read_bytes() == first_hash
+    assert (remote_boundaries / "generation-000002.pt").is_file()
+
+
+def test_incremental_drive_publish_copies_one_new_generation_then_prunes_exact_old_files(tmp_path):
+    identity = {"run": "incremental-publish"}
+    local, drive = tmp_path / "local", tmp_path / "drive"
+    for item_index in range(2):
+        state = _new_state(identity)
+        state.cursor.item_index = item_index
+        save_generation(local, state, identity, kind="recovery")
+    mirror_checkpoint_generations(local, drive, identity, keep=2)
+
+    state = _new_state(identity)
+    state.cursor.item_index = 2
+    new_manifest = save_generation(local, state, identity, kind="recovery")
+    deleted = []
+    published = mirror_checkpoint_generations(
+        local, drive, identity, keep=2, generation=new_manifest["generation"],
+        delete_callback=lambda path: (deleted.append(path.name), path.unlink()),
+    )
+
+    assert [item["generation"] for item in published] == [3]
+    assert published.bytes_written < int(new_manifest["payload_bytes"]) + 4096
+    assert set(deleted) == {"generation-000001.pt", "generation-000001.manifest.json"}
+    assert [
+        json.loads(path.read_text())["generation"]
+        for path in sorted(drive.glob("generation-*.manifest.json"))
+    ] == [2, 3]
+    assert load_latest_valid(drive, identity).manifest["generation"] == 3
+
+
+def test_failed_drive_copy_preserves_existing_verified_recovery_and_skips_pruning(tmp_path, monkeypatch):
+    identity = {"run": "failed-incremental-publish"}
+    local, drive = tmp_path / "local", tmp_path / "drive"
+    first = save_generation(local, _new_state(identity), identity, kind="recovery")
+    mirror_checkpoint_generations(local, drive, identity, keep=2)
+    before = load_latest_valid(drive, identity).manifest["payload_sha256"]
+    next_state = _new_state(identity)
+    next_state.cursor.item_index = 1
+    newest = save_generation(local, next_state, identity, kind="recovery")
+    deleted = []
+
+    def fail_copy(*_args, **_kwargs):
+        raise OSError("simulated destination-full write")
+
+    monkeypatch.setattr(checkpointing.shutil, "copyfileobj", fail_copy)
+    with pytest.raises(OSError, match="destination-full"):
+        mirror_checkpoint_generations(
+            local, drive, identity, keep=2, generation=newest["generation"],
+            delete_callback=lambda path: deleted.append(path),
+        )
+
+    assert not deleted
+    assert load_latest_valid(drive, identity).manifest["generation"] == first["generation"]
+    assert load_latest_valid(drive, identity).manifest["payload_sha256"] == before
 
 
 def test_task_boundary_checkpoint_generations_are_not_pruned(tmp_path):
@@ -271,7 +440,6 @@ def test_synthetic_drive_mirror_prunes_destination_even_if_caller_disables_pruni
         state = _new_state(identity)
         state.cursor.item_index = index
         save_generation(source, state, identity, kind="task-boundary", retain_generations=None)
-        save_generation(drive, state, identity, kind="task-boundary", retain_generations=None)
 
     monkeypatch.setattr(checkpointing, "effective_generation_limit", unbounded_policy)
     copied = mirror_checkpoint_generations(source, drive, identity, keep=None, prune_destination=False)
@@ -301,9 +469,50 @@ def test_failed_capacity_check_preserves_previous_verified_recovery(tmp_path, mo
     assert load_latest_valid(root, identity).manifest["payload_sha256"] == before
 
 
-def test_checkpoint_policy_triggers_update_time_and_boundary_safeguards():
-    policy = CheckpointPolicy(update_interval=25, seconds_interval=60)
-    assert not policy.should_checkpoint(last_checkpoint_update=10, update=34, last_checkpoint_time=0, now=59)
-    assert policy.should_checkpoint(last_checkpoint_update=10, update=35, last_checkpoint_time=0, now=20)
-    assert policy.should_checkpoint(last_checkpoint_update=10, update=11, last_checkpoint_time=0, now=60)
-    assert policy.should_checkpoint(last_checkpoint_update=10, update=11, last_checkpoint_time=0, now=5, phase_boundary=True)
+def test_checkpoint_schedule_is_completion_based_and_update_independent():
+    clock = [0.0]
+    schedule = CheckpointSchedule(local_interval_seconds=300, drive_interval_seconds=900, clock=lambda: clock[0])
+    metadata = schedule.metadata(legacy_config_fields={
+        "checkpoint_interval_updates": 25,
+        "checkpoint_interval_seconds": 60,
+        "drive_sync_interval_seconds": 300,
+    })
+    assert metadata["local_recovery_interval_seconds"] == 300
+    assert metadata["drive_publish_interval_seconds"] == 900
+    assert metadata["deadline_anchor"] == "previous_checkpoint_cycle_completion"
+    assert metadata["legacy_config_fields_preserved_for_run_identity"]["checkpoint_interval_seconds"] == 60
+    assert metadata["runtime_policy_overrides_legacy_operational_fields"] is True
+    assert not schedule.local_due()
+    assert not schedule.drive_due()
+
+    # A checkpoint cycle becomes due, then its serialization and Drive publish
+    # take 12 minutes. The cycle completion resets both deadlines.
+    clock[0] = 900.0
+    assert schedule.local_due()
+    assert schedule.drive_due()
+    clock[0] = 1620.0
+    schedule.mark_local_complete()
+    schedule.mark_drive_complete()
+    assert not schedule.local_due()
+    assert not schedule.drive_due()
+
+    clock[0] = 1919.0
+    assert not schedule.local_due()
+    assert not schedule.drive_due()
+    clock[0] = 1920.0
+    assert schedule.local_due()
+    assert not schedule.drive_due()
+    clock[0] = 2520.0
+    assert schedule.drive_due()
+
+
+def test_legacy_update_count_does_not_trigger_a_checkpoint():
+    policy = CheckpointPolicy(update_interval=1, seconds_interval=300)
+    assert not policy.should_checkpoint(
+        last_checkpoint_update=0, update=10_000,
+        last_checkpoint_time=10.0, now=309.9,
+    )
+    assert policy.should_checkpoint(
+        last_checkpoint_update=0, update=10_000,
+        last_checkpoint_time=10.0, now=310.0,
+    )

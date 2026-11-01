@@ -130,4 +130,83 @@ def test_nonzero_dropout_modes_and_later_task_resume_match_uninterrupted_after_h
     resources = json.loads((resumed / "resource_metrics.json").read_text())
     assert resources["classifier_seconds"] > 0
     assert resources["timing_metadata"]["classifier_boundary"] == "forward/loss through optimizer step, synchronized CUDA wall time"
+    assert resources["timing_metadata"]["checkpoint_policy"]["local_recovery_interval_seconds"] == 300.0
+    assert resources["timing_metadata"]["checkpoint_policy"]["drive_publish_interval_seconds"] == 900.0
+    assert resources["timing_metadata"]["checkpoint_policy"]["legacy_config_fields_preserved_for_run_identity"]["checkpoint_interval_seconds"] == 60
+
+
+def test_resume_rejects_same_generation_drive_manifest_conflict_without_loading_it(tmp_path):
+    from revision_r1.checkpointing import CheckpointError, save_generation
+
+    local_root = tmp_path / "local-stage"
+    drive_root = tmp_path / "drive-checkpoints"
+    stop_after_first_update = lambda state: state.resources.get("classifier_updates", 0) >= 1
+    interrupted = run_one(
+        _config(), _bundle(), tmp_path / "output", synthetic=True,
+        update_counts=[1] * 11, device="cpu", stop_hook=stop_after_first_update,
+        drive_checkpoint_root=drive_root, local_checkpoint_root=local_root,
+    )
+    assert interrupted["status"] == "INTERRUPTED_RESUMABLE"
+    local_recovery = next(local_root.rglob("recovery"))
+    drive_recovery = next(drive_root.rglob("recovery"))
+    local_manifests = sorted(local_recovery.glob("generation-*.manifest.json"))
+    newest_path = local_manifests[-1]
+    newest = json.loads(newest_path.read_text(encoding="utf-8"))
+    remote_payload_path = drive_recovery / newest["payload_file"]
+
+    divergent_root = tmp_path / "divergent-drive-generation"
+    for index in range(int(newest["generation"])):
+        state = torch.load(remote_payload_path, map_location="cpu", weights_only=False)
+        if index + 1 == int(newest["generation"]):
+            state.extra["same_generation_conflict_fixture"] = True
+        divergent_manifest = save_generation(divergent_root, state, newest["identity"], kind="recovery")
+    divergent_payload = divergent_root / divergent_manifest["payload_file"]
+    divergent_manifest_path = divergent_root / f"generation-{int(newest['generation']):06d}.manifest.json"
+    (drive_recovery / newest["payload_file"]).write_bytes(divergent_payload.read_bytes())
+    (drive_recovery / divergent_manifest_path.name).write_bytes(divergent_manifest_path.read_bytes())
+
+    with pytest.raises(CheckpointError, match="same generation"):
+        run_one(
+            _config(), _bundle(), tmp_path / "output", synthetic=True,
+            update_counts=[1] * 11, device="cpu",
+            drive_checkpoint_root=drive_root, local_checkpoint_root=local_root,
+        )
+
+
+def test_failed_initial_drive_publish_does_not_serialize_a_second_recovery_state(tmp_path, monkeypatch):
+    import revision_r1.runner as runner
+
+    original_save = runner.save_generation
+    original_mirror = runner.mirror_checkpoint_generations
+    original_schedule = runner.CheckpointSchedule
+    save_calls = []
+    publish_calls = []
+
+    def counted_save(*args, **kwargs):
+        save_calls.append(kwargs.get("kind"))
+        return original_save(*args, **kwargs)
+
+    def fail_second_publish(*args, **kwargs):
+        publish_calls.append(True)
+        if len(publish_calls) == 1:
+            return original_mirror(*args, **kwargs)
+        raise OSError("simulated Drive publication failure")
+
+    def immediate_schedule():
+        return original_schedule(local_interval_seconds=1e-6, drive_interval_seconds=1e-6)
+
+    monkeypatch.setattr(runner, "save_generation", counted_save)
+    monkeypatch.setattr(runner, "mirror_checkpoint_generations", fail_second_publish)
+    monkeypatch.setattr(runner, "CheckpointSchedule", immediate_schedule)
+    local = tmp_path / "local-stage"
+    with pytest.raises(OSError, match="simulated Drive publication failure"):
+        run_one(
+            _config(), _bundle(), tmp_path / "output", synthetic=True,
+            update_counts=[1] * 11, device="cpu",
+            drive_checkpoint_root=tmp_path / "drive", local_checkpoint_root=local,
+        )
+
+    assert save_calls == ["initial", "phase-boundary"]
+    assert publish_calls == [True, True]
+    assert len(list((local / "recovery").glob("generation-*.manifest.json"))) == 2
 

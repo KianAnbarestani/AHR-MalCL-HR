@@ -17,7 +17,11 @@ from typing import Any
 import numpy as np
 import torch
 
-from .checkpointing import CheckpointPolicy, CheckpointError, load_latest_valid, mirror_checkpoint_generations, save_generation
+from .checkpointing import (
+    CheckpointError, CheckpointSchedule, copy_generation_payload, next_generation_number,
+    latest_valid_manifest, load_verified_manifest, mirror_checkpoint_generations, save_generation,
+)
+from .compatibility import runtime_source_sha256, verify_checkpoint_compatibility
 from .storage import should_persist_task_boundary_duplicate
 from .config import ARMS, DATASETS, RunConfig, arm_components
 from .engine import StopRequested
@@ -84,12 +88,9 @@ def _dataset_identity(bundle, *, synthetic: bool) -> dict[str, Any]:
 
 
 def _code_sha256() -> str:
-    root = Path(__file__).resolve().parent
-    digest = hashlib.sha256()
-    for path in sorted(root.glob("*.py")):
-        digest.update(path.name.encode())
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
+    """Return the frozen training/checkpoint identity after source attestation."""
+    root = Path(__file__).resolve().parents[1]
+    return str(verify_checkpoint_compatibility(root)["baseline_training_source_sha256"])
 
 
 def _capture_rng(streams: RNGStreams) -> dict[str, Any]:
@@ -405,7 +406,12 @@ def _export_run(state: RunState, config: RunConfig, bundle, output_dir: Path, de
         "continual_metrics": continual,
         "final_metrics": {key: classification[key] for key in ("accuracy", "macro_f1", "weighted_f1", "balanced_accuracy")},
     }
-    write_json(output_dir / "config.json", {**config.payload(), "config_sha256": config.sha256(), "code_sha256": code_hash, "namespace": namespace})
+    write_json(output_dir / "config.json", {
+        **config.payload(), "config_sha256": config.sha256(),
+        "code_sha256": code_hash,
+        "runtime_source_sha256": runtime_source_sha256(Path(__file__).resolve().parents[1]),
+        "namespace": namespace,
+    })
     write_json(output_dir / "environment.json", _environment(device, synthetic))
     write_json(output_dir / "class_order.json", {"class_order": order, "sha256": order_sha256(order)})
     write_json(output_dir / "task_supports.json", {"task_supports": supports})
@@ -459,6 +465,12 @@ def _export_run(state: RunState, config: RunConfig, bundle, output_dir: Path, de
         "generator_seconds": tracker.seconds.get("generator", 0.0),
         "critic_seconds": tracker.seconds.get("critic", 0.0),
         "checkpoint_seconds": tracker.seconds.get("checkpoint", 0.0),
+        "checkpoint_policy": {
+            "local_recovery_interval_seconds": 300.0,
+            "drive_publication_interval_seconds": 900.0,
+            "update_count_trigger_enabled": False,
+            "forced_checkpoint_kinds": ["initial", "task-boundary", "interrupted-resumable", "failed-recovery", "complete"],
+        },
         "training_reproduction_claimed": False,
     })
     write_json(output_dir / "resource_metrics.json", resource_output)
@@ -487,6 +499,7 @@ def _refresh_terminal_resource_metrics(output_dir: Path, tracker: ResourceTracke
     payload["peak_cuda_allocated_bytes"] = int(tracker.peak_cuda_allocated_bytes)
     payload["peak_cuda_reserved_bytes"] = int(tracker.peak_cuda_reserved_bytes)
     payload["timing_metadata"] = tracker.timing_metadata()
+    payload["checkpoint_accounting"] = tracker.checkpoint_accounting
     payload["cuda_synchronization_calls"] = int(tracker.cuda_synchronization_calls)
     payload["cuda_synchronization_seconds"] = float(tracker.cuda_synchronization_seconds)
     payload["resource_instrumentation_seconds"] = float(tracker.instrumentation_seconds)
@@ -528,6 +541,7 @@ def run_one(
     device: str | torch.device = "cuda",
     drive_checkpoint_root: str | Path | None = None,
     local_checkpoint_root: str | Path | None = None,
+    drive_delete_callback=None,
 ) -> dict[str, Any]:
     """Run one immutable arm; all synthetic CPU/GPU modes are non-reportable.
 
@@ -613,29 +627,77 @@ def run_one(
     checkpoints = checkpoint_base / "recovery"
     task_boundary_checkpoints = checkpoint_base / "task_boundaries"
     persist_task_boundary_duplicate = should_persist_task_boundary_duplicate(identity)
+    next_task_boundary_generation = next_generation_number(task_boundary_checkpoints, identity)
+    startup_recovery_stage = None
+    startup_verification_seconds = 0.0
+    local_recovery_manifest = None
+    local_recovery_error = None
+    local_recovery_has_manifests = any(checkpoints.glob("generation-*.manifest.json"))
+    if local_recovery_has_manifests:
+        try:
+            verification_started = time.monotonic()
+            local_recovery_manifest = latest_valid_manifest(checkpoints, identity)
+            startup_verification_seconds += time.monotonic() - verification_started
+        except CheckpointError as exc:
+            local_recovery_error = exc
     if drive_checkpoint_root is not None:
         remote_recovery = Path(drive_checkpoint_root) / "recovery"
-        remote_boundaries = Path(drive_checkpoint_root) / "task_boundaries"
         if list(remote_recovery.glob("generation-*.manifest.json")):
-            mirror_checkpoint_generations(remote_recovery, checkpoints, identity, keep=2)
-        if persist_task_boundary_duplicate and list(remote_boundaries.glob("generation-*.manifest.json")):
-            mirror_checkpoint_generations(
-                remote_boundaries, task_boundary_checkpoints, identity,
-                keep=None, prune_destination=False,
+            remote_highest = next_generation_number(remote_recovery, identity) - 1
+            local_generation = (
+                None if local_recovery_manifest is None
+                else int(local_recovery_manifest["generation"])
+            )
+            if local_generation is not None and remote_highest == local_generation:
+                remote_same_path = remote_recovery / f"generation-{local_generation:06d}.manifest.json"
+                try:
+                    remote_same_manifest = json.loads(remote_same_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise CheckpointError(
+                        "Drive recovery manifest is unreadable at the local generation number"
+                    ) from exc
+                if remote_same_manifest != local_recovery_manifest:
+                    raise CheckpointError(
+                        "local and Drive checkpoint generations conflict at the same generation number"
+                    )
+            elif local_recovery_manifest is None or remote_highest > local_generation:
+                verification_started = time.monotonic()
+                remote_manifest = latest_valid_manifest(remote_recovery, identity)
+                startup_verification_seconds += time.monotonic() - verification_started
+                if (
+                    local_recovery_manifest is None
+                    or int(remote_manifest["generation"]) > int(local_recovery_manifest["generation"])
+                ):
+                    startup_recovery_stage = mirror_checkpoint_generations(
+                        remote_recovery, checkpoints, identity, keep=2,
+                        generation=int(remote_manifest["generation"]),
+                        preverified_manifests=(remote_manifest,),
+                    )
+                    local_recovery_manifest = remote_manifest
+                    local_recovery_error = None
+                elif int(remote_manifest["generation"]) == local_generation:
+                    if remote_manifest != local_recovery_manifest:
+                        raise CheckpointError(
+                            "local and Drive checkpoint generations conflict at the same generation number"
+                        )
+        if persist_task_boundary_duplicate:
+            remote_boundaries = Path(drive_checkpoint_root) / "task_boundaries"
+            next_task_boundary_generation = max(
+                next_task_boundary_generation,
+                next_generation_number(remote_boundaries, identity),
             )
     state = None
     tracker = ResourceTracker()
-    checkpoint_policy = CheckpointPolicy(run_config.checkpoint_interval_updates, run_config.checkpoint_interval_seconds)
-    last_checkpoint_update = 0
-    last_checkpoint_time = time.time()
-    last_drive_sync = time.time()
     code_hash = identity["code_sha256"]
     classifier_optimizer = None
     generator_optimizer = None
     critic_optimizer = None
+    state_restore_seconds = 0.0
 
-    if list(checkpoints.glob("generation-*.manifest.json")):
-        loaded = load_latest_valid(checkpoints, identity)
+    if local_recovery_manifest is not None:
+        restore_started = time.monotonic()
+        loaded = load_verified_manifest(checkpoints, identity, local_recovery_manifest)
+        state_restore_seconds = time.monotonic() - restore_started
         state = loaded.state
         if state.classifier_state:
             head_size = int(state.classifier_state["out.weight"].shape[0])
@@ -648,7 +710,26 @@ def run_one(
         if state.resources.get("tracker"):
             tracker.load_state_dict(state.resources["tracker"])
             tracker.resume_active_clock()
-        last_checkpoint_update = int(state.resources.get("total_optimizer_updates", 0))
+        tracker.add_checkpoint_accounting(timings={"state_restore": state_restore_seconds})
+        saved_accounting = loaded.manifest.get("checkpoint_accounting", {})
+        if isinstance(saved_accounting, dict):
+            tracker.add_checkpoint_accounting(
+                timings={
+                    "serialization": saved_accounting.get("serialization_seconds", 0.0),
+                    "verification": saved_accounting.get("local_verification_seconds", 0.0),
+                    "pruning": saved_accounting.get("pruning_seconds", 0.0),
+                },
+                write_bytes={
+                    "local_payload": saved_accounting.get("local_payload_write_bytes", 0),
+                    "local_manifest": saved_accounting.get("local_manifest_write_bytes", 0),
+                },
+                retained_bytes={
+                    "local_recovery": saved_accounting.get(
+                        "recovery_artifact_bytes_retained_after_pruning",
+                        saved_accounting.get("payload_bytes_retained_after_pruning", 0),
+                    ) or 0
+                },
+            )
         classifier_optimizer = None
         generator_optimizer = None
         critic_optimizer = None
@@ -674,6 +755,8 @@ def run_one(
         # Constructors (including an expanded output head), model state loads,
         # and any phase optimizer state restoration all precede RNG restoration.
         _restore_rng(state.rng_state, streams)
+    elif local_recovery_has_manifests and local_recovery_error is not None:
+        raise local_recovery_error
     else:
         runtime = {
             "class_order": order,
@@ -697,6 +780,19 @@ def run_one(
         )
         state.extra.update(_initial_gan_torch_rng(streams.gan_seed, target_device))
 
+    if startup_recovery_stage is not None:
+        tracker.add_checkpoint_accounting(
+            timings={
+                "local_recovery_stage": startup_recovery_stage.timings.get("upload_seconds", 0.0),
+                "verification": startup_verification_seconds + startup_recovery_stage.timings.get("verification_seconds", 0.0),
+                "manifest_publication": startup_recovery_stage.timings.get("manifest_seconds", 0.0),
+            },
+            write_bytes={"local_recovery_stage": startup_recovery_stage.bytes_written},
+            retained_bytes={"local_recovery": startup_recovery_stage.retained_bytes or 0},
+        )
+    elif startup_verification_seconds:
+        tracker.add_checkpoint_accounting(timings={"verification": startup_verification_seconds})
+
     if state.cursor.phase == "complete":
         try:
             validation = _write_completion(state, run_config, output, registry, run_id, synthetic)
@@ -705,6 +801,20 @@ def run_one(
             lease.release()
 
     tracker.resume_active_clock()
+    # Start fresh monotonic deadlines after checkpoint discovery and restore;
+    # loading a full recovery state cannot make the first save immediately due.
+    checkpoint_schedule = CheckpointSchedule()
+    # The frozen RunConfig still carries the legacy cadence values in its
+    # identity; report the operational runtime cadence separately rather than
+    # changing the config hash of resumable checkpoints.
+    tracker.checkpoint_accounting["policy"] = checkpoint_schedule.metadata(
+        legacy_config_fields={
+            "checkpoint_interval_updates": int(run_config.checkpoint_interval_updates),
+            "checkpoint_interval_seconds": int(run_config.checkpoint_interval_seconds),
+            "drive_sync_interval_seconds": int(run_config.drive_sync_interval_seconds),
+        },
+    )
+    checkpoint_failed = False
     runtime = state.extra["runtime"]
     runtime["class_order"] = order
     runtime.setdefault("task_matrix", [[None] * 11 for _ in range(11)])
@@ -770,43 +880,116 @@ def run_one(
             state.generator_state = generator.state_dict()
             state.critic_state = critic.state_dict()
         state.rng_state = _capture_rng(streams)
+        state.extra["runtime_source_sha256"] = runtime_source_sha256(Path(__file__).resolve().parents[1])
         state.resources["tracker"] = tracker.state_dict()
 
     def checkpoint(*, force: bool = False, kind: str = "recovery"):
-        nonlocal last_checkpoint_update, last_checkpoint_time, last_drive_sync
-        now = time.time()
-        updates = int(state.resources.get("total_optimizer_updates", 0))
-        due = force or checkpoint_policy.should_checkpoint(
-            last_checkpoint_update=last_checkpoint_update, update=updates,
-            last_checkpoint_time=last_checkpoint_time, now=now, phase_boundary=False,
-        )
-        if not due:
-            return
+        nonlocal checkpoint_failed, next_task_boundary_generation
+        forced_kinds = {"initial", "task-boundary", "interrupted-resumable", "failed-recovery", "complete"}
+        forced = bool(force and kind in forced_kinds)
+        if not checkpoint_schedule.local_due(force=forced):
+            return None
         checkpoint_started = tracker.start_timer()
         try:
+            drive_published = False
+            capture_started = time.monotonic()
             capture_state()
+            capture_seconds = time.monotonic() - capture_started
+            tracker.add_checkpoint_accounting(timings={"snapshot_capture": capture_seconds})
             runtime["last_checkpoint_phase"] = state.cursor.phase
             runtime["last_checkpoint_task"] = state.cursor.task_index
-            save_generation(checkpoints, state, identity, kind=kind)
-            if drive_checkpoint_root is not None and (force or now - last_drive_sync >= run_config.drive_sync_interval_seconds):
-                mirror_checkpoint_generations(checkpoints, Path(drive_checkpoint_root) / "recovery", identity, keep=2)
-                last_drive_sync = now
+            recovery_manifest = save_generation(checkpoints, state, identity, kind=kind)
+            local_accounting = recovery_manifest.get("checkpoint_accounting", {})
+            tracker.add_checkpoint_accounting(
+                timings={
+                    "serialization": local_accounting.get("serialization_seconds", 0.0),
+                    "verification": local_accounting.get("local_verification_seconds", 0.0),
+                    "manifest_publication": local_accounting.get("manifest_publication_seconds", 0.0),
+                    "pruning": local_accounting.get("pruning_seconds", 0.0),
+                },
+                write_bytes={
+                    "local_payload": local_accounting.get("local_payload_write_bytes", 0),
+                    "local_manifest": local_accounting.get("local_manifest_write_bytes", 0),
+                },
+                retained_bytes={
+                    "local_recovery": local_accounting.get(
+                        "recovery_artifact_bytes_retained_after_pruning",
+                        local_accounting.get("payload_bytes_retained_after_pruning", 0),
+                    ) or 0
+                },
+            )
+            drive_force = bool(force and kind in forced_kinds)
+            if drive_checkpoint_root is not None and checkpoint_schedule.drive_due(force=drive_force):
+                mirrored = mirror_checkpoint_generations(
+                    checkpoints, Path(drive_checkpoint_root) / "recovery", identity,
+                    keep=2, generation=int(recovery_manifest["generation"]),
+                    delete_callback=drive_delete_callback,
+                    preverified_manifests=(recovery_manifest,),
+                )
+                tracker.add_checkpoint_accounting(
+                    timings={
+                        "upload": mirrored.timings.get("upload_seconds", 0.0),
+                        "verification": mirrored.timings.get("verification_seconds", 0.0),
+                        "manifest_publication": mirrored.timings.get("manifest_seconds", 0.0),
+                        "pruning": mirrored.timings.get("pruning_seconds", 0.0),
+                    },
+                    write_bytes={
+                        "drive_payload": sum(int(item["payload_bytes"]) for item in mirrored),
+                        "drive_manifest": max(0, int(mirrored.bytes_written) - sum(int(item["payload_bytes"]) for item in mirrored)),
+                    },
+                    retained_bytes={"drive_recovery": mirrored.retained_bytes or 0},
+                )
+                drive_published = True
             if kind == "task-boundary" and persist_task_boundary_duplicate:
-                save_generation(
-                    task_boundary_checkpoints, state, identity, kind="task-boundary",
-                    retain_generations=None,
+                boundary_manifest = copy_generation_payload(
+                    checkpoints, recovery_manifest, task_boundary_checkpoints, identity,
+                    kind="task-boundary", retain_generations=None,
+                    generation=next_task_boundary_generation,
+                )
+                next_task_boundary_generation += 1
+                local_boundary_bytes = sum(
+                    path.stat().st_size for path in task_boundary_checkpoints.glob("generation-*") if path.is_file()
+                )
+                tracker.add_checkpoint_accounting(
+                    timings={
+                        "local_artifact_copy": boundary_manifest.get("checkpoint_accounting", {}).get("local_artifact_copy_seconds", 0.0),
+                        "verification": boundary_manifest.get("checkpoint_accounting", {}).get("local_verification_seconds", 0.0),
+                    },
+                    write_bytes={
+                        "local_artifact_copy": boundary_manifest.get("checkpoint_accounting", {}).get("local_artifact_copy_bytes", 0),
+                        "local_manifest": boundary_manifest.get("checkpoint_accounting", {}).get("local_manifest_write_bytes", 0),
+                    },
+                    retained_bytes={"local_task_boundaries": local_boundary_bytes},
                 )
                 if drive_checkpoint_root is not None:
-                    mirror_checkpoint_generations(
+                    mirrored_boundary = mirror_checkpoint_generations(
                         task_boundary_checkpoints, Path(drive_checkpoint_root) / "task_boundaries",
-                        identity, keep=2, prune_destination=False,
+                        identity, keep=None, prune_destination=False,
+                        generation=int(boundary_manifest["generation"]),
+                        preverified_manifests=(boundary_manifest,),
                     )
-            last_checkpoint_update = updates
-            last_checkpoint_time = now
-            if drive_checkpoint_root is not None and now - last_drive_sync >= run_config.drive_sync_interval_seconds:
-                mirror_checkpoint_generations(checkpoints, Path(drive_checkpoint_root) / "recovery", identity, keep=2)
-                mirror_checkpoint_generations(task_boundary_checkpoints, Path(drive_checkpoint_root) / "task_boundaries", identity, keep=2, prune_destination=False)
-                last_drive_sync = now
+                    tracker.add_checkpoint_accounting(
+                        timings={
+                            "upload": mirrored_boundary.timings.get("upload_seconds", 0.0),
+                            "verification": mirrored_boundary.timings.get("verification_seconds", 0.0),
+                        "manifest_publication": mirrored_boundary.timings.get("manifest_seconds", 0.0),
+                        },
+                        write_bytes={
+                            "drive_payload": sum(int(item["payload_bytes"]) for item in mirrored_boundary),
+                            "drive_manifest": max(0, int(mirrored_boundary.bytes_written) - sum(int(item["payload_bytes"]) for item in mirrored_boundary)),
+                        },
+                        retained_bytes={"drive_task_boundaries": mirrored_boundary.retained_bytes or 0},
+                    )
+                    drive_published = True
+            # The local deadline is reset only when the complete checkpoint
+            # cycle (including any due Drive publication/boundary artifact) ends.
+            if drive_published:
+                checkpoint_schedule.mark_drive_complete()
+            checkpoint_schedule.mark_local_complete()
+            return recovery_manifest
+        except BaseException:
+            checkpoint_failed = True
+            raise
         finally:
             tracker.finish_timer("checkpoint", checkpoint_started)
 
@@ -823,7 +1006,7 @@ def run_one(
             task_index = state.cursor.task_index
             if task_index >= 11:
                 state.cursor.phase = "export"
-                checkpoint(force=True, kind="phase-boundary")
+                checkpoint(kind="phase-boundary")
                 if safe_stop():
                     raise StopRequested("stop requested before final export")
                 break
@@ -882,7 +1065,7 @@ def run_one(
                 state.cursor.substep_index = 0
                 state.cursor.update_index = 0
                 runtime["scaler_history"].append({"task_id": task_index + 1, "sample_count": new_scaler.n, "scaler_sha256": new_scaler.sha256(), "training_indices_only": True})
-                checkpoint(force=True, kind="phase-boundary")
+                checkpoint(kind="phase-boundary")
                 if safe_stop():
                     raise StopRequested("stop requested after taskwise scaler update")
                 cached_context = None
@@ -896,7 +1079,7 @@ def run_one(
                     state.cursor.phase = "classifier"
                     state.cursor.item_index = 0
                     state.cursor.substep_index = 0
-                    checkpoint(force=True, kind="phase-boundary")
+                    checkpoint(kind="phase-boundary")
                     if safe_stop():
                         raise StopRequested("stop requested at GAN/classifier phase boundary")
                     continue
@@ -972,7 +1155,7 @@ def run_one(
                 if updates_this_task >= int(update_counts[task_index]):
                     state.cursor.phase = "evaluation"
                     state.cursor.item_index = 0
-                    checkpoint(force=True, kind="phase-boundary")
+                    checkpoint(kind="phase-boundary")
                     if safe_stop():
                         raise StopRequested("stop requested at classifier/evaluation phase boundary")
                     continue
@@ -1103,7 +1286,7 @@ def run_one(
                 state.metrics["task_matrix"] = runtime["task_matrix"]
                 state.cursor.phase = "memory"
                 state.cursor.item_index = 0
-                checkpoint(force=True, kind="phase-boundary")
+                checkpoint(kind="phase-boundary")
                 if safe_stop():
                     raise StopRequested("stop requested after task evaluation")
                 cached_context = None
@@ -1163,7 +1346,7 @@ def run_one(
                     state.cursor.phase = "refresh"
                 state.cursor.item_index = 0
                 state.cursor.substep_index = 0
-                checkpoint(force=True, kind="phase-boundary")
+                checkpoint(kind="phase-boundary")
                 if safe_stop():
                     raise StopRequested("stop requested after anchor selection and before replay generation")
                 continue
@@ -1185,7 +1368,7 @@ def run_one(
                     state.cursor.phase = "refresh"
                     state.cursor.item_index = 0
                     state.cursor.substep_index = 0
-                    checkpoint(force=True, kind="phase-boundary")
+                    checkpoint(kind="phase-boundary")
                     if safe_stop():
                         raise StopRequested("stop requested after candidate generation/selection phase")
                     continue
@@ -1346,7 +1529,8 @@ def run_one(
         return {"status": "INTERRUPTED_RESUMABLE", "cursor": state.cursor.__dict__, "classifier_updates": int(state.resources["classifier_updates"])}
     except Exception as exc:
         try:
-            checkpoint(force=True, kind="failed-recovery")
+            if not checkpoint_failed:
+                checkpoint(force=True, kind="failed-recovery")
         finally:
             registry.fail_attempt(run_id, f"{type(exc).__name__}: {exc}")
         raise

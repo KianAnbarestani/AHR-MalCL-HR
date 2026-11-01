@@ -94,8 +94,9 @@ recovery generations. It is resume-only: if the source, config, schedule,
 dataset identity, generation set, payload size, or payload hash fails, the
 first run stops and never initializes from scratch.
 
-The current release changes only the external orchestrator, notebook, and
-progress presentation; the 27-file training-core hash remains exactly
+The checkpoint-performance release updates checkpoint persistence and
+resource reporting while preserving the 27-file training-behavior
+fingerprint and its exact identity
 `1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c`. The
 authentic v1.2 ZIP and all 27 source-file hashes are verified from the
 distributed v1.2 artifact during packaging, but v1.2 checkpoints are never
@@ -163,13 +164,22 @@ checkpoint matrix. A known v6.2 recovery payload was 181,822,939 bytes; using
 that only as an illustrative lower-bound input, 13 retained checkpoint
 payloads per run plus the 256 MiB/run output floor implies at least about
 246 GiB peak for 100 runs after atomic-write headrooms and the 512 MiB
-reserve. Cell C uses the verified v6.2 report's actual maximum checkpoint
-bound and computes the live projection, which may be larger. Do not enable
-Cell E unless live quota is numerically verified and the projection fits.
+reserve. Cell C uses the larger of that verified v6.2 reference and the
+observed maximum exact-identity recovery/task-boundary payload already on
+Drive, applies the existing 1.5x + 16 MiB production margin, counts the
+current run's existing bytes, and computes the live projection. The selected
+recovery candidate is hash-verified; other matching files are checked by
+manifest identity and observed size without an additional multi-gigabyte
+read. Do not enable Cell E unless live quota is numerically verified and the
+projection fits.
 The displayed deficit includes the 512 MiB reserve. Configure the final
 output/checkpoint destination before Cell D; moving completed runs is
 unsupported because completion records contain absolute artifact paths.
-There is no automatic checkpoint offload/pruning mode in this release.
+Only recovery generations rotate. A newly uploaded generation must pass
+read-back verification before the older exact-owned generations are
+permanently pruned; two verified Drive recovery generations remain. Task
+boundary snapshots are retained separately and are not pruned. Files already
+in Drive Trash are not removed automatically and continue to consume quota.
 
 ## RAM/OOM safeguards
 
@@ -204,18 +214,23 @@ streaming compressed NPZ data and fitting the scaler in 2,048-row chunks. This
 validates that fixture only; it is not a measurement of real EMBER/AZ data,
 Colab cgroup headroom, or a complete production task.
 
-The production checkpoint policy is unchanged: task-boundary snapshots and
-two recovery generations are retained on Drive and in per-run local staging.
-Local staging is not automatically pruned after a run; a long uninterrupted
-session accumulates those local copies, and Cell C / the per-run capacity gate
-account for that. A runtime reset clears ephemeral local staging; the next
-run restores from the identity-verified Drive checkpoint. A reset can lose
-updates since the last verified Drive synchronization (the configured
-periodic sync is five minutes, with forced phase/task boundaries); it is not
-zero-loss. Drive locking is best-effort, not a transactional distributed
-mutex. Keep one notebook session active for this matrix. If local capacity
-approaches its gate, stop cleanly and resume after a runtime reset rather than
-deleting recovery state.
+The production checkpoint policy is completion-based and monotonic: local
+recovery serialization every five minutes, Drive recovery publication every
+15 minutes, plus task-boundary and graceful-interruption checkpoints. One new
+recovery generation is published per periodic sync; the existing pair is not
+re-uploaded. Recovery rotation preserves two verified Drive generations.
+Task-boundary snapshots remain a separate retained archive in Drive and local
+staging. Runtime resets clear ephemeral local staging; the next session
+restores from the identity-verified Drive checkpoint. A reset can lose updates
+since the last verified Drive synchronization; this is not zero-loss. Drive
+locking is best-effort, not a transactional distributed mutex. Keep one
+notebook session active for this matrix. If local capacity approaches its
+gate, stop cleanly and resume after a runtime reset rather than deleting
+recovery state.
+The legacy checkpoint cadence fields remain in the frozen RunConfig because
+they are part of the existing config/checkpoint identity. The 300/900-second
+runtime policy is an operational override, reported separately in
+`resource_metrics.json`; no model or update-budget field changes.
 
 ## Protocol and evidence boundary
 

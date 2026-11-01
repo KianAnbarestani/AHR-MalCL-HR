@@ -222,9 +222,10 @@ print("Exact EMBER/AZ-Class NPZ files exist. NPZ payloads were not reread in thi
         _cell("code", '''# Cell C — freeze the 100-run plan and check first-run/full-matrix storage readiness.
 import json
 from scripts.production_workflow import (
+    _checkpoint_payload_size_reference, _diagnostic_run_identity, _tree_file_bytes,
     bind_runtime_schedule, build_frozen_run_plan, inspect_production_capacity,
     load_v62_recovery_checkpoint_bound, project_storage, require_run_capacity,
-    validate_frozen_plan, validate_runtime_bound_plan,
+    run_checkpoint_root, run_output_root, validate_frozen_plan, validate_runtime_bound_plan,
 )
 from revision_r1.storage import StorageCapacityError
 
@@ -239,12 +240,6 @@ if RUNTIME_PLAN["run_count"] != 100 or RUNTIME_PLAN["runs"][0]["run_key"] != "em
     raise ValueError("Runtime-bound matrix/order differs from the frozen first-run protocol")
 
 V62_REFERENCE = load_v62_recovery_checkpoint_bound(DRIVE_PATHS["v62_recovery_report"])
-STORAGE_PROJECTION = project_storage(
-    RUNTIME_PLAN,
-    observed_checkpoint_bytes=V62_REFERENCE["max_checkpoint_payload_bytes"],
-    checkpoint_size_is_already_conservative_bound=True,
-    checkpoint_reference_provenance=V62_REFERENCE["provenance"],
-)
 OUTPUT_ROOT = Path(DRIVE_PATHS["output_root"]).expanduser()
 CHECKPOINT_ROOT = Path(DRIVE_PATHS["checkpoint_root"]).expanduser()
 LOCAL_CHECKPOINT_ROOT = Path(DRIVE_PATHS["local_checkpoint_root"]).expanduser()
@@ -253,8 +248,42 @@ DATA_ROOTS = {
     "ember": Path(DRIVE_PATHS["ember_data_root"]).expanduser(),
     "az_class": Path(DRIVE_PATHS["az_data_root"]).expanduser(),
 }
+FIRST_RUN = RUNTIME_PLAN["runs"][0]
+FIRST_RUN_IDENTITY = _diagnostic_run_identity(FIRST_RUN, PREFLIGHT, runner_version="revision_R1.0.2")
+FIRST_RUN_CHECKPOINT_PATH = run_checkpoint_root(CHECKPOINT_ROOT, FIRST_RUN, runner_version="revision_R1.0.2")
+FIRST_RUN_OUTPUT_PATH = run_output_root(OUTPUT_ROOT, FIRST_RUN, runner_version="revision_R1.0.2")
+CHECKPOINT_SIZE_EVIDENCE = _checkpoint_payload_size_reference(
+    FIRST_RUN_CHECKPOINT_PATH,
+    expected_identity=FIRST_RUN_IDENTITY,
+)
+OBSERVED_CHECKPOINT_PAYLOAD_BYTES = max(
+    int(V62_REFERENCE["max_checkpoint_payload_bytes"]),
+    int(CHECKPOINT_SIZE_EVIDENCE["max_payload_bytes"]),
+)
+OBSERVED_FIRST_RUN_OUTPUT_BYTES = _tree_file_bytes(FIRST_RUN_OUTPUT_PATH)
+STORAGE_PROJECTION = project_storage(
+    RUNTIME_PLAN,
+    observed_checkpoint_bytes=OBSERVED_CHECKPOINT_PAYLOAD_BYTES,
+    observed_output_bytes=OBSERVED_FIRST_RUN_OUTPUT_BYTES,
+    checkpoint_reference_provenance=(
+        "maximum of verified v6.2 operational reference and observed exact-identity production "
+        "recovery/task-boundary payloads; 1.5x + 16 MiB production envelope"
+    ),
+    checkpoint_size_evidence={
+        **CHECKPOINT_SIZE_EVIDENCE,
+        "v6_2_reference_payload_bytes": int(V62_REFERENCE["max_checkpoint_payload_bytes"]),
+        "projection_source_bytes": OBSERVED_CHECKPOINT_PAYLOAD_BYTES,
+        "existing_exact_run_output_bytes": OBSERVED_FIRST_RUN_OUTPUT_BYTES,
+    },
+)
 CAPACITY = inspect_production_capacity(
     OUTPUT_ROOT, CHECKPOINT_ROOT, LOCAL_CHECKPOINT_ROOT, CACHE_ROOT,
+    current_run_output_path=FIRST_RUN_OUTPUT_PATH,
+    current_run_checkpoint_path=FIRST_RUN_CHECKPOINT_PATH,
+    current_run_local_checkpoint_path=run_checkpoint_root(
+        LOCAL_CHECKPOINT_ROOT, FIRST_RUN, runner_version="revision_R1.0.2",
+    ),
+    expected_run_identity=FIRST_RUN_IDENTITY,
     verified_dataset_cache_bytes=0,
 )
 print("Drive capacity evidence:", json.dumps({
@@ -313,9 +342,11 @@ print(json.dumps({
     "full_matrix_capacity_deficit_bytes": matrix_deficit,
     "matrix_retained_bytes": STORAGE_PROJECTION["drive"]["matrix_retained_bytes"],
     "matrix_checkpoint_payload_lower_bound_bytes": STORAGE_PROJECTION["checkpoint_write_volume"]["matrix_retained_payload_lower_bound_bytes"],
+    "observed_checkpoint_payload_bytes": OBSERVED_CHECKPOINT_PAYLOAD_BYTES,
+    "checkpoint_size_evidence": CHECKPOINT_SIZE_EVIDENCE,
     "safety_reserve_bytes": STORAGE_PROJECTION["safety_reserve_bytes"],
-    "checkpoint_policy": "11 task-boundary + 2 recovery generations/run retained; no automatic pruning",
-    "checkpoint_size_reference": V62_REFERENCE["provenance"],
+    "checkpoint_policy": "11 task-boundary artifacts retained separately; publish/verify then retain 2 Drive recovery generations",
+    "checkpoint_size_reference": STORAGE_PROJECTION["checkpoint_size_provenance"],
     "production_measurements_available": False,
 }, indent=2))
 if matrix_status != "PROJECTED_FIT":
@@ -649,6 +680,8 @@ def _package_source_paths(revision_root: Path) -> list[Path]:
         revision_root / "scripts" / "production_workflow.py",
         revision_root / "scripts" / "build_production_handoff.py",
         revision_root / "PRODUCTION_COLAB_README.md",
+        revision_root / "CHECKPOINT_COMPATIBILITY.md",
+        revision_root / "checkpoint_compatibility.json",
         revision_root / "requirements-colab.txt",
         revision_root / "legacy_checkpoint_source_compatibility.json",
         revision_root / "configs" / "update_budget.csv",

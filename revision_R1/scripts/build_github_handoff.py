@@ -11,6 +11,7 @@ from typing import Any
 
 from scripts.build_production_handoff import RELEASE_TESTS, notebook_document as zip_notebook_document
 from scripts.production_workflow import EXPECTED_EFFECTIVE_SCHEDULE_SHA256
+from revision_r1.compatibility import runtime_source_sha256, verify_checkpoint_compatibility
 
 
 EXPECTED_TRAINING_SOURCE_SHA256 = "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
@@ -18,8 +19,9 @@ GITHUB_REPOSITORY = "KianAnbarestani/AHR-MalCL-HR"
 GITHUB_TOKEN_SECRET_NAME = "GITHUB_READ_TOKEN"
 PACKAGE_MANIFEST_NAME = "PACKAGE_MANIFEST.json"
 BUILD_MANIFEST_NAME = "BUILD_MANIFEST.json"
-EXTRA_TESTS = ("test_github_handoff.py",)
+EXTRA_TESTS = ("test_github_handoff.py", "test_runtime_compatibility.py")
 EXTRA_FILES = (
+    "CHECKPOINT_COMPATIBILITY.md",
     "COMPATIBILITY_REPORT.md",
     "FROZEN_PROTOCOL.md",
     "legacy_checkpoint_source_compatibility.json",
@@ -27,8 +29,10 @@ EXTRA_FILES = (
     "README_GITHUB_COLAB.md",
     "requirements-colab.txt",
     "requirements-test.txt",
+    "checkpoint_compatibility.json",
 )
 SCRIPT_FILES = (
+    "scripts/build_checkpoint_compatibility.py",
     "scripts/build_github_handoff.py",
     "scripts/build_production_handoff.py",
     "scripts/live_progress.py",
@@ -47,14 +51,7 @@ def _sha256(payload: bytes) -> str:
 
 
 def _training_source_sha256(root: Path) -> str:
-    digest = hashlib.sha256()
-    sources = sorted((root / "revision_r1").glob("*.py"))
-    if not sources:
-        raise FileNotFoundError(f"no training source modules under {root / 'revision_r1'}")
-    for path in sources:
-        digest.update(path.name.encode())
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
+    return str(verify_checkpoint_compatibility(root)["baseline_training_source_sha256"])
 
 
 def package_file_paths(package_root: str | Path) -> list[Path]:
@@ -78,6 +75,7 @@ def package_file_paths(package_root: str | Path) -> list[Path]:
 
 def build_package_manifest(package_root: str | Path) -> dict[str, Any]:
     root = Path(package_root).resolve()
+    compatibility = verify_checkpoint_compatibility(root)
     training_hash = _training_source_sha256(root)
     if training_hash != EXPECTED_TRAINING_SOURCE_SHA256:
         raise ValueError(
@@ -107,6 +105,9 @@ def build_package_manifest(package_root: str | Path) -> dict[str, Any]:
         "release_kind": "GITHUB_PINNED_COLAB_RUNNER",
         "repository": GITHUB_REPOSITORY,
         "training_source_sha256": training_hash,
+        "runtime_source_sha256": compatibility["runtime_source_sha256"],
+        "checkpoint_compatibility_baseline_commit": compatibility["baseline_commit_sha"],
+        "checkpoint_compatibility_manifest_sha256": _sha256((root / "checkpoint_compatibility.json").read_bytes()),
         "expected_effective_schedule_sha256": EXPECTED_EFFECTIVE_SCHEDULE_SHA256,
         "packaged_schedule_sha256": packaged_schedule_hash,
         "plan_sha256": plan["plan_sha256"],
@@ -129,6 +130,7 @@ def write_manifests(package_root: str | Path) -> tuple[dict[str, Any], dict[str,
         "release_kind": "GITHUB_PINNED_COLAB_RUNNER",
         "package_manifest_sha256": _sha256(package_bytes),
         "training_source_sha256": EXPECTED_TRAINING_SOURCE_SHA256,
+        "runtime_source_sha256": package_manifest["runtime_source_sha256"],
         "effective_schedule_sha256": EXPECTED_EFFECTIVE_SCHEDULE_SHA256,
         "file_count": len(package_manifest["files"]),
         "commit_sha_is_bound_by_colab_not_embedded": True,
@@ -170,11 +172,13 @@ def verify_package_integrity(package_root: str | Path) -> tuple[dict[str, Any], 
         or package_manifest.get("release_kind") != "GITHUB_PINNED_COLAB_RUNNER"
         or package_manifest.get("repository", "").lower() != GITHUB_REPOSITORY.lower()
         or package_manifest.get("training_source_sha256") != EXPECTED_TRAINING_SOURCE_SHA256
+        or package_manifest.get("runtime_source_sha256") != runtime_source_sha256(root)
         or package_manifest.get("expected_effective_schedule_sha256") != EXPECTED_EFFECTIVE_SCHEDULE_SHA256
         or package_manifest.get("production_enabled_by_default") is not False):
         raise ValueError("PACKAGE_MANIFEST release, repository, core, schedule, or production-gate identity is incompatible")
     if (build_manifest.get("package_manifest_sha256") != package_manifest_sha
         or build_manifest.get("training_source_sha256") != EXPECTED_TRAINING_SOURCE_SHA256
+        or build_manifest.get("runtime_source_sha256") != package_manifest.get("runtime_source_sha256")
         or build_manifest.get("effective_schedule_sha256") != EXPECTED_EFFECTIVE_SCHEDULE_SHA256
         or build_manifest.get("file_count") != len(files)):
         raise ValueError("BUILD_MANIFEST does not bind the current package/core/schedule identities")
@@ -199,6 +203,11 @@ def verify_package_integrity(package_root: str | Path) -> tuple[dict[str, Any], 
             raise ValueError(f"package member hash/size mismatch: {relative}")
     if _training_source_sha256(root) != EXPECTED_TRAINING_SOURCE_SHA256:
         raise ValueError("actual runner training-source hash differs from its compatible checkpoint identity")
+    compatibility = verify_checkpoint_compatibility(root)
+    if package_manifest.get("checkpoint_compatibility_manifest_sha256") != _sha256((root / "checkpoint_compatibility.json").read_bytes()):
+        raise ValueError("checkpoint compatibility manifest differs from the package manifest")
+    if package_manifest.get("checkpoint_compatibility_baseline_commit") != compatibility.get("baseline_commit_sha"):
+        raise ValueError("checkpoint compatibility baseline commit differs from the package manifest")
     schedule_path = root / "configs" / "update_budget.csv"
     schedule_manifest = json.loads((root / "configs" / "update_budget_manifest.json").read_text(encoding="utf-8"))
     if (_sha256(schedule_path.read_bytes()) != package_manifest.get("packaged_schedule_sha256")
@@ -377,12 +386,16 @@ if torch.version.cuda != EXPECTED_CUDA_VERSION:
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA is unavailable. No training started; select a GPU Colab runtime and rerun Cell A.")
 from scripts.production_workflow import training_source_sha256
+from revision_r1.compatibility import runtime_source_sha256, verify_checkpoint_compatibility
 import revision_r1.runner as runner_module
 import scripts.production_workflow as production_workflow_module
 ACTUAL_TRAINING_SOURCE_SHA256 = training_source_sha256(PROJECT)
+CHECKPOINT_COMPATIBILITY = verify_checkpoint_compatibility(PROJECT)
+ACTUAL_RUNTIME_SOURCE_SHA256 = runtime_source_sha256(PROJECT)
 if (ACTUAL_TRAINING_SOURCE_SHA256 != EXPECTED_TRAINING_SOURCE_SHA256
     or runner_module._code_sha256() != EXPECTED_TRAINING_SOURCE_SHA256
-    or PACKAGE_MANIFEST.get("training_source_sha256") != ACTUAL_TRAINING_SOURCE_SHA256):
+    or PACKAGE_MANIFEST.get("training_source_sha256") != ACTUAL_TRAINING_SOURCE_SHA256
+    or PACKAGE_MANIFEST.get("runtime_source_sha256") != ACTUAL_RUNTIME_SOURCE_SHA256):
     raise ValueError("Training-core hash is incompatible with the resumable first-run checkpoint; no fallback/restart is allowed")
 if not Path(runner_module.__file__).resolve().is_relative_to(PROJECT.resolve()):
     raise ImportError(f"Training runner imported outside the pinned Git checkout: {runner_module.__file__}")
@@ -390,6 +403,7 @@ print(json.dumps({"repository": GITHUB_REPOSITORY, "repository_private": bool(RE
                   "selected_git_commit": ACTUAL_GIT_COMMIT, "checkout": str(CHECKOUT_PATH),
                   "detached_checkout": True, "package_manifest_sha256": PACKAGE_MANIFEST_SHA256,
                   "training_source_sha256": ACTUAL_TRAINING_SOURCE_SHA256,
+                  "runtime_source_sha256": ACTUAL_RUNTIME_SOURCE_SHA256,
                   "effective_schedule_sha256": EXPECTED_SCHEDULE_SHA256,
                   "python": platform.python_version(), "numpy": np.__version__, "torch": torch.__version__,
                   "gpu": torch.cuda.get_device_name(0)}, indent=2))
@@ -418,6 +432,7 @@ CODE_BINDING = {
     "selected_git_commit": ACTUAL_GIT_COMMIT,
     "package_manifest_sha256": PACKAGE_MANIFEST_SHA256,
     "training_source_sha256": ACTUAL_TRAINING_SOURCE_SHA256,
+    "runtime_source_sha256": ACTUAL_RUNTIME_SOURCE_SHA256,
     "effective_schedule_sha256": EXPECTED_SCHEDULE_SHA256,
     "frozen_plan_sha256": RUNTIME_PLAN["plan_sha256"],
     "first_run_key": RUNTIME_PLAN["runs"][0]["run_key"],
