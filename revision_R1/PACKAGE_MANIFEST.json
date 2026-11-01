@@ -173,8 +173,8 @@
       "sha256": "84a2ed79dd962450d6ec1925fc440c349f12e35b042b754128669d9772195f97"
     },
     "scripts/build_github_handoff.py": {
-      "bytes": 28027,
-      "sha256": "ee3f906379a6c501c295d4ff518fcc598989d41152daebb8b898f14982b745f9"
+      "bytes": 28078,
+      "sha256": "e1416fe8fe3ddc420e7787e5eaddae9453c34a84ef2ccd475da09c778ac03083"
     },
     "scripts/build_production_handoff.py": {
       "bytes": 61605,
@@ -196,6 +196,10 @@
       "bytes": 3405,
       "sha256": "b070d994aa826a9cfbea7896cc21b5acde41c1da85dd30711209a6bca35a65bd"
     },
+    "tests/test_checkpoint_compatibility.py": {
+      "bytes": 1874,
+      "sha256": "f782ddda7ab664d29eb9f1813ba8be53677186c1cc1fd205261819d1f950df2c"
+    },
     "tests/test_checkpoint_storage_policy.py": {
       "bytes": 9491,
       "sha256": "8ca8353612ebf60948a3dfbf2bd31dd8c8a7b021d261e9259d3ee37ad86fa7d8"
@@ -213,8 +217,8 @@
       "sha256": "78e918528307fc9d672745512ffdac621e0d46ac6b81a5ecabff16cb7d5f5403"
     },
     "tests/test_github_handoff.py": {
-      "bytes": 7411,
-      "sha256": "cb7a1b73823149f9ec53e0b79103a46aec5025aaae8e26e6488520cc0cb05ff4"
+      "bytes": 7472,
+      "sha256": "b340b8153037a4d667e9e47e8f0e0d3c2122c408e2c2e0e03f1b3fb5b264d1a5"
     },
     "tests/test_live_progress.py": {
       "bytes": 9566,

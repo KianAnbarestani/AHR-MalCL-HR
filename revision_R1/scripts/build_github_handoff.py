@@ -19,7 +19,11 @@ GITHUB_REPOSITORY = "KianAnbarestani/AHR-MalCL-HR"
 GITHUB_TOKEN_SECRET_NAME = "GITHUB_READ_TOKEN"
 PACKAGE_MANIFEST_NAME = "PACKAGE_MANIFEST.json"
 BUILD_MANIFEST_NAME = "BUILD_MANIFEST.json"
-EXTRA_TESTS = ("test_github_handoff.py", "test_runtime_compatibility.py")
+EXTRA_TESTS = (
+    "test_checkpoint_compatibility.py",
+    "test_github_handoff.py",
+    "test_runtime_compatibility.py",
+)
 EXTRA_FILES = (
     "CHECKPOINT_COMPATIBILITY.md",
     "COMPATIBILITY_REPORT.md",

@@ -48,6 +48,7 @@ def test_github_package_manifest_binds_frozen_core_schedule_and_allowlist(tmp_pa
     )["plan_sha256"]
 
     paths = set(manifest["files"])
+    assert "tests/test_checkpoint_compatibility.py" in paths
     assert not any(
         path.lower().endswith((".npz", ".pt", ".pth", ".ckpt"))
         or "/results/" in path
