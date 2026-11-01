@@ -17,12 +17,12 @@
       "sha256": "c6118ca7e356726f0646259da9f3bd49d2922f908dcdea2e7dc3ae08a93e5263"
     },
     "PRODUCTION_COLAB_README.md": {
-      "bytes": 16543,
-      "sha256": "1f84e0944aba6ed374454b683f635fa7ac6fe6f0638021f414bdf4e27c432437"
+      "bytes": 17040,
+      "sha256": "23d6dce741d1b63bc3d4cfc984b32ff4e7dc7154a78ed8a2a801c15a0d55915d"
     },
     "README_GITHUB_COLAB.md": {
-      "bytes": 6770,
-      "sha256": "0597d6b5f43a544d336511c03d6b1b6a51bb3ef9253ee98d7a021d033d8236fc"
+      "bytes": 7127,
+      "sha256": "f35844c3f32f41c1f17bc5e6042d1b3dee521ce0ba26ad87ab85c6c530255e05"
     },
     "checkpoint_compatibility.json": {
       "bytes": 6040,
@@ -185,8 +185,8 @@
       "sha256": "1cb4e713e38096b17c215be584a871defd3edaf611290b74dcff7ddba48defba"
     },
     "scripts/production_workflow.py": {
-      "bytes": 189199,
-      "sha256": "ceed709e6a7f2715cf3b2d82c78170b14fcd161db4fd781f2c4e48c79a747e80"
+      "bytes": 190066,
+      "sha256": "3d8aab77d4eb64d195818c4ba1db4077c2a9e89c4f4fee16be519a18af1a2e7f"
     },
     "tests/conftest.py": {
       "bytes": 169,
@@ -233,8 +233,8 @@
       "sha256": "21a8d5d5d4b2d7692ed58c340d8664e9991e29005785f0007f1fb908f01027e2"
     },
     "tests/test_production_workflow.py": {
-      "bytes": 82246,
-      "sha256": "036b0f232f13567abc2269d205da2b927974ab506d14880906c57972ab207be1"
+      "bytes": 85022,
+      "sha256": "2fb560fb0e2be039b8848f852ac6a5c1ccfa3d74b4ebff0bbd162bfa72f41e67"
     },
     "tests/test_protocol_math.py": {
       "bytes": 7882,

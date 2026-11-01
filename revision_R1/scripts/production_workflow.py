@@ -1580,6 +1580,14 @@ def _inspect_recovery_checkpoint_directory(
             progress_callback({"stage": "checkpoint_hash_complete", "generation": generation, "status": row["integrity_status"]})
     return {
         "directory": str(directory), "manifest_generation_count": len(manifests),
+        "manifest_generations": [generation for generation, _path, _manifest in manifests],
+        "wrong_identity_manifest_generations": [
+            generation for generation, _path, manifest in manifests
+            if manifest.get("identity") != expected_identity
+        ],
+        "uninspected_manifest_generations": [
+            generation for generation, _path, _manifest in manifests[max_candidates:]
+        ],
         "unreadable_manifests": unreadable_manifests,
         "integrity_method": "manifest identity plus bounded 8 MiB streaming SHA-256; payload is not deserialized",
         "candidates": candidates,
@@ -1590,19 +1598,20 @@ def _first_run_resume_gate(recovery: dict[str, Any], expected_identity: dict[str
     """Summarize exact v1.3 recovery evidence without loading its payload object."""
     candidates = recovery.get("candidates", [])
     wrong_identity = [row for row in candidates if row.get("manifest_identity_matches") is not True]
+    wrong_identity_generations = recovery.get("wrong_identity_manifest_generations", [])
     verified = [row for row in candidates
                 if row.get("manifest_identity_matches") is True
                 and row.get("integrity_status") == "PASS_MANIFEST_AND_PAYLOAD_HASH"]
     if recovery.get("error"):
         status, reason = "BLOCKED_UNREADABLE", str(recovery["error"])
-    elif recovery.get("manifest_generation_count", 0) > 2:
-        status, reason = "BLOCKED_UNEXPECTED_GENERATION_COUNT", "recovery namespace exceeds the configured two-generation retention"
-    elif wrong_identity:
+    elif wrong_identity or wrong_identity_generations:
         status, reason = "BLOCKED_IDENTITY_MISMATCH", "a recovery manifest in the immutable namespace has a different run identity"
     elif not verified:
         status, reason = "BLOCKED_NO_VALID_RECOVERY", "no exact-identity generation has a verified payload hash and size"
     else:
         status, reason = "PASS_RESUME_CANDIDATE", "at least one exact-identity checkpoint generation passed manifest and payload hash/size checks; runner deserialization remains required"
+        if recovery.get("manifest_generation_count", 0) > 2:
+            reason += "; additional same-identity manifests are reported but do not block resume (Drive may have deferred pruning); runner still validates and selects the checkpoint"
     newest_manifest_generation = max((int(row["generation"]) for row in candidates), default=None)
     selected = verified[0] if verified else None
     return {
@@ -1619,6 +1628,9 @@ def _first_run_resume_gate(recovery: dict[str, Any], expected_identity: dict[str
         ),
         "checkpoint_cursor_note": "manifest/hash preflight does not deserialize the multi-gigabyte payload; the exact cursor and restored counters come from the runner load. Last progress cursor/counters are informational and may be newer than the last verified Drive snapshot.",
         "manifest_generation_count": recovery.get("manifest_generation_count", 0),
+        "retention_overflow_count": max(0, int(recovery.get("manifest_generation_count", 0)) - 2),
+        "uninspected_manifest_generations": recovery.get("uninspected_manifest_generations", []),
+        "wrong_identity_manifest_generations": wrong_identity_generations,
         "recovery_directory": recovery.get("directory"),
         "integrity_method": recovery.get("integrity_method"),
     }

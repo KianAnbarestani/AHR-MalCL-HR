@@ -353,6 +353,70 @@ def test_first_run_resume_gate_requires_exact_hashed_v13_recovery(tmp_path):
     assert rejected["automatic_fresh_start_allowed"] is False
 
 
+def test_first_run_resume_gate_accepts_verified_candidate_with_protected_extra_manifests(tmp_path):
+    from revision_r1.checkpointing import save_generation
+    from revision_r1.state import PhaseCursor, RunState
+    from scripts.production_workflow import inspect_first_run_resume_checkpoint
+
+    plan = _production_source_plan()
+    preflight = _preflight()
+    record = plan["runs"][0]
+    identity = production_workflow._diagnostic_run_identity(record, preflight)
+    directory = run_checkpoint_root(tmp_path / "checkpoints", record) / "recovery"
+    for task in range(3):
+        save_generation(
+            directory,
+            RunState(identity=identity, cursor=PhaseCursor(task_index=task, phase="gan_critic")),
+            identity,
+            kind="recovery",
+            retain_generations=None,
+        )
+    # Model the observed orphan: its manifest remains but its payload is absent.
+    (directory / "generation-000001.pt").unlink()
+
+    result = inspect_first_run_resume_checkpoint(
+        plan, preflight=preflight, checkpoint_root=tmp_path / "checkpoints",
+    )
+
+    assert result["status"] == "PASS_RESUME_CANDIDATE"
+    assert result["automatic_fresh_start_allowed"] is False
+    assert result["manifest_generation_count"] == 3
+    assert result["retention_overflow_count"] == 1
+    assert result["uninspected_manifest_generations"] == [1]
+    assert result["selected_integrity_verified_candidate"]["generation"] == 3
+
+
+def test_first_run_resume_gate_still_rejects_wrong_identity_in_excess_manifest(tmp_path):
+    from revision_r1.checkpointing import save_generation
+    from revision_r1.state import PhaseCursor, RunState
+    from scripts.production_workflow import inspect_first_run_resume_checkpoint
+
+    plan = _production_source_plan()
+    preflight = _preflight()
+    record = plan["runs"][0]
+    identity = production_workflow._diagnostic_run_identity(record, preflight)
+    directory = run_checkpoint_root(tmp_path / "checkpoints", record) / "recovery"
+    for task in range(3):
+        save_generation(
+            directory,
+            RunState(identity=identity, cursor=PhaseCursor(task_index=task, phase="gan_critic")),
+            identity,
+            kind="recovery",
+            retain_generations=None,
+        )
+    oldest_manifest = directory / "generation-000001.manifest.json"
+    document = json.loads(oldest_manifest.read_text(encoding="utf-8"))
+    document["identity"]["code_sha256"] = "0" * 64
+    oldest_manifest.write_text(json.dumps(document), encoding="utf-8")
+
+    result = inspect_first_run_resume_checkpoint(
+        plan, preflight=preflight, checkpoint_root=tmp_path / "checkpoints",
+    )
+
+    assert result["status"] == "BLOCKED_IDENTITY_MISMATCH"
+    assert result["automatic_fresh_start_allowed"] is False
+
+
 def test_first_run_resume_gate_blocks_absent_recovery_instead_of_fresh_start(tmp_path):
     from scripts.production_workflow import inspect_first_run_resume_checkpoint
 

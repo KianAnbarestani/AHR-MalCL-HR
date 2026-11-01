@@ -187,6 +187,14 @@ them; actual retained bytes are reported. Task-boundary snapshots remain
 separate and are never pruned. Files already in Drive Trash are not removed
 automatically and continue to consume quota.
 
+The read-only resume gate may report more than two recovery manifests when
+older files could not be pruned. It checks every parseable manifest's run
+identity and hashes the two newest candidates; extra same-identity manifests
+are reported but do not alone block resumption. A mismatched identity or the
+absence of a verified candidate still blocks. Before loading, the runner
+revalidates the namespace and selects a valid checkpoint; it never starts a
+fresh run to work around recovery evidence.
+
 ## RAM/OOM safeguards
 
 Production cache creation streams compressed NPZ members to `.npy` files in

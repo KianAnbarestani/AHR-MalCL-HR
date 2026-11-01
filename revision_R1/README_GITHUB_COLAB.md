@@ -45,6 +45,11 @@ generations may make physical retention temporarily exceed the two-generation
 target. Progress reports include deferred filenames and actual retained bytes;
 task-boundary archives and unrelated files are never pruned. Existing Drive
 Trash is not emptied automatically and continues to consume quota.
+The read-only resume gate checks every parseable manifest's exact run identity
+and hashes the two newest candidates. Protected same-identity manifests beyond
+the two-generation target are reported but do not alone block resumption; an
+identity mismatch or no verified candidate still blocks, and the runner
+revalidates the namespace before restoring state.
 
 Before resuming the first production run, the capacity envelope is sized from
 the maximum payload in the exact-identity recovery/task-boundary manifests
