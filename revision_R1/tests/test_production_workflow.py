@@ -1913,6 +1913,33 @@ class _FinalizationDriveFiles(_FakeFiles):
         self.fail_once_name = fail_once_name
         self.failed_once = False
         self.fail_media_readback = False
+        self.discover_local_folders = True
+        self.created_folder_ids = []
+
+    def create(self, *, body, fields=None, **_kwargs):
+        parent_ids = body.get("parents", [])
+        if len(parent_ids) != 1 or body.get("mimeType") != "application/vnd.google-apps.folder":
+            raise AssertionError("test Drive folder creation must have one exact parent and folder MIME type")
+        parent_id = str(parent_ids[0])
+        if parent_id not in self.records or self.records[parent_id].get("capabilities", {}).get("canAddChildren") is not True:
+            raise PermissionError("test Drive parent does not permit adding children")
+        file_id = f"created-folder-{len(self.created_folder_ids) + 1}"
+        record = {
+            "id": file_id, "name": body["name"], "mimeType": body["mimeType"],
+            "parents": [parent_id], "owners": [{"emailAddress": "current-editor@example.org"}],
+            "ownedByMe": True, "capabilities": {"canAddChildren": True},
+        }
+        self.records[file_id] = record
+        self.created_folder_ids.append(file_id)
+        parent_components = []
+        cursor = self.records[parent_id]
+        while cursor.get("id") != "root":
+            parent_components.append(cursor["name"])
+            ancestors = cursor.get("parents", [])
+            cursor = self.records[ancestors[0]] if ancestors else {"id": "root"}
+        target_dir = self.drive_root.joinpath(*reversed(parent_components), body["name"])
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return _FakeRequest(record)
 
     def get(self, *, fileId, alt=None, **kwargs):
         if alt == "media" and self.fail_media_readback:
@@ -1948,7 +1975,7 @@ class _FinalizationDriveFiles(_FakeFiles):
             }
             for path in local_dir.iterdir() if local_dir.is_dir() else ():
                 record = existing.get(path.name)
-                if path.is_dir():
+                if path.is_dir() and self.discover_local_folders:
                     if record is None:
                         file_id = f"mounted-folder-{parent}-{path.name}"
                         self.records[file_id] = {
@@ -2161,6 +2188,139 @@ def test_finalization_reconciles_older_orphan_manifests_and_retries_safely(tmp_p
     assert {path.name: file_sha256(path) for path in boundaries.iterdir()} == boundary_hashes
     assert file_sha256(output / "artifact_manifest.json") == output_manifest_hash
     assert retried["storage_measurement"] == repeated["storage_measurement"]
+
+
+def test_finalization_creates_and_verifies_missing_drive_journal_folders(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    _identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, _identity)
+    (recovery / "generation-000001.pt").unlink()
+    (recovery / "generation-000002.pt").unlink()
+    service = _finalization_drive_service(recovery, drive_root)
+    service.files().discover_local_folders = False
+
+    result = production_workflow.finalize_completed_production_run(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+
+    journal = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    assert result["status"] == "FINALIZED_COMPLETED_RUN"
+    assert result["recovery_retention"]["retained_generations"] == [3, 4]
+    assert len(service.files().created_folder_ids) == 2
+    assert [service.records[file_id]["name"] for file_id in service.files().created_folder_ids] == [
+        "_finalization", plan["plan_sha256"],
+    ]
+    location = production_workflow.resolve_drive_folder(
+        service, production_workflow._logical_drive_path_components(journal.parent, drive_root=drive_root)[1],
+    )
+    assert location["path_exists"] is True
+    metadata = production_workflow._lookup_drive_child(service, location["folder_id"], journal.name)
+    assert metadata is not None
+    assert service.files().get(fileId=metadata["id"], alt="media").execute() == journal.read_bytes()
+
+
+def test_finalization_recovers_preexisting_local_only_retention_journal(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    (recovery / "generation-000001.pt").unlink()
+    (recovery / "generation-000002.pt").unlink()
+    service = _finalization_drive_service(recovery, drive_root)
+    service.files().discover_local_folders = False
+    recovery_folder = production_workflow._drive_recovery_folder(service, recovery, drive_root)
+    inspected = production_workflow._inspect_verified_recovery_tree(
+        recovery, identity, service, recovery_folder["folder_id"],
+    )
+    orphan_rows = []
+    for orphan in inspected["orphan_manifests"]:
+        manifest_file = orphan["manifest_file"]
+        orphan_rows.append({
+            "generation": orphan["generation"], "name": manifest_file["name"],
+            "drive_file_id": manifest_file["drive_file_id"], "size_bytes": manifest_file["size_bytes"],
+            "local_sha256": manifest_file["local_sha256"], "can_delete": manifest_file["can_delete"],
+            "identity_sha256": orphan["identity_sha256"], "payload_file": orphan["payload_file"],
+            "payload_bytes": orphan["payload_bytes"], "payload_sha256": orphan["payload_sha256"],
+        })
+    journal = {
+        "schema_version": 1, "status": "PREPARED", "plan_sha256": plan["plan_sha256"],
+        "run_key": record["run_key"], "run_id": production_workflow._run_id_for(record, synthetic=False),
+        "identity": identity, "identity_sha256": production_workflow._sha256_json(identity),
+        "recovery_folder": recovery_folder, "protected_generations": [3, 4],
+        "initial_recovery_inventory": inspected["verified_generations"], "delete_generations": [],
+        "delete_orphan_manifests": orphan_rows, "deleted_files": [],
+        "orphan_manifest_reconciliation": {
+            "status": "PREPARED", "mechanism": "test fixture matching a local-only prior attempt",
+            "specific_cause_established_from_run_logs": False,
+            "reason": "older manifest-only generations are followed by two verified recovery points",
+        },
+        "rotation_explanation": production_workflow._rotation_deferred_pruning_evidence(
+            output_root, plan, record, [],
+        ),
+        "prepared_utc": "2026-11-02T00:00:00+00:00",
+    }
+    journal["journal_sha256"] = production_workflow._finalization_journal_digest(journal)
+    journal_path = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    production_workflow._atomic_json(journal_path, journal)
+
+    result = production_workflow.finalize_completed_production_run(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+
+    published_journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert result["status"] == "FINALIZED_COMPLETED_RUN"
+    assert result["recovery_retention"]["retained_generations"] == [3, 4]
+    assert published_journal["journal_drive_file_id"]
+    assert published_journal["journal_drive_parent_id"]
+    assert [service.records[file_id]["name"] for file_id in service.files().created_folder_ids] == [
+        "_finalization", plan["plan_sha256"],
+    ]
+
+
+def test_finalization_journal_folder_creation_fails_closed_without_parent_permission(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    _identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, _identity)
+    (recovery / "generation-000001.pt").unlink()
+    (recovery / "generation-000002.pt").unlink()
+    before = {path.name: path.read_bytes() for path in recovery.iterdir()}
+    service = _finalization_drive_service(recovery, drive_root)
+    service.files().discover_local_folders = False
+    checkpoint_record = next(
+        row for row in service.records.values() if row.get("name") == "checkpoints"
+    )
+    checkpoint_record["capabilities"]["canAddChildren"] = False
+
+    with pytest.raises(StorageCapacityError, match="canAddChildren"):
+        production_workflow.finalize_completed_production_run(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    journal = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    assert not journal.exists()
+    assert {path.name: path.read_bytes() for path in recovery.iterdir()} == before
+    assert service.deleted_ids == set()
+    assert service.files().created_folder_ids == []
 
 
 @pytest.mark.parametrize("orphan_case", ["newer_than_fallback", "delete_denied"])

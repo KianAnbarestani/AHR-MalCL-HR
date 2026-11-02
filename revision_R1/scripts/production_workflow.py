@@ -588,6 +588,97 @@ def resolve_drive_folder(service, components: tuple[str, ...] | list[str]) -> di
     }
 
 
+def _ensure_drive_folder_path(service, components: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    """Create only missing exact path components after verifying parent write capability.
+
+    Colab's mounted Drive view can create a local directory before Drive's API
+    exposes it. Finalization journals must be API-readable before checkpoint
+    pruning, so provision their exact parent folders through Drive and then
+    re-resolve the full path. Existing folders/shortcuts continue to be resolved
+    by resolve_drive_folder; no path is guessed from mount symlinks.
+    """
+    names = tuple(str(value) for value in components)
+    current = resolve_drive_folder(service, names)
+    if current.get("path_exists") is True and current.get("folder_id"):
+        return current
+    unresolved = current.get("unresolved_components")
+    if not isinstance(unresolved, list) or not unresolved:
+        raise StorageCapacityError("Drive folder resolver returned an invalid missing-component record")
+
+    resolved_count = len(names) - len(unresolved)
+    expected_parent_id = str(current.get("parent_id") or "")
+    if not expected_parent_id or current.get("can_add_children") is not True:
+        raise StorageCapacityError(
+            "cannot create the exact Drive journal folder: parent ID or canAddChildren permission is unverified"
+        )
+
+    for offset, name in enumerate(unresolved):
+        prefix = names[: resolved_count + offset + 1]
+        prefix_location = resolve_drive_folder(service, prefix)
+        if prefix_location.get("path_exists") is True and prefix_location.get("folder_id"):
+            expected_parent_id = str(prefix_location["folder_id"])
+            continue
+        parent_id = str(prefix_location.get("parent_id") or "")
+        if (
+            not parent_id
+            or parent_id != expected_parent_id
+            or prefix_location.get("can_add_children") is not True
+            or prefix_location.get("unresolved_components") != [name]
+        ):
+            raise StorageCapacityError(
+                f"cannot create Drive journal folder {name!r}: exact parent ancestry/write capability is not verified"
+            )
+        try:
+            created = service.files().create(
+                body={"name": name, "mimeType": DRIVE_FOLDER_MIME, "parents": [parent_id]},
+                fields="id,name,mimeType,parents,owners(emailAddress),driveId,capabilities(canAddChildren),ownedByMe",
+                supportsAllDrives=True,
+            ).execute()
+        except Exception as exc:
+            # A concurrent external creator is acceptable only if a fresh exact
+            # resolution finds one unambiguous folder at the requested prefix.
+            after_error = resolve_drive_folder(service, prefix)
+            if after_error.get("path_exists") is True and after_error.get("folder_id"):
+                expected_parent_id = str(after_error["folder_id"])
+                continue
+            raise StorageCapacityError(
+                f"Drive could not create the exact journal folder {name!r} under verified parent {parent_id}: {exc}"
+            ) from exc
+        created_id = str(created.get("id") or "") if isinstance(created, dict) else ""
+        if (
+            not created_id
+            or created.get("name") != name
+            or created.get("mimeType") != DRIVE_FOLDER_MIME
+            or parent_id not in [str(value) for value in created.get("parents", [])]
+        ):
+            raise StorageCapacityError(
+                f"Drive folder creation response did not verify the exact name, type, and parent for {name!r}"
+            )
+        created_metadata = _get_drive_file(service, created_id)
+        if (
+            created_metadata.get("id") != created_id
+            or created_metadata.get("name") != name
+            or created_metadata.get("mimeType") != DRIVE_FOLDER_MIME
+            or parent_id not in [str(value) for value in created_metadata.get("parents", [])]
+        ):
+            raise StorageCapacityError(f"Drive-created journal folder {name!r} failed metadata read-back")
+        after_create = resolve_drive_folder(service, prefix)
+        if (
+            after_create.get("path_exists") is not True
+            or str(after_create.get("folder_id")) != created_id
+            or str(after_create.get("parent_id")) != parent_id
+        ):
+            raise StorageCapacityError(
+                f"Drive-created journal folder {name!r} did not resolve back to its verified identity"
+            )
+        expected_parent_id = created_id
+
+    resolved = resolve_drive_folder(service, names)
+    if resolved.get("path_exists") is not True or not resolved.get("folder_id"):
+        raise StorageCapacityError("Drive journal parent path remains unresolved after exact folder provisioning")
+    return resolved
+
+
 def _owner_email(metadata: dict[str, Any]) -> str | None:
     owners = metadata.get("owners") or []
     if not owners or not isinstance(owners[0], dict):
@@ -2652,6 +2743,15 @@ def _save_recovery_finalization_journal(
         path, required_bytes=required_bytes, reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
         available_bytes=local_available, storage_kind="Colab local journal staging",
     )
+    # A mounted-path read-back only verifies the Colab mount cache. Before any
+    # checkpoint is pruned, prove that Drive itself sees this exact journal and
+    # can return its exact bytes. Bind the Drive file/folder IDs into the journal
+    # so retries cannot silently switch to a same-name replacement.
+    _configured, components = _logical_drive_path_components(path.parent, drive_root=drive_root)
+    location = _ensure_drive_folder_path(service, components)
+    parent_id = str(location.get("folder_id") or "")
+    if location.get("path_exists") is not True or not parent_id:
+        raise StorageCapacityError("cannot resolve the exact Drive folder for the recovery-retention journal")
     _atomic_json(path, document)
     try:
         observed = json.loads(path.read_text(encoding="utf-8"))
@@ -2659,16 +2759,6 @@ def _save_recovery_finalization_journal(
         raise StorageCapacityError("recovery-retention journal read-back failed; no additional checkpoint pruning will continue") from exc
     if observed != document or observed.get("journal_sha256") != _finalization_journal_digest(observed):
         raise StorageCapacityError("recovery-retention journal read-back/hash verification failed")
-
-    # A mounted-path read-back only verifies the Colab mount cache. Before any
-    # checkpoint is pruned, prove that Drive itself sees this exact journal and
-    # can return its exact bytes. Bind the Drive file/folder IDs into the journal
-    # so retries cannot silently switch to a same-name replacement.
-    _configured, components = _logical_drive_path_components(path.parent, drive_root=drive_root)
-    location = resolve_drive_folder(service, components)
-    parent_id = str(location.get("folder_id") or "")
-    if location.get("path_exists") is not True or not parent_id:
-        raise StorageCapacityError("cannot resolve the exact Drive folder for the recovery-retention journal")
     deadline = time.monotonic() + 20.0
     metadata = None
     while time.monotonic() < deadline:
