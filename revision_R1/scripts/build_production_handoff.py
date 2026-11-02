@@ -18,9 +18,9 @@ from scripts.production_workflow import (
 )
 
 
-PRODUCTION_BUILD_ID = "revision_R1_production_v1_4_7_20261101"
-CODE_ZIP_FILENAME = "revision_R1_production_v1_4_7_20261101.zip"
-DISTRIBUTED_NOTEBOOK_FILENAME = "Revision_R1_Production_Colab_v1_4_7_20261101.ipynb"
+PRODUCTION_BUILD_ID = "revision_R1_production_v1_4_8_20261102"
+CODE_ZIP_FILENAME = "revision_R1_production_v1_4_8_20261102.zip"
+DISTRIBUTED_NOTEBOOK_FILENAME = "Revision_R1_Production_Colab_v1_4_8_20261102.ipynb"
 LEGACY_IDENTITY_FILENAME = "legacy_v1_2_first_run_identity.json"
 AUTHENTIC_V1_2_ZIP_SHA256 = "2647c6bb51b3e3c28fd3009008f6f616deac5e73f725fd20e66aebbb23097d9c"
 AUTHENTIC_V1_2_SOURCE_SHA256 = "bd175dcc27492f848459653536c63aa7bed8421bc16c60d7141fa359004e8660"
@@ -37,6 +37,7 @@ RELEASE_TESTS = (
     "test_live_progress.py",
     "test_package_import.py",
     "test_production_notebook.py",
+    "test_production_notebook_generator_guards.py",
     "test_production_workflow.py",
     "test_protocol_math.py",
     "test_registry_lock.py",
@@ -201,6 +202,8 @@ if PREFLIGHT.get("status") != "PREFLIGHT_VALIDATED_NO_TRAINING" or PREFLIGHT.get
     raise ValueError("Drive preflight is not a validated no-training schedule/data record")
 
 from scripts.dataset_bootstrap import prepare_dataset_roots
+DRIVE_PATHS.setdefault("local_dataset_root", "/content/revision_R1_production/datasets")
+LOCAL_DATASET_ROOT = Path(DRIVE_PATHS["local_dataset_root"]).expanduser()
 def _dataset_download_progress(event):
     print("DATASET DOWNLOAD:", json.dumps(event, sort_keys=True), flush=True)
 
@@ -209,7 +212,7 @@ DATA_ROOTS, DATASET_SOURCE_REPORT = prepare_dataset_roots(
         "ember": Path(DRIVE_PATHS["ember_data_root"]).expanduser(),
         "az_class": Path(DRIVE_PATHS["az_data_root"]).expanduser(),
     }},
-    Path(DRIVE_PATHS["local_dataset_root"]).expanduser(), PREFLIGHT,
+    LOCAL_DATASET_ROOT, PREFLIGHT,
     progress_callback=_dataset_download_progress,
 )
 
@@ -364,6 +367,7 @@ if matrix_status != "PROJECTED_FIT":
 import json, os, socket, time, uuid
 from datetime import datetime, timezone
 from revision_r1.data import inspect_npz_array_layout
+from revision_r1.config import DATASETS
 from revision_r1.resources import read_host_memory_snapshot
 from scripts.production_workflow import inspect_first_run_lease_and_progress
 
@@ -505,7 +509,7 @@ with LEASE_DIAGNOSTIC_PATH.open("x", encoding="utf-8") as _stream:
     os.fsync(_stream.fileno())
 print("READ-ONLY DIAGNOSTIC SAVED:", LEASE_DIAGNOSTIC_PATH)
 print("DATASET ROOTS AND SOURCES (read-only):")
-print(json.dumps({"roots": {{name: str(path) for name, path in DATA_ROOTS.items()}},
+print(json.dumps({"roots": {name: str(path) for name, path in DATA_ROOTS.items()},
                   "sources": DATASET_SOURCE_REPORT}, sort_keys=True, indent=2))
 CURRENT_V13_NAMESPACE = next(
     row for row in LEASE_RAM_DIAGNOSTIC["run_namespaces"]

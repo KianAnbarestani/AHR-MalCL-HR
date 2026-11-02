@@ -117,8 +117,8 @@ def test_production_notebook_cells_parse_and_are_ordered_with_launches_disabled(
     assert "from pathlib import Path, PurePosixPath" in code_cells[0]
     assert "PurePosixPath(member.filename)" in code_cells[0]
     assert f'EXPECTED_ZIP_SHA256 = "{pinned_zip_sha256}"' in code_cells[0]
-    assert "revision_R1_production_v1_4_7_20261101" in joined
-    assert "Revision_R1_Production_Colab_v1_4_7_20261101" not in joined
+    assert "revision_R1_production_v1_4_8_20261102" in joined
+    assert "Revision_R1_Production_Colab_v1_4_8_20261102" not in joined
     assert "FINALIZE_COMPLETED_FIRST_RUN = False" in code_cells[7]
     assert "finalize_completed_production_run(" in code_cells[7]
     assert "FINALIZATION_REPORT" in code_cells[7]
