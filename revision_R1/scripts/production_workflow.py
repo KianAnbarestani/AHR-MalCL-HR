@@ -2439,7 +2439,7 @@ def _drive_checkpoint_file_record(
 def _inspect_verified_recovery_tree(
     recovery: Path, identity: dict[str, Any], service, parent_id: str, *,
     progress_callback=None,
-) -> list[dict[str, Any]]:
+) -> dict[str, list[dict[str, Any]]]:
     from revision_r1.validation import file_sha256
 
     manifest_paths = sorted(recovery.glob("generation-*.manifest.json"))
@@ -2465,6 +2465,7 @@ def _inspect_verified_recovery_tree(
         raise ValueError(f"no recovery manifests exist under {recovery}")
 
     inventory: list[dict[str, Any]] = []
+    orphan_manifests: list[dict[str, Any]] = []
     seen_generations: set[int] = set()
     referenced_payloads: set[str] = set()
     for manifest_path in manifest_paths:
@@ -2497,8 +2498,37 @@ def _inspect_verified_recovery_tree(
         ):
             raise ValueError(f"recovery manifest identity, generation, or payload metadata is invalid: {manifest_path}")
         payload_path = recovery / expected_payload_name
+        manifest_hash = file_sha256(manifest_path)
+        manifest_metadata = remote_generation_files[manifest_path.name][0]
+        manifest_file = _drive_checkpoint_file_record(
+            manifest_path, manifest_metadata, parent_id,
+            expected_bytes=manifest_path.stat().st_size, expected_sha256=manifest_hash,
+        )
         if not payload_path.is_file():
-            raise ValueError(f"recovery manifest payload is missing: {payload_path}")
+            if expected_payload_name in remote_generation_files:
+                raise StorageCapacityError(
+                    f"Drive lists recovery payload {expected_payload_name} but it is absent from the mounted folder"
+                )
+            orphan_manifests.append({
+                "generation": generation,
+                "kind": manifest["kind"],
+                "identity_sha256": manifest["identity_sha256"],
+                "payload_file": expected_payload_name,
+                "payload_bytes": manifest["payload_bytes"],
+                "payload_sha256": manifest["payload_sha256"],
+                "manifest_sha256": manifest_hash,
+                "manifest_file": manifest_file,
+                "integrity_status": "PASS_MANIFEST_ONLY_PAYLOAD_MISSING",
+            })
+            if progress_callback is not None:
+                progress_callback({
+                    "stage": "recovery_orphan_manifest_verified",
+                    "generation": generation,
+                    "manifest_sha256": manifest_hash,
+                    "missing_payload": expected_payload_name,
+                    "manifest_file": manifest_file,
+                })
+            continue
         if payload_path.stat().st_size != manifest["payload_bytes"]:
             raise ValueError(f"recovery payload byte count differs from its manifest: {payload_path}")
         if progress_callback is not None:
@@ -2506,12 +2536,7 @@ def _inspect_verified_recovery_tree(
         payload_hash = file_sha256(payload_path)
         if payload_hash != manifest["payload_sha256"]:
             raise ValueError(f"recovery payload SHA-256 differs from its manifest: {payload_path}")
-        manifest_hash = file_sha256(manifest_path)
-        manifest_metadata = remote_generation_files[manifest_path.name][0]
         payload_metadata = remote_generation_files[expected_payload_name][0]
-        manifest_file = _drive_checkpoint_file_record(
-            manifest_path, manifest_metadata, parent_id,
-        )
         payload_file = _drive_checkpoint_file_record(
             payload_path, payload_metadata, parent_id,
             expected_bytes=manifest["payload_bytes"], expected_sha256=manifest["payload_sha256"],
@@ -2544,7 +2569,8 @@ def _inspect_verified_recovery_tree(
             f"missing={sorted(referenced_payloads - payload_names)}"
         )
     inventory.sort(key=lambda item: item["generation"])
-    return inventory
+    orphan_manifests.sort(key=lambda item: item["generation"])
+    return {"verified_generations": inventory, "orphan_manifests": orphan_manifests}
 
 
 def _rotation_deferred_pruning_evidence(
@@ -2723,6 +2749,8 @@ def _validate_recovery_finalization_journal(
         or not isinstance(document.get("protected_generations"), list)
         or len(document["protected_generations"]) != 2
         or not isinstance(document.get("delete_generations"), list)
+        or not isinstance(document.get("delete_orphan_manifests", []), list)
+        or not isinstance(document.get("orphan_manifest_reconciliation", {}), dict)
         or not document.get("journal_drive_file_id")
         or not document.get("journal_drive_parent_id")
         or document.get("status") not in {"PREPARED", "RETENTION_VERIFIED"}
@@ -2752,6 +2780,30 @@ def _validate_recovery_finalization_journal(
                 or item.get("can_delete") is not True
             ):
                 raise ValueError("recovery-retention journal contains unverified deletion metadata")
+    orphan_names: set[str] = set()
+    for item in document.get("delete_orphan_manifests", []):
+        generation = item.get("generation") if isinstance(item, dict) else None
+        expected_name = f"generation-{generation:06d}.manifest.json" if type(generation) is int else None
+        if (
+            not isinstance(item, dict)
+            or type(generation) is not int
+            or generation < 1
+            or generation >= protected[0]
+            or item.get("name") != expected_name
+            or item.get("name") in orphan_names
+            or not item.get("drive_file_id")
+            or type(item.get("size_bytes")) is not int
+            or item["size_bytes"] <= 0
+            or not _is_sha256(item.get("local_sha256"))
+            or item.get("can_delete") is not True
+            or item.get("identity_sha256") != document.get("identity_sha256")
+            or item.get("payload_file") != f"generation-{generation:06d}.pt"
+            or type(item.get("payload_bytes")) is not int
+            or item["payload_bytes"] <= 0
+            or not _is_sha256(item.get("payload_sha256"))
+        ):
+            raise ValueError("recovery-retention journal contains unverified orphan-manifest deletion metadata")
+        orphan_names.add(item["name"])
     return document
 
 
@@ -2785,6 +2837,8 @@ def _resume_recovery_finalization_deletions(
         item["name"]
         for generation in journal["delete_generations"] for item in generation["files"]
     }
+    orphan_deletions = journal.get("delete_orphan_manifests", [])
+    target_names.update(item["name"] for item in orphan_deletions)
     protected_names = {
         file_record["name"]
         for row in journal["initial_recovery_inventory"]
@@ -2871,9 +2925,85 @@ def _resume_recovery_finalization_deletions(
             if progress_callback is not None:
                 progress_callback({"stage": "recovery_stale_file_deleted", "generation": generation["generation"], "file": item["name"]})
 
-    final_inventory = _inspect_verified_recovery_tree(
+    # An orphan manifest is not a recovery point. Remove it only when the
+    # journal binds its exact manifest bytes/Drive ID and two newer complete
+    # recovery generations have already been re-verified above.
+    for item in sorted(orphan_deletions, key=lambda row: row["generation"]):
+        path = recovery / item["name"]
+        payload_path = recovery / item["payload_file"]
+        metadata = _lookup_drive_child(service, parent_id, item["name"])
+        if metadata is None:
+            if path.exists():
+                raise StorageCapacityError(
+                    f"Drive removed orphan manifest {item['name']} but the mounted view still exposes it; wait for synchronization and retry"
+                )
+            deleted_names.add(item["name"])
+            continue
+        if payload_path.exists() or item["payload_file"] in names_to_records:
+            raise StorageCapacityError(
+                f"orphan manifest {item['name']} now has a payload; refusing orphan cleanup"
+            )
+        if not path.is_file():
+            raise StorageCapacityError(
+                f"Drive lists orphan manifest {item['name']} but the mounted manifest is unavailable"
+            )
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"journaled orphan manifest is unreadable: {path}") from exc
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("generation") != item["generation"]
+            or manifest.get("identity") != identity
+            or manifest.get("identity_sha256") != item["identity_sha256"]
+            or manifest.get("payload_file") != item["payload_file"]
+            or manifest.get("payload_bytes") != item["payload_bytes"]
+            or manifest.get("payload_sha256") != item["payload_sha256"]
+            or file_sha256(path) != item["local_sha256"]
+        ):
+            raise ValueError(f"journaled orphan manifest {item['name']} changed since retention was prepared")
+        actual = _drive_checkpoint_file_record(
+            path, metadata, parent_id,
+            expected_bytes=item["size_bytes"], expected_sha256=item["local_sha256"],
+        )
+        if actual["drive_file_id"] != item["drive_file_id"] or actual["can_delete"] is not True:
+            raise StorageCapacityError(
+                f"Drive identity or canDelete changed for orphan manifest {item['name']}; preserved"
+            )
+        if progress_callback is not None:
+            progress_callback({"stage": "recovery_orphan_manifest_delete_start", "generation": item["generation"], "file": actual})
+        try:
+            deleted = permanently_delete_recovery_checkpoint(
+                path, api_factory=api_factory, drive_root=drive_root,
+                expected_drive_file_id=item["drive_file_id"], expected_parent_id=parent_id,
+            )
+        except Exception as exc:
+            raise StorageCapacityError(
+                f"Drive delete failure for orphan manifest {item['name']}; retention journal is preserved for a safe retry: {exc}"
+            ) from exc
+        if deleted is not True:
+            raise StorageCapacityError(
+                f"Drive no longer grants canDelete for orphan manifest {item['name']}; retention journal is preserved"
+            )
+        deadline = time.monotonic() + 15.0
+        while path.exists() and time.monotonic() < deadline:
+            time.sleep(0.25)
+        if path.exists():
+            raise StorageCapacityError(
+                f"Drive API removed orphan manifest {item['name']} but the mounted path has not synchronized; retry after synchronization"
+            )
+        deleted_names.add(item["name"])
+        journal["deleted_files"] = sorted(deleted_names)
+        _save_recovery_finalization_journal(journal_path, journal, service, drive_root=drive_root)
+        if progress_callback is not None:
+            progress_callback({"stage": "recovery_orphan_manifest_deleted", "generation": item["generation"], "file": item["name"]})
+
+    inspected_final = _inspect_verified_recovery_tree(
         recovery, identity, service, parent_id, progress_callback=progress_callback,
     )
+    final_inventory = inspected_final["verified_generations"]
+    if inspected_final["orphan_manifests"]:
+        raise StorageCapacityError("orphan recovery manifests remain after journaled cleanup")
     if [row["generation"] for row in final_inventory] != expected_protected:
         raise StorageCapacityError(
             "recovery retention read-back does not match the two journaled generations: "
@@ -2884,6 +3014,12 @@ def _resume_recovery_finalization_deletions(
     journal["deleted_files"] = sorted(deleted_names)
     journal["status"] = "RETENTION_VERIFIED"
     journal["retention_verified_inventory"] = final_inventory
+    orphan_reconciliation = journal.setdefault("orphan_manifest_reconciliation", {})
+    if orphan_deletions:
+        orphan_reconciliation["status"] = "VERIFIED_DELETED"
+        orphan_reconciliation["deleted_manifest_names"] = [row["name"] for row in orphan_deletions]
+    else:
+        orphan_reconciliation["status"] = "NOT_REQUIRED"
     _save_recovery_finalization_journal(journal_path, journal, service, drive_root=drive_root)
 
 
@@ -2965,6 +3101,7 @@ def finalize_completed_production_run(
             journal = _validate_recovery_finalization_journal(journal_path, plan, record, identity)
             initial_inventory = journal["initial_recovery_inventory"]
             delete_generations = journal["delete_generations"]
+            delete_orphan_manifests = journal.get("delete_orphan_manifests", [])
             rotation_explanation = journal["rotation_explanation"]
             callback({
                 "stage": "recovery_retention_journal_resume", "journal_path": str(journal_path),
@@ -2975,14 +3112,17 @@ def finalize_completed_production_run(
                 api_factory=lambda: service, progress_callback=callback,
             )
         else:
-            initial_inventory = _inspect_verified_recovery_tree(
+            inspected_initial = _inspect_verified_recovery_tree(
                 recovery, identity, service, folder["folder_id"], progress_callback=callback,
             )
+            initial_inventory = inspected_initial["verified_generations"]
+            orphan_manifests = inspected_initial["orphan_manifests"]
             generations = [row["generation"] for row in initial_inventory]
             callback({
                 "stage": "recovery_inventory_complete",
                 "generations": generations,
                 "generation_count": len(initial_inventory),
+                "orphan_manifest_generations": [row["generation"] for row in orphan_manifests],
                 "manifest_and_payload_hashes_verified": True,
                 "drive_files_verified": True,
             })
@@ -2994,11 +3134,36 @@ def finalize_completed_production_run(
             retained = initial_inventory[-RECOVERY_GENERATIONS_PER_RUN:]
             if retained[-1]["kind"] != "complete":
                 raise ValueError("newest verified recovery point is not the terminal complete generation; no pruning performed")
+            if any(row["generation"] >= retained[0]["generation"] for row in orphan_manifests):
+                raise ValueError(
+                    "an incomplete recovery manifest is as new as a required retained recovery point; "
+                    "preserving all files because the fallback chain is ambiguous"
+                )
+            delete_orphan_manifests = []
+            for orphan in orphan_manifests:
+                manifest_file = orphan["manifest_file"]
+                if manifest_file.get("can_delete") is not True:
+                    raise StorageCapacityError(
+                        f"Drive canDelete is not verified true for orphan manifest {manifest_file['name']}; "
+                        "all recovery files are preserved"
+                    )
+                delete_orphan_manifests.append({
+                    "generation": orphan["generation"],
+                    "name": manifest_file["name"],
+                    "drive_file_id": manifest_file["drive_file_id"],
+                    "size_bytes": manifest_file["size_bytes"],
+                    "local_sha256": manifest_file["local_sha256"],
+                    "can_delete": manifest_file["can_delete"],
+                    "identity_sha256": orphan["identity_sha256"],
+                    "payload_file": orphan["payload_file"],
+                    "payload_bytes": orphan["payload_bytes"],
+                    "payload_sha256": orphan["payload_sha256"],
+                })
             delete_generations = initial_inventory[:-RECOVERY_GENERATIONS_PER_RUN]
             rotation_explanation = _rotation_deferred_pruning_evidence(
                 output_root_path, plan, record, delete_generations,
             )
-            if delete_generations:
+            if delete_generations or delete_orphan_manifests:
                 for generation in delete_generations:
                     for role in ("payload", "manifest"):
                         item = generation["files"][role]
@@ -3024,7 +3189,22 @@ def finalize_completed_production_run(
                     "identity_sha256": _sha256_json(identity),
                     "recovery_folder": folder, "protected_generations": [row["generation"] for row in retained],
                     "initial_recovery_inventory": initial_inventory,
-                    "delete_generations": delete_rows, "deleted_files": [],
+                    "delete_generations": delete_rows,
+                    "delete_orphan_manifests": delete_orphan_manifests,
+                    "deleted_files": [],
+                    "orphan_manifest_reconciliation": {
+                        "status": "PREPARED" if delete_orphan_manifests else "NOT_REQUIRED",
+                            "mechanism": (
+                                "checkpoint rotation deletes a stale payload before its manifest; an interrupted or failed "
+                                "manifest deletion can leave a manifest-only generation"
+                            ) if delete_orphan_manifests else None,
+                            "specific_cause_established_from_run_logs": False,
+                        "reason": (
+                            "manifest metadata and current identity were verified, payloads were absent from both "
+                            "the mounted recovery folder and exact Drive folder, and two newer verified recovery "
+                            "points were protected"
+                        ) if delete_orphan_manifests else None,
+                    },
                     "rotation_explanation": rotation_explanation,
                     "prepared_utc": datetime.now(timezone.utc).isoformat(),
                 }
@@ -3032,6 +3212,7 @@ def finalize_completed_production_run(
                     "stage": "recovery_retention_journal_write_start", "journal_path": str(journal_path),
                     "protected_generations": journal["protected_generations"],
                     "delete_generations": [row["generation"] for row in delete_rows],
+                    "delete_orphan_manifests": [row["name"] for row in delete_orphan_manifests],
                 })
                 _save_recovery_finalization_journal(
                     journal_path, journal, service, drive_root=drive_root_path,
@@ -3043,6 +3224,7 @@ def finalize_completed_production_run(
                 )
                 delete_generations = journal["delete_generations"]
                 initial_inventory = journal["initial_recovery_inventory"]
+                delete_orphan_manifests = journal.get("delete_orphan_manifests", [])
             else:
                 if [row["generation"] for row in retained] != generations:
                     raise RuntimeError("recovery retention selection did not preserve the two latest valid generations")
@@ -3050,9 +3232,12 @@ def finalize_completed_production_run(
                     raise ValueError("newest retained recovery generation is not complete")
 
         final_folder = _drive_recovery_folder(service, recovery, drive_root_path)
-        final_inventory = _inspect_verified_recovery_tree(
+        inspected_final = _inspect_verified_recovery_tree(
             recovery, identity, service, final_folder["folder_id"], progress_callback=callback,
         )
+        final_inventory = inspected_final["verified_generations"]
+        if inspected_final["orphan_manifests"]:
+            raise StorageCapacityError("orphan recovery manifests remain after retention reconciliation")
         retained_generations = [row["generation"] for row in final_inventory]
         if len(final_inventory) != RECOVERY_GENERATIONS_PER_RUN:
             raise ValueError(
@@ -3074,6 +3259,7 @@ def finalize_completed_production_run(
             for row in delete_generations
             for item in (row.get("files", []) if isinstance(row, dict) else [])
         ]
+        deleted_orphan_manifest_records = list(delete_orphan_manifests)
         # The journal is stable after RETENTION_VERIFIED; this compact addition keeps
         # the registration measurement identical across a safe retry.
         if journal_path.is_file():
@@ -3083,13 +3269,17 @@ def finalize_completed_production_run(
         measurement["recovery_retention_finalization"] = {
             "retained_generations": retained_generations,
             "deleted_generations": [row["generation"] for row in delete_generations],
-            "deleted_file_count": len(deleted_file_records),
+            "deleted_file_count": len(deleted_file_records) + len(deleted_orphan_manifest_records),
+            "deleted_orphan_manifest_count": len(deleted_orphan_manifest_records),
+            "deleted_orphan_manifest_bytes": sum(
+                int(item["size_bytes"]) for item in deleted_orphan_manifest_records
+            ),
             "deleted_payload_bytes": sum(
                 int(item["size_bytes"]) for item in deleted_file_records if item.get("role") == "payload"
             ),
             "deleted_manifest_bytes": sum(
                 int(item["size_bytes"]) for item in deleted_file_records if item.get("role") == "manifest"
-            ),
+            ) + sum(int(item["size_bytes"]) for item in deleted_orphan_manifest_records),
             "retention_journal_path": str(journal_path) if journal_path.is_file() else None,
             "retention_journal_sha256": journal_digest,
             "retention_journal_bytes": journal_size,
@@ -3115,6 +3305,14 @@ def finalize_completed_production_run(
                 "expected_generation_count": RECOVERY_GENERATIONS_PER_RUN,
                 "retained_generations": retained_generations,
                 "deleted_generations": [row["generation"] for row in delete_generations],
+                    "deleted_orphan_manifests": [item["name"] for item in deleted_orphan_manifest_records],
+                "orphan_manifest_reconciliation": (
+                    {
+                        **journal.get("orphan_manifest_reconciliation", {"status": "NOT_REQUIRED"}),
+                        "manifest_records": deleted_orphan_manifest_records,
+                    }
+                    if journal_path.is_file() else {"status": "NOT_REQUIRED"}
+                ),
                 "journal_path": str(journal_path) if journal_path.is_file() else None,
                 "rotation_explanation": rotation_explanation,
             },

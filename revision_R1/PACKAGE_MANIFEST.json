@@ -189,8 +189,8 @@
       "sha256": "1cb4e713e38096b17c215be584a871defd3edaf611290b74dcff7ddba48defba"
     },
     "scripts/production_workflow.py": {
-      "bytes": 234105,
-      "sha256": "3274b6f04935243e1397ece11feb1c2ef2bff3f2fa5caa7dd9f0fc0bcf36b415"
+      "bytes": 245829,
+      "sha256": "7e6e0ceda226e6d94a041f7bb15b3000f89011c8ed93f472584c89eaff58e5d5"
     },
     "tests/conftest.py": {
       "bytes": 169,
@@ -241,8 +241,8 @@
       "sha256": "cf21f462a2c83e16a53d1844be61d1fc3bc9b2a07f3bd0babac0155435b4e144"
     },
     "tests/test_production_workflow.py": {
-      "bytes": 112109,
-      "sha256": "5cf6655327d2142360b3ab92d379a615f55cd09c8007c8b16cfbac2fe79f7368"
+      "bytes": 118666,
+      "sha256": "537e9602a32065df0081652fe25c827f6fc5c15ad02a72401a086e8c58b05602"
     },
     "tests/test_protocol_math.py": {
       "bytes": 7882,

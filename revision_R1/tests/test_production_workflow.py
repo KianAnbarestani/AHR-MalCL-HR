@@ -2092,6 +2092,117 @@ def test_completed_run_with_four_recovery_generations_finalizes_and_reregisters_
     assert any(row.get("stage") == "recovery_inventory_complete" for row in progress)
 
 
+def test_finalization_reconciles_older_orphan_manifests_and_retries_safely(tmp_path, monkeypatch):
+    from revision_r1.validation import file_sha256
+
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    (recovery / "generation-000001.pt").unlink()
+    (recovery / "generation-000002.pt").unlink()
+    boundary_hashes = {path.name: file_sha256(path) for path in boundaries.iterdir()}
+    output_manifest_hash = file_sha256(output / "artifact_manifest.json")
+    service = _finalization_drive_service(
+        recovery, drive_root, fail_once_name="generation-000002.manifest.json",
+    )
+    finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
+    assert callable(finalizer)
+    monkeypatch.setattr(
+        production_workflow, "execute_frozen_plan_record",
+        lambda *_args, **_kwargs: pytest.fail("finalization must never invoke training"),
+    )
+
+    with pytest.raises(StorageCapacityError, match="Drive delete failure"):
+        finalizer(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    journal = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    assert journal.is_file()
+    partial_journal = json.loads(journal.read_text(encoding="utf-8"))
+    assert partial_journal["deleted_files"] == ["generation-000001.manifest.json"]
+    assert not (recovery / "generation-000001.manifest.json").exists()
+    assert (recovery / "generation-000002.manifest.json").is_file()
+    assert all((recovery / f"generation-{generation:06d}.pt").is_file() for generation in (3, 4))
+    assert all((recovery / f"generation-{generation:06d}.manifest.json").is_file() for generation in (3, 4))
+
+    retried = finalizer(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+    repeated = finalizer(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+
+    assert retried["status"] == "FINALIZED_COMPLETED_RUN"
+    assert retried["completion_registered"] is True
+    assert repeated["completion_registered"] is False
+    assert retried["recovery_retention"]["retained_generations"] == [3, 4]
+    assert retried["recovery_retention"]["deleted_orphan_manifests"] == [
+        "generation-000001.manifest.json", "generation-000002.manifest.json",
+    ]
+    assert retried["recovery_retention"]["orphan_manifest_reconciliation"]["status"] == "VERIFIED_DELETED"
+    assert retried["recovery_retention"]["orphan_manifest_reconciliation"]["specific_cause_established_from_run_logs"] is False
+    assert [row["generation"] for row in retried["recovery_retention"]["orphan_manifest_reconciliation"]["manifest_records"]] == [1, 2]
+    assert all(row["can_delete"] is True and row["identity_sha256"] for row in retried["recovery_retention"]["orphan_manifest_reconciliation"]["manifest_records"])
+    assert all(row["integrity_status"] == "PASS_MANIFEST_AND_PAYLOAD_HASH" for row in retried["recovery_inventory"])
+    assert len(list(recovery.glob("generation-*.manifest.json"))) == 2
+    assert sorted(path.name for path in recovery.glob("generation-*.pt")) == [
+        "generation-000003.pt", "generation-000004.pt",
+    ]
+    assert {path.name: file_sha256(path) for path in boundaries.iterdir()} == boundary_hashes
+    assert file_sha256(output / "artifact_manifest.json") == output_manifest_hash
+    assert retried["storage_measurement"] == repeated["storage_measurement"]
+
+
+@pytest.mark.parametrize("orphan_case", ["newer_than_fallback", "delete_denied"])
+def test_finalization_preserves_ambiguous_or_non_deletable_orphan_manifests(tmp_path, monkeypatch, orphan_case):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    denied_names = ()
+    if orphan_case == "newer_than_fallback":
+        newer = json.loads((recovery / "generation-000004.manifest.json").read_text(encoding="utf-8"))
+        newer.update({"generation": 5, "payload_file": "generation-000005.pt", "kind": "recovery"})
+        (recovery / "generation-000005.manifest.json").write_text(
+            json.dumps(newer, sort_keys=True, indent=2) + "\n", encoding="utf-8",
+        )
+        error = "as new as a required retained recovery point"
+    else:
+        (recovery / "generation-000001.pt").unlink()
+        (recovery / "generation-000002.pt").unlink()
+        denied_names = {"generation-000001.manifest.json"}
+        error = "canDelete is not verified true for orphan manifest"
+    before = {path.name: path.read_bytes() for path in recovery.iterdir()}
+    service = _finalization_drive_service(recovery, drive_root, denied_names=denied_names)
+    finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
+    assert callable(finalizer)
+
+    with pytest.raises((ValueError, StorageCapacityError), match=error):
+        finalizer(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    assert {path.name: path.read_bytes() for path in recovery.iterdir()} == before
+    assert service.deleted_ids == set()
+    assert not (checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json").exists()
+
+
 def test_finalization_partial_drive_cleanup_is_safe_to_retry(tmp_path, monkeypatch):
     _allow_test_checkpoint_memory(monkeypatch)
     plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
