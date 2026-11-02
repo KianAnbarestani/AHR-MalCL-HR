@@ -177,8 +177,8 @@
       "sha256": "b9c20850b7190d14cf217b0e45b7628cfe1d007dcbfe4899e4d8fa7be83767ca"
     },
     "scripts/build_production_handoff.py": {
-      "bytes": 65681,
-      "sha256": "887dde587a5e3054df606a3c2de94287c544242b5a912da90b21582fc74c4d69"
+      "bytes": 65900,
+      "sha256": "047709f1bdca823538d914cf34c920b80f3b9a070d93513db2cbcdc391645250"
     },
     "scripts/dataset_bootstrap.py": {
       "bytes": 14101,
@@ -238,7 +238,11 @@
     },
     "tests/test_production_notebook.py": {
       "bytes": 20992,
-      "sha256": "cf21f462a2c83e16a53d1844be61d1fc3bc9b2a07f3bd0babac0155435b4e144"
+      "sha256": "71da63111842ba86c4829195827a3caf3e7c715a7fd6c33c9f8b693ea2caf588"
+    },
+    "tests/test_production_notebook_generator_guards.py": {
+      "bytes": 3877,
+      "sha256": "c94afd2629970445f0e1964cccad5045b9202e15d40669331fd5ee3154a5f9d0"
     },
     "tests/test_production_workflow.py": {
       "bytes": 141293,
