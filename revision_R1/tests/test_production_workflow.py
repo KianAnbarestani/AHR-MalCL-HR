@@ -1043,13 +1043,17 @@ def test_recovery_pruner_rejects_replaced_file_id_before_delete(monkeypatch):
     assert service.deleted_ids == set()
 
 
-def test_recovery_child_lookup_requests_drive_can_delete_capability():
+def test_recovery_inventory_requests_drive_delete_and_edit_capabilities():
     service = _drive_service()
 
     production_workflow._lookup_drive_child(service, "results-folder", "generation-000279.pt")
+    production_workflow._list_drive_folder_files(service, "results-folder")
 
-    assert len(service.files().list_fields) == 1
-    assert "capabilities(canDelete)" in service.files().list_fields[0]
+    assert len(service.files().list_fields) == 2
+    assert all(
+        "capabilities(canDelete,canEdit)" in fields
+        for fields in service.files().list_fields
+    )
 
 
 def test_viewer_is_rejected_before_probe_and_unknown_quota_stays_unknown(tmp_path, monkeypatch):
@@ -2663,7 +2667,7 @@ def test_finalization_journal_folder_creation_fails_closed_without_parent_permis
     assert service.files().created_folder_ids == []
 
 
-@pytest.mark.parametrize("orphan_case", ["newer_than_fallback", "delete_denied"])
+@pytest.mark.parametrize("orphan_case", ["newer_than_fallback", "delete_denied_without_edit"])
 def test_finalization_preserves_ambiguous_or_non_deletable_orphan_manifests(tmp_path, monkeypatch, orphan_case):
     _allow_test_checkpoint_memory(monkeypatch)
     plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
@@ -2686,7 +2690,7 @@ def test_finalization_preserves_ambiguous_or_non_deletable_orphan_manifests(tmp_
         (recovery / "generation-000001.pt").unlink()
         (recovery / "generation-000002.pt").unlink()
         denied_names = {"generation-000001.manifest.json"}
-        error = "canDelete is not verified true for orphan manifest"
+        error = "does not verify delete or editor capability"
     before = {path.name: path.read_bytes() for path in recovery.iterdir()}
     service = _finalization_drive_service(recovery, drive_root, denied_names=denied_names)
     finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
@@ -2701,6 +2705,71 @@ def test_finalization_preserves_ambiguous_or_non_deletable_orphan_manifests(tmp_
     assert {path.name: path.read_bytes() for path in recovery.iterdir()} == before
     assert service.deleted_ids == set()
     assert not (checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json").exists()
+
+
+def test_finalization_shared_editor_preserves_orphans_after_account_switch(tmp_path, monkeypatch):
+    """A shared-folder editor may retain owned orphan manifests but not permanently delete them."""
+    from revision_r1.validation import file_sha256
+
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    for generation in (1, 2):
+        (recovery / f"generation-{generation:06d}.pt").unlink()
+    manifest_names = [f"generation-{generation:06d}.manifest.json" for generation in (1, 2)]
+    manifest_bytes = {name: (recovery / name).read_bytes() for name in manifest_names}
+    boundary_hashes = {path.name: file_sha256(path) for path in boundaries.iterdir()}
+    service = _finalization_drive_service(
+        recovery, drive_root, fail_once_name=manifest_names[0],
+    )
+    for file_id, metadata in service.records.items():
+        if metadata.get("name") in manifest_names:
+            metadata["capabilities"]["canEdit"] = True
+
+    finalizer = production_workflow.finalize_completed_production_run
+    with pytest.raises(StorageCapacityError, match="Drive delete failure"):
+        finalizer(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    journal_path = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    prepared = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert prepared["status"] == "PREPARED"
+    assert prepared["deleted_files"] == []
+    for metadata in service.records.values():
+        if metadata.get("name") in manifest_names:
+            metadata["capabilities"]["canDelete"] = False
+
+    result = finalizer(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+    repeated = finalizer(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+
+    assert result["status"] == "FINALIZED_COMPLETED_RUN"
+    assert result["completion_registered"] is True
+    assert repeated["completion_registered"] is False
+    assert result["recovery_retention"]["retained_generations"] == [3, 4]
+    assert result["recovery_retention"]["deleted_orphan_manifests"] == []
+    assert result["recovery_retention"]["preserved_orphan_manifests"] == manifest_names
+    assert result["recovery_retention"]["orphan_manifest_reconciliation"]["status"] == "VERIFIED_PRESERVED"
+    assert result["storage_measurement"]["recovery_checkpoints"]["generation_count"] == 2
+    assert result["storage_measurement"]["recovery_checkpoints"]["manifest_only_orphan_generations"] == [1, 2]
+    assert {name: (recovery / name).read_bytes() for name in manifest_names} == manifest_bytes
+    assert all(not (recovery / f"generation-{generation:06d}.pt").exists() for generation in (1, 2))
+    assert all((recovery / f"generation-{generation:06d}.pt").is_file() for generation in (3, 4))
+    assert {path.name: file_sha256(path) for path in boundaries.iterdir()} == boundary_hashes
+    assert service.deleted_ids == set()
 
 
 def test_finalization_partial_drive_cleanup_is_safe_to_retry(tmp_path, monkeypatch):
