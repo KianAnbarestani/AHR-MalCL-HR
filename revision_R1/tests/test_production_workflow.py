@@ -749,6 +749,10 @@ class _FakeFiles:
             self.records[fileId]["quotaBytesUsed"] = str(path.stat().st_size)
         return _FakeRequest(self.records[fileId])
 
+    def get_media(self, *, fileId, **_kwargs):
+        # Mirrors googleapiclient's generated media method used for blob bytes.
+        return self.get(fileId=fileId, alt="media")
+
     def delete(self, *, fileId, **_kwargs):
         self.deleted_ids.add(fileId)
         self.records.pop(fileId, None)
@@ -2131,41 +2135,58 @@ def _finalization_drive_service(
     return service
 
 
-def test_drive_journal_read_uses_raw_media_bytes_not_json_decoded_execute():
+def test_drive_journal_payload_uses_media_endpoint_not_metadata_json_endpoint():
     import httplib2
     from googleapiclient.model import JsonModel
 
     raw_payload = b'{\n  "journal_revision": 7,\n  "note": "preserve exact bytes"\n}'
+    metadata_payload = (
+        b'{"id":"journal-id","kind":"drive#file",'
+        b'"mimeType":"application/json","name":"journal.json"}'
+    )
 
     class _RawHttp:
+        def __init__(self, payload, *, content_location=None):
+            self.payload = payload
+            self.content_location = content_location
+
         def request(self, uri, method, body=None, headers=None, **_kwargs):
             assert method == "GET"
             assert headers["range"].startswith("bytes=0-")
-            response = httplib2.Response({
+            response_headers = {
                 "status": "200", "content-type": "application/json",
-                "content-length": str(len(raw_payload)),
-            })
-            return response, raw_payload
+                "content-length": str(len(self.payload)),
+            }
+            if self.content_location:
+                response_headers["content-location"] = self.content_location
+            return httplib2.Response(response_headers), self.payload
 
-    class _JsonDecodedMediaRequest:
-        uri = "https://www.googleapis.com/drive/v3/files/journal-id?alt=media"
-        headers = {}
-
-        def __init__(self):
-            self.http = _RawHttp()
+    class _MediaRequest:
+        def __init__(self, payload, uri, *, content_location=None):
+            self.uri = uri
+            self.headers = {}
+            self.http = _RawHttp(payload, content_location=content_location)
 
         def execute(self):
-            # HttpRequest.execute() uses JsonModel for this JSON response and
-            # therefore returns an object instead of the original media bytes.
-            return JsonModel().deserialize(raw_payload)
+            return JsonModel().deserialize(self.http.payload)
 
-    request = _JsonDecodedMediaRequest()
+    metadata_uri = "https://www.googleapis.com/drive/v3/files/journal-id?alt=json&supportsAllDrives=true"
+    media_uri = "https://www.googleapis.com/drive/v3/files/journal-id?alt=media&supportsAllDrives=true"
+    metadata_request = _MediaRequest(
+        metadata_payload, metadata_uri, content_location=metadata_uri,
+    )
+    media_request = _MediaRequest(raw_payload, media_uri)
+    calls = []
 
     class _Files:
         def get(self, *, fileId, alt=None, **_kwargs):
+            calls.append(("get", fileId, alt))
+            return metadata_request
+
+        def get_media(self, *, fileId, **_kwargs):
             assert fileId == "journal-id"
-            assert alt == "media"
-            return request
+            calls.append(("get_media", fileId, None))
+            return media_request
 
     class _Service:
         def files(self):
@@ -2175,9 +2196,10 @@ def test_drive_journal_read_uses_raw_media_bytes_not_json_decoded_execute():
         _Service(), "journal-id", expected={"file_id": "journal-id"},
     )
 
-    assert isinstance(request.execute(), dict)
+    assert isinstance(metadata_request.execute(), dict)
+    assert calls == [("get_media", "journal-id", None)]
     assert observed == raw_payload
-    assert observed != json.dumps(json.loads(raw_payload)).encode("utf-8")
+    assert observed != metadata_payload
 
 
 @pytest.mark.parametrize(

@@ -2873,13 +2873,15 @@ def _get_drive_journal_payload(service, file_id: str, *, expected: dict[str, Any
         if delay:
             time.sleep(delay)
         try:
-            request = service.files().get(
-                fileId=file_id, alt="media", supportsAllDrives=True,
+            # Use the discovery client's generated media method. Calling
+            # files().get(..., alt="media") still builds the JSON-model
+            # metadata endpoint in googleapiclient; the API then returns a
+            # File resource (alt=json), not the stored journal bytes.
+            request = service.files().get_media(
+                fileId=file_id, supportsAllDrives=True,
             )
-            # HttpRequest.execute() passes successful application/json media
-            # through Google API's JsonModel and returns a dict. Journals need
-            # byte-for-byte integrity checks, so download the media response
-            # through MediaIoBaseDownload instead of the JSON deserializer.
+            # Journal verification requires byte-for-byte content, so bypass
+            # HttpRequest.execute()'s JSON deserializer and stream raw media.
             from googleapiclient.http import MediaIoBaseDownload
 
             output = io.BytesIO()
