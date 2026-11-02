@@ -39,6 +39,7 @@ SCRIPT_FILES = (
     "scripts/build_checkpoint_compatibility.py",
     "scripts/build_github_handoff.py",
     "scripts/build_production_handoff.py",
+    "scripts/dataset_bootstrap.py",
     "scripts/live_progress.py",
     "scripts/production_workflow.py",
 )

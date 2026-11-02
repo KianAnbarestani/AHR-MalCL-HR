@@ -35,6 +35,8 @@ def test_github_package_manifest_binds_frozen_core_schedule_and_allowlist(tmp_pa
     assert manifest["protocol"]["replay_coordinates"] == "raw"
     assert len(manifest["files"]) > 35
     assert manifest["files"]["revision_r1/runner.py"]["sha256"]
+    assert "scripts/dataset_bootstrap.py" in manifest["files"]
+    assert "tests/test_dataset_bootstrap.py" in manifest["files"]
     assert "requirements-colab.txt" in manifest["files"]
     assert "requirements-test.txt" in manifest["files"]
 

@@ -699,6 +699,37 @@ def _logical_drive_path_components(
     return str(configured), tuple(components)
 
 
+def _logical_drive_alias_path(
+    resolved_path: str | Path, *, configured_root: str | Path,
+    drive_root: str | Path = "/content/drive/MyDrive",
+) -> Path:
+    """Map a resolved mounted path back through its configured Drive alias safely.
+
+    Checkpoint namespace helpers resolve paths for filesystem identity. For API
+    traversal, retain the logical MyDrive spelling (which may be a mounted
+    shortcut) and prove it resolves to the exact same target beneath the
+    configured checkpoint root.
+    """
+    logical_root = Path(os.path.abspath(str(Path(configured_root).expanduser())))
+    resolved_root = logical_root.resolve()
+    resolved_target = Path(resolved_path).expanduser().resolve()
+    try:
+        relative = resolved_target.relative_to(resolved_root)
+    except ValueError as exc:
+        raise StorageCapacityError(
+            f"resolved Drive target is outside the configured checkpoint root: {resolved_target}"
+        ) from exc
+
+    logical_target = logical_root / relative
+    configured, _components = _logical_drive_path_components(logical_target, drive_root=drive_root)
+    logical_target = Path(configured)
+    if logical_target.resolve() != resolved_target:
+        raise StorageCapacityError(
+            f"logical Drive alias no longer resolves to the verified mounted target: {logical_target}"
+        )
+    return logical_target
+
+
 def _drive_account_snapshot(service) -> dict[str, Any]:
     try:
         account = service.about().get(
@@ -2889,7 +2920,15 @@ def finalize_completed_production_run(
     drive_root_path = Path(drive_root).expanduser()
     output = run_output_root(output_root_path, record)
     checkpoint_namespace = run_checkpoint_root(checkpoint_root_path, record)
-    recovery = checkpoint_namespace / "recovery"
+    # run_checkpoint_root() resolves mounted aliases for filesystem identity.
+    # Reconstruct and verify the corresponding logical MyDrive path for Drive
+    # API traversal instead of passing .shortcut-targets-by-id to the lexical
+    # API-path validator.
+    recovery = _logical_drive_alias_path(
+        checkpoint_namespace / "recovery",
+        configured_root=checkpoint_root_path,
+        drive_root=drive_root_path,
+    )
     journal_path = checkpoint_root_path / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
     matrix_lease = _MatrixLeaseHeartbeat(output_root_path / ".matrix_execution.lease.json")
     callback = progress_callback or (lambda _event: None)

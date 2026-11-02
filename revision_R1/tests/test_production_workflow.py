@@ -2008,12 +2008,23 @@ def _finalization_drive_service(recovery: Path, drive_root: Path, *, denied_name
     return service
 
 
-def test_completed_run_with_four_recovery_generations_finalizes_and_reregisters_idempotently(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "shared_shortcut", [False, True], ids=["ordinary-mydrive", "shared-folder-shortcut"],
+)
+def test_completed_run_with_four_recovery_generations_finalizes_and_reregisters_idempotently(
+    tmp_path, monkeypatch, shared_shortcut,
+):
     from revision_r1.validation import file_sha256
 
     _allow_test_checkpoint_memory(monkeypatch)
     plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
-    drive_root = tmp_path / "mount" / "MyDrive"
+    drive_mount = tmp_path / "content" / "drive"
+    drive_root = drive_mount / "MyDrive"
+    drive_root.mkdir(parents=True)
+    if shared_shortcut:
+        shortcut_target = drive_mount / ".shortcut-targets-by-id" / "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x" / "ReVision"
+        shortcut_target.mkdir(parents=True)
+        (drive_root / "ReVision").symlink_to(shortcut_target, target_is_directory=True)
     output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
     checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
     output = run_output_root(output_root, record)
@@ -2038,7 +2049,16 @@ def test_completed_run_with_four_recovery_generations_finalizes_and_reregisters_
 
     finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
     assert callable(finalizer), "finalization-only recovery must reconcile the four verified generations"
-    service = _finalization_drive_service(recovery, drive_root)
+    logical_recovery = (
+        checkpoint_root / "revision_R1.0.2" / record["training_source_sha256"][:16]
+        / record["dataset"] / f"seed_{int(record['seed'])}" / record["arm"]
+        / record["config_sha256"][:16] / "recovery"
+    )
+    assert logical_recovery.is_relative_to(drive_root)
+    assert logical_recovery.resolve() == recovery.resolve()
+    if shared_shortcut:
+        assert ".shortcut-targets-by-id/1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x/ReVision/" in str(recovery)
+    service = _finalization_drive_service(logical_recovery, drive_root)
     monkeypatch.setattr(
         production_workflow, "execute_frozen_plan_record",
         lambda *_args, **_kwargs: pytest.fail("finalization must never invoke training"),
