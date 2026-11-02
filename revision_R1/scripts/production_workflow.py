@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -43,6 +44,8 @@ DRIVE_METADATA_SCOPE = "https://www.googleapis.com/auth/drive.metadata.readonly"
 DRIVE_FILE_WRITE_SCOPE = "https://www.googleapis.com/auth/drive"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+CANONICAL_STORAGE_ACCOUNT_EMAIL = "kian.anb777@gmail.com"
+CANONICAL_REVISION_FOLDER_ID = "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x"
 CHECKPOINT_SIZE_MULTIPLIER = 1.5
 CHECKPOINT_SIZE_FIXED_OVERHEAD_BYTES = 16 * 1024 * 1024
 OUTPUT_BYTES_FLOOR_PER_RUN = 256 * 1024 * 1024
@@ -52,7 +55,10 @@ RECOVERY_GENERATIONS_PER_RUN = 2
 RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS = (0.0, 0.25, 0.5, 1.0, 2.0)
 DRIVE_WRITE_PROBE_BYTES = b"revision_R1 shared-folder capacity probe v1\n"
 DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0, 8.0, 15.0)
+CHECKPOINT_PUBLICATION_RETRY_DELAYS_SECONDS = (1.0, 3.0)
 _DRIVE_WRITE_PROBE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_BOUND_DRIVE_API_SERVICE = None
+_BOUND_STORAGE_SESSION: dict[str, Any] | None = None
 V62_RECOVERY_BUILD_ID = "revision_R1_colab_validation_v6_2_final_gan_recovery_qa"
 V62_RECOVERY_WORKFLOW_ID = "2b4d8f5f1f29a938"
 V62_RECOVERY_REPORT_NAME = "resume_validation_2b4d8f5f1f29a938_20261026T142320Z_946699443.json"
@@ -706,6 +712,8 @@ def _owner_email(metadata: dict[str, Any]) -> str | None:
 
 
 def _drive_api_service(*, scopes: tuple[str, ...] = (DRIVE_METADATA_SCOPE,)):
+    if _BOUND_DRIVE_API_SERVICE is not None:
+        return _BOUND_DRIVE_API_SERVICE
     try:
         import google.auth
         from googleapiclient.discovery import build
@@ -722,18 +730,22 @@ def permanently_delete_recovery_checkpoint(
     path: str | Path, *, api_factory=None, drive_root: str | Path = "/content/drive/MyDrive",
     expected_drive_file_id: str | None = None, expected_parent_id: str | None = None,
 ) -> bool:
-    """Delete one exact recovery file when Drive confirms this account can delete it.
+    """Delete one exact, canonical-account-owned recovery file after Drive verification.
 
     Drive Trash still consumes quota, so recovery rotation uses files.delete rather
     than moving large payloads to Trash. The caller passes paths only from the
     identity-validated recovery directory; this helper re-resolves the exact
-    parent, name, and file ID. Drive's per-file canDelete capability is the
-    authority: shared-folder editors may delete files they do not own, while
-    legacy files they cannot delete are deferred without aborting the run.
+    parent, name, and file ID. Only generations owned by the canonical storage
+    account may be automatically pruned, even if a shared-folder editor has
+    canDelete for a historical file. Mixed-owner legacy artifacts are deferred.
 
     Returns False when the exact file exists but Drive explicitly denies deletion;
     structural ambiguity or unavailable permission evidence still fails closed.
     """
+    if not callable(api_factory):
+        raise StorageCapacityError("recovery deletion requires the verified canonical Drive API client")
+    if _BOUND_STORAGE_SESSION is not None or _BOUND_DRIVE_API_SERVICE is not None:
+        _require_canonical_storage_api_factory(api_factory)
     target = Path(path).expanduser()
     if target.name.startswith(".") or not re.fullmatch(r"generation-\d+\.(?:pt|manifest\.json)", target.name):
         raise StorageCapacityError(f"refusing non-generation Drive checkpoint deletion: {target}")
@@ -743,12 +755,12 @@ def permanently_delete_recovery_checkpoint(
         raise StorageCapacityError(f"refusing checkpoint deletion outside ReVision production/checkpoints: {target}")
     if target.parent.name != "recovery":
         raise StorageCapacityError(f"refusing to prune non-recovery checkpoint artifacts: {target}")
-    _, components = _logical_drive_path_components(target.parent, drive_root=drive_root)
-    service = (api_factory or (lambda: _drive_api_service(scopes=(DRIVE_FILE_WRITE_SCOPE,))))()
-    location = resolve_drive_folder(service, components)
-    parent_id = location.get("folder_id")
-    if not parent_id or location.get("path_exists") is not True:
-        raise StorageCapacityError(f"cannot resolve exact recovery folder before pruning: {target.parent}")
+    service = api_factory()
+    if _drive_account_snapshot(service)["authenticated_user"] != CANONICAL_STORAGE_ACCOUNT_EMAIL:
+        raise StorageCapacityError("recovery deletion API identity is not the canonical storage account")
+    _location, parent_id = _checkpoint_drive_location(
+        service, target.parent, drive_root=Path(drive_root).expanduser(),
+    )
     if expected_parent_id is not None and str(parent_id) != str(expected_parent_id):
         raise StorageCapacityError("recovery folder ID differs from the retention journal; no file was deleted")
     metadata = _lookup_drive_child(service, str(parent_id), target.name)
@@ -769,6 +781,12 @@ def permanently_delete_recovery_checkpoint(
         )
     if expected_drive_file_id is not None and str(metadata["id"]) != str(expected_drive_file_id):
         raise StorageCapacityError(f"Drive file ID differs from the retention journal for {target.name}; no file was deleted")
+    owner = _owner_email(metadata)
+    if owner != CANONICAL_STORAGE_ACCOUNT_EMAIL or metadata.get("ownedByMe") is not True:
+        # Historical generations may be owned by another account even when
+        # Drive grants this editor canDelete. Keep those artifacts untouched;
+        # the retention goal is subordinate to preserving mixed-owner history.
+        return False
     capabilities = metadata.get("capabilities")
     can_delete = capabilities.get("canDelete") if isinstance(capabilities, dict) else None
     if can_delete is False:
@@ -789,6 +807,124 @@ def permanently_delete_recovery_checkpoint(
             f"Drive still reports recovery file {target.name!r} after delete request; no further pruning attempted"
         )
     return True
+
+
+def verify_canonical_storage_session(
+    *, api_factory=None,
+    drive_mount_root: str | Path = "/content/drive/MyDrive",
+    expected_account_email: str = CANONICAL_STORAGE_ACCOUNT_EMAIL,
+    expected_revision_folder_id: str = CANONICAL_REVISION_FOLDER_ID,
+    path_bindings: dict[str, str | Path] | None = None,
+    required_path_keys: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Bind mounted filesystem storage and Drive API to the canonical owner account.
+
+    The mount itself is probed by creating, reading, and deleting one unique
+    tiny file in the exact ReVision folder. Drive API metadata must show that
+    same file under the canonical folder ID and owned by the same account as
+    the API quota snapshot. The bound API client is then reused by production
+    helpers so they cannot silently fall back to credentials for another user.
+    """
+    global _BOUND_DRIVE_API_SERVICE, _BOUND_STORAGE_SESSION
+    _BOUND_DRIVE_API_SERVICE = None
+    _BOUND_STORAGE_SESSION = None
+    _DRIVE_WRITE_PROBE_CACHE.clear()
+    expected_account = str(expected_account_email).strip().lower()
+    if not expected_account or not expected_revision_folder_id:
+        raise ValueError("canonical Drive account and folder ID must be explicit")
+    service = (api_factory or (lambda: _drive_api_service(scopes=(DRIVE_FILE_WRITE_SCOPE,))))()
+    account_before = _drive_account_snapshot(service)
+    authenticated_user = account_before["authenticated_user"]
+    if authenticated_user != expected_account:
+        raise StorageCapacityError(
+            "storage account mismatch: "
+            f"expected {expected_account!r}, observed {authenticated_user!r}; "
+            "no production paths or checkpoints were modified"
+        )
+    revision = resolve_drive_folder(service, ("ReVision",))
+    if (
+        revision.get("path_exists") is not True
+        or str(revision.get("folder_id") or "") != str(expected_revision_folder_id)
+    ):
+        raise StorageCapacityError(
+            "canonical ReVision folder ID mismatch: "
+            f"expected {expected_revision_folder_id!r}, observed {revision.get('folder_id')!r}"
+        )
+    if revision.get("drive_id"):
+        raise StorageCapacityError("canonical ReVision resolved inside a shared drive; user My Drive quota is not applicable")
+    if revision.get("owner_email") != expected_account:
+        raise StorageCapacityError(
+            "canonical ReVision folder owner mismatch: "
+            f"expected {expected_account!r}, observed {revision.get('owner_email')!r}"
+        )
+    if revision.get("can_add_children") is not True:
+        raise StorageCapacityError("main storage account lacks verified canAddChildren permission on canonical ReVision")
+
+    mount_root = Path(drive_mount_root).expanduser()
+    revision_mount_path = mount_root / "ReVision"
+    if not revision_mount_path.is_dir():
+        raise StorageCapacityError(
+            f"canonical ReVision is not visible as a directory in the selected Drive mount: {revision_mount_path}"
+        )
+    bindings: dict[str, Any] = {}
+    for key, raw_path in (path_bindings or {}).items():
+        configured, components = _logical_drive_path_components(raw_path, drive_root=mount_root)
+        location = resolve_drive_folder(service, components)
+        exists = location.get("path_exists") is True
+        if key in required_path_keys and not exists:
+            raise StorageCapacityError(
+                f"required storage folder {key!r} is not visible under the authenticated main account: {configured}"
+            )
+        if exists and not Path(configured).is_dir():
+            raise StorageCapacityError(
+                f"Drive API resolves {key!r} to folder {location.get('folder_id')!r}, "
+                f"but that exact logical folder is not visible in the mounted filesystem: {configured}"
+            )
+        bindings[key] = {
+            "configured_path": configured,
+            "components": list(components),
+            "folder_id": location.get("folder_id"),
+            "parent_id": location.get("parent_id"),
+            "path_exists": exists,
+            "traversed_shortcut": location.get("traversed_shortcut") is True,
+        }
+
+    probe = _write_capability_probe(
+        revision_mount_path, revision, authenticated_user, service,
+        drive_root=mount_root, delete_service=service,
+    )
+    if (
+        probe.get("new_file_owner") != expected_account
+        or probe.get("new_file_owned_by_authenticated_user") is not True
+        or probe.get("probe_parent_id") != expected_revision_folder_id
+        or probe.get("permanent_recovery_delete_verified") is not True
+    ):
+        raise StorageCapacityError(
+            "canonical mount probe did not verify main-account ownership, exact ReVision parent, and cleanup capability"
+        )
+    account_after = _drive_account_snapshot(service)
+    if account_after["authenticated_user"] != expected_account:
+        raise StorageCapacityError("authenticated storage account changed during canonical mount verification")
+
+    evidence = {
+        "status": "PASS",
+        "storage_account_email": expected_account,
+        "storage_quota_account_email": account_after["authenticated_user"],
+        "storage_quota_status": account_after["quota_status"],
+        "storage_quota_limit_bytes": account_after["quota_limit_bytes"],
+        "storage_quota_usage_bytes": account_after["quota_usage_bytes"],
+        "storage_available_bytes": account_after["available_bytes"],
+        "storage_quota_capacity_note": account_after["quota_capacity_note"],
+        "drive_mount_root": str(mount_root),
+        "canonical_revision_folder_id": str(expected_revision_folder_id),
+        "canonical_revision_owner": revision.get("owner_email"),
+        "canonical_revision_traversed_shortcut": revision.get("traversed_shortcut") is True,
+        "probe": probe,
+        "path_bindings": bindings,
+    }
+    _BOUND_DRIVE_API_SERVICE = service
+    _BOUND_STORAGE_SESSION = evidence
+    return evidence
 
 
 def _logical_drive_path_components(
@@ -905,7 +1041,7 @@ def _lookup_drive_child(service, parent_id: str, name: str) -> dict[str, Any] | 
                 q=query, pageSize=100, pageToken=page_token,
                 fields=(
                     "nextPageToken,files(id,name,mimeType,parents,owners(emailAddress),ownedByMe,"
-                    "quotaBytesUsed,size,capabilities(canDelete,canEdit))"
+                    "quotaBytesUsed,size,md5Checksum,capabilities(canDelete,canEdit))"
                 ),
                 includeItemsFromAllDrives=True, supportsAllDrives=True,
             ).execute()
@@ -918,6 +1054,297 @@ def _lookup_drive_child(service, parent_id: str, name: str) -> dict[str, Any] | 
     if len(matches) > 1:
         raise StorageCapacityError("Drive returned multiple files for a unique write-capability probe name")
     return matches[0] if matches else None
+
+
+def _checkpoint_md5(path: Path) -> str:
+    digest = hashlib.md5(usedforsecurity=False)
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _checkpoint_generation_source(
+    local_root: str | Path, identity: dict[str, Any], generation: int,
+) -> tuple[dict[str, Any], Path, Path]:
+    source = Path(local_root).expanduser()
+    manifest_path = source / f"generation-{generation:06d}.manifest.json"
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise StorageCapacityError(f"checkpoint publication source manifest is missing/unsafe: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StorageCapacityError(f"checkpoint publication source manifest is unreadable: {manifest_path}") from exc
+    payload_name = f"generation-{generation:06d}.pt"
+    payload_path = source / payload_name
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("generation") != generation
+        or manifest.get("identity") != identity
+        or manifest.get("payload_file") != payload_name
+        or type(manifest.get("payload_bytes")) is not int
+        or manifest["payload_bytes"] <= 0
+        or not _is_sha256(manifest.get("payload_sha256"))
+        or not payload_path.is_file()
+        or payload_path.is_symlink()
+        or payload_path.stat().st_size != manifest["payload_bytes"]
+    ):
+        raise StorageCapacityError(
+            f"checkpoint publication source does not match the exact run identity/generation: {manifest_path}"
+        )
+    return manifest, manifest_path, payload_path
+
+
+def _checkpoint_drive_location(service, destination: Path, *, drive_root: Path) -> tuple[dict[str, Any], str]:
+    configured, components = _logical_drive_path_components(destination, drive_root=drive_root)
+    if not components or components[0] != "ReVision":
+        raise StorageCapacityError(f"checkpoint publication is outside the canonical ReVision folder: {configured}")
+    revision = resolve_drive_folder(service, ("ReVision",))
+    if (
+        revision.get("path_exists") is not True
+        or str(revision.get("folder_id") or "") != CANONICAL_REVISION_FOLDER_ID
+        or revision.get("drive_id")
+    ):
+        raise StorageCapacityError("checkpoint publication could not resolve the exact canonical ReVision folder ID")
+    location = resolve_drive_folder(service, components)
+    if (
+        location.get("path_exists") is not True
+        or not location.get("folder_id")
+        or location.get("drive_id")
+        or location.get("can_add_children") is not True
+    ):
+        raise StorageCapacityError(f"checkpoint publication folder is missing or not writable by the storage account: {configured}")
+    return location, str(location["folder_id"])
+
+
+def require_checkpoint_publication_capacity(
+    local_root: str | Path, destination: str | Path, identity: dict[str, Any], *,
+    drive_checkpoint_root: str | Path, drive_mount_root: str | Path = "/content/drive/MyDrive",
+    api_factory=None, generation: int,
+) -> dict[str, Any]:
+    """Recheck canonical-account quota immediately before publishing one large checkpoint."""
+    _require_canonical_storage_api_factory(api_factory)
+    if type(generation) is not int or generation < 1:
+        raise ValueError("Drive checkpoint publication requires one explicit positive generation number")
+    source_manifest, manifest_path, _payload_path = _checkpoint_generation_source(
+        local_root, identity, generation,
+    )
+    destination_path = Path(destination).expanduser()
+    checkpoint_root = Path(drive_checkpoint_root).expanduser()
+    try:
+        destination_path.resolve().relative_to(checkpoint_root.resolve())
+    except ValueError as exc:
+        raise StorageCapacityError("checkpoint publication destination escapes the verified checkpoint root") from exc
+    service = api_factory()
+    account = _drive_account_snapshot(service)
+    if account["authenticated_user"] != CANONICAL_STORAGE_ACCOUNT_EMAIL:
+        raise StorageCapacityError("checkpoint quota identity changed; no checkpoint was published")
+    _location, parent_id = _checkpoint_drive_location(
+        service, destination_path, drive_root=Path(drive_mount_root).expanduser(),
+    )
+    available = account.get("available_bytes")
+    if available is None:
+        raise StorageCapacityError(
+            "canonical Drive quota is unknown; no checkpoint was published and existing recovery points remain intact"
+        )
+    manifest_bytes = max(manifest_path.stat().st_size, len(json.dumps(source_manifest, sort_keys=True).encode("utf-8")))
+    required = int(source_manifest["payload_bytes"]) + manifest_bytes + CHECKPOINT_SIZE_FIXED_OVERHEAD_BYTES
+    try:
+        require_available_bytes(
+            destination_path, required_bytes=required,
+            reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
+            available_bytes=int(available), storage_kind="canonical Drive checkpoint publication",
+        )
+    except StorageCapacityError as exc:
+        raise StorageCapacityError(
+            f"Drive capacity gate stopped before checkpoint publication: {exc}"
+        ) from exc
+    return {
+        "storage_account_email": account["authenticated_user"],
+        "quota_available_bytes_before_write": int(available),
+        "folder_id": parent_id,
+        "generation": generation,
+        "payload_bytes": int(source_manifest["payload_bytes"]),
+        "manifest_bytes": manifest_bytes,
+        "required_peak_bytes_plus_reserve": required + DEFAULT_STORAGE_RESERVE_BYTES,
+        "safety_reserve_bytes": DEFAULT_STORAGE_RESERVE_BYTES,
+    }
+
+
+def verify_drive_checkpoint_generation(
+    local_root: str | Path, destination: str | Path, identity: dict[str, Any], *,
+    generation: int, drive_mount_root: str | Path = "/content/drive/MyDrive", api_factory=None,
+) -> dict[str, Any]:
+    """Verify both newly published files through Drive API before recovery pruning."""
+    _require_canonical_storage_api_factory(api_factory)
+    manifest, manifest_path, payload_path = _checkpoint_generation_source(local_root, identity, generation)
+    service = api_factory()
+    account = _drive_account_snapshot(service)
+    if account["authenticated_user"] != CANONICAL_STORAGE_ACCOUNT_EMAIL:
+        raise StorageCapacityError("Drive checkpoint read-back used an unexpected quota account")
+    _location, parent_id = _checkpoint_drive_location(
+        service, Path(destination).expanduser(), drive_root=Path(drive_mount_root).expanduser(),
+    )
+    expected_files = (
+        (manifest_path, manifest_path.stat().st_size, None),
+        (payload_path, int(manifest["payload_bytes"]), manifest["payload_sha256"]),
+    )
+    verified = []
+    for local_path, expected_size, expected_sha256 in expected_files:
+        metadata = None
+        last_error = None
+        for attempt, delay in enumerate((0.0, *DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS)):
+            if delay:
+                time.sleep(delay)
+            try:
+                metadata = _lookup_drive_child(service, parent_id, local_path.name)
+                last_error = None
+            except StorageCapacityError as exc:
+                if not _retryable_checkpoint_publication_error(exc):
+                    raise
+                last_error = exc
+            if metadata is not None:
+                break
+            if last_error is not None and attempt + 1 == len(DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS) + 1:
+                raise last_error
+        if not isinstance(metadata, dict):
+            raise StorageCapacityError(
+                f"Drive API could not read back newly published checkpoint file {local_path.name!r} "
+                f"from exact parent {parent_id}; no stale recovery generation was pruned"
+            )
+        owner = _owner_email(metadata)
+        parents = [str(value) for value in metadata.get("parents", [])]
+        size = _optional_nonnegative_int(metadata.get("size"), "published checkpoint size")
+        quota_bytes = _optional_nonnegative_int(metadata.get("quotaBytesUsed"), "published checkpoint quota bytes")
+        md5_remote = str(metadata.get("md5Checksum") or "").lower()
+        md5_local = _checkpoint_md5(local_path)
+        if (
+            metadata.get("name") != local_path.name
+            or not metadata.get("id")
+            or metadata.get("mimeType") == DRIVE_FOLDER_MIME
+            or parents != [parent_id]
+            or owner != CANONICAL_STORAGE_ACCOUNT_EMAIL
+            or metadata.get("ownedByMe") is not True
+            or size != expected_size
+            or quota_bytes is None or quota_bytes <= 0
+            or not md5_remote or md5_remote != md5_local
+        ):
+            mismatch = StorageCapacityError(
+                "Drive checkpoint API read-back failed exact parent, main-account ownership, quota attribution, "
+                f"size, or MD5 verification for {local_path.name!r}; no stale recovery generation was pruned"
+            )
+            # DriveFS can expose a just-published file before its metadata settles.
+            # Retry only a clearly incomplete size/hash read-back; parent, owner,
+            # quota attribution, IDs, and names are authorization/integrity failures.
+            if (
+                metadata.get("name") == local_path.name
+                and metadata.get("id")
+                and metadata.get("mimeType") != DRIVE_FOLDER_MIME
+                and parents == [parent_id]
+                and owner == CANONICAL_STORAGE_ACCOUNT_EMAIL
+                and metadata.get("ownedByMe") is True
+                and quota_bytes is not None and quota_bytes > 0
+                and (size != expected_size or not md5_remote or md5_remote != md5_local)
+            ):
+                raise _CheckpointPublicationReadbackPending(
+                    f"Drive checkpoint bytes are not yet fully visible for {local_path.name!r}"
+                ) from mismatch
+            raise mismatch
+        if expected_sha256 is not None:
+            if local_path.stat().st_size != int(manifest["payload_bytes"]):
+                raise StorageCapacityError(
+                    f"Drive-mounted checkpoint payload size differs from its manifest: {local_path.name}"
+                )
+        verified.append({
+            "name": local_path.name, "drive_file_id": str(metadata["id"]),
+            "parent_id": parent_id, "owner_email": owner, "owned_by_me": True,
+            "size_bytes": size, "quota_bytes_used": quota_bytes, "md5_checksum": md5_remote,
+            "payload_sha256": expected_sha256,
+        })
+    return {"status": "PASS", "generation": generation, "folder_id": parent_id, "files": verified}
+
+
+def _retryable_checkpoint_publication_error(exc: Exception) -> bool:
+    if isinstance(exc, _CheckpointPublicationReadbackPending):
+        return True
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    cause = exc.__cause__
+    if cause is not None and cause is not exc and _retryable_checkpoint_publication_error(cause):
+        return True
+    response = getattr(exc, "resp", None)
+    status = getattr(response, "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    if status is not None:
+        try:
+            status = int(status)
+        except (TypeError, ValueError):
+            status = None
+        if status in {408, 409, 429} or (status is not None and 500 <= status <= 599):
+            return True
+    if not isinstance(exc, OSError):
+        return False
+    return exc.errno in {
+        errno.EIO, errno.ETIMEDOUT, errno.ECONNRESET, errno.ECONNABORTED,
+        errno.ENETDOWN, errno.ENETUNREACH, errno.ESTALE,
+    }
+
+
+class _CheckpointPublicationReadbackPending(StorageCapacityError):
+    """Transient DriveFS/API visibility mismatch after an otherwise valid upload."""
+
+
+def publish_verified_drive_checkpoint_generation(
+    mirror_function, local_root: str | Path, destination: str | Path, identity: dict[str, Any], *,
+    drive_checkpoint_root: str | Path, drive_mount_root: str | Path = "/content/drive/MyDrive",
+    api_factory=None, generation: int, **mirror_kwargs,
+):
+    """Publish one checkpoint with live capacity, API ownership read-back and safe retries.
+
+    For a pruning recovery sync, API verification of the newest generation is
+    performed inside the deletion callback, before the serializer can delete a
+    stale point. Checkpoint tensor serialization itself remains in the frozen
+    runner/checkpointing modules and is not changed here.
+    """
+    original_delete = mirror_kwargs.get("delete_callback")
+    pruning = mirror_kwargs.get("prune_destination", True) and mirror_kwargs.get("keep", 2) is not None
+    if pruning and not callable(original_delete):
+        raise StorageCapacityError("canonical Drive recovery pruning requires the exact-ID delete callback")
+    for attempt in range(len(CHECKPOINT_PUBLICATION_RETRY_DELAYS_SECONDS) + 1):
+        require_checkpoint_publication_capacity(
+            local_root, destination, identity,
+            drive_checkpoint_root=drive_checkpoint_root,
+            drive_mount_root=drive_mount_root, api_factory=api_factory,
+            generation=generation,
+        )
+        verified_before_pruning = False
+
+        def verified_delete(path):
+            nonlocal verified_before_pruning
+            if not verified_before_pruning:
+                verify_drive_checkpoint_generation(
+                    local_root, destination, identity, generation=generation,
+                    drive_mount_root=drive_mount_root, api_factory=api_factory,
+                )
+                verified_before_pruning = True
+            return original_delete(path)
+
+        call_kwargs = dict(mirror_kwargs)
+        if pruning:
+            call_kwargs["delete_callback"] = verified_delete
+        try:
+            result = mirror_function(local_root, destination, identity, **call_kwargs)
+            verify_drive_checkpoint_generation(
+                local_root, destination, identity, generation=generation,
+                drive_mount_root=drive_mount_root, api_factory=api_factory,
+            )
+            return result
+        except Exception as exc:
+            if not _retryable_checkpoint_publication_error(exc) or attempt >= len(CHECKPOINT_PUBLICATION_RETRY_DELAYS_SECONDS):
+                raise
+            time.sleep(CHECKPOINT_PUBLICATION_RETRY_DELAYS_SECONDS[attempt])
+    raise AssertionError("bounded checkpoint publication retry loop exited unexpectedly")
 
 
 def _write_capability_probe(
@@ -1089,6 +1516,8 @@ def inspect_drive_destination(
     # user-owned My Drive folder.
     target = Path(path).expanduser().resolve()
     service = (api_factory or _drive_api_service)()
+    if _BOUND_STORAGE_SESSION is not None and service is not _BOUND_DRIVE_API_SERVICE:
+        raise StorageCapacityError("Drive operation attempted with a client outside the verified canonical storage session")
     account_before = _drive_account_snapshot(service)
     authenticated_user = account_before["authenticated_user"]
     location = resolve_drive_folder(service, components)
@@ -1271,6 +1700,8 @@ def project_storage(
             "first_run_temporary_output_headroom_bytes": output_atomic,
             "first_run_required_without_reserve_bytes": first_run_drive_without_reserve,
             "first_run_peak_with_reserve_bytes": first_run_drive_without_reserve + safety,
+            "next_run_required_without_reserve_bytes": per_run_drive_retained + checkpoint_atomic + output_atomic,
+            "next_run_peak_with_reserve_bytes": per_run_drive_retained + checkpoint_atomic + output_atomic + safety,
             "matrix_retained_bytes": matrix_drive_retained,
             "matrix_temporary_checkpoint_headroom_bytes": checkpoint_atomic,
             "matrix_temporary_output_headroom_bytes": output_atomic,
@@ -1312,11 +1743,11 @@ def require_run_capacity(
         local_projection = projection.get("local", {})
         description = "first_run"
     elif scope == "matrix":
-        drive_key = "matrix_required_without_reserve_bytes"
+        drive_key = "next_run_required_without_reserve_bytes"
         local_key = "next_run_required_without_reserve_bytes"
         drive_projection = projection.get("drive", {})
         local_projection = projection.get("local", {})
-        description = "matrix (local capacity is checked one complete run at a time)"
+        description = "next matrix run (full-matrix projection is informational only)"
         if storage_snapshot.get("production_measurements_validated") is not True:
             raise StorageCapacityError(
                 "matrix capacity gate requires validated first-run production checkpoint/output measurements; no matrix run was launched"
@@ -1326,14 +1757,6 @@ def require_run_capacity(
     else:
         raise ValueError("capacity scope must be 'first_run' or 'matrix'")
     reserve = DEFAULT_STORAGE_RESERVE_BYTES
-    drive_remaining_required = None
-    if scope == "matrix":
-        remaining_runs = EXPECTED_RUN_COUNT - int(completed_runs)
-        drive_remaining_required = (
-            remaining_runs * int(projection["drive"]["first_run_retained_bytes"])
-            + int(projection["drive"]["matrix_temporary_checkpoint_headroom_bytes"])
-            + int(projection["drive"]["matrix_temporary_output_headroom_bytes"])
-        )
     local_cache_missing = max(
         0,
         int(projection["local"]["dataset_cache_upper_bytes"])
@@ -1346,12 +1769,8 @@ def require_run_capacity(
         ("local Colab disk", "local_available_bytes", local_projection, local_key),
     ):
         available = storage_snapshot.get(snapshot_key)
-        required = (
-            max(0, drive_remaining_required - current_drive_bytes)
-            if resource == "Drive" and drive_remaining_required is not None
-            else projection_values.get(projection_key)
-        )
-        if resource == "Drive" and scope == "first_run":
+        required = projection_values.get(projection_key)
+        if resource == "Drive":
             required = max(0, int(required) - current_drive_bytes)
         if resource == "local Colab disk":
             if scope == "first_run":
@@ -2007,24 +2426,170 @@ def _bundle_identity(bundle) -> dict[str, str]:
     }
 
 
+def _verified_cache_candidate(
+    cache_root: str | Path, dataset: str, split: str, preflight: dict[str, Any],
+):
+    """Locate one unambiguous cache for a pinned archive identity, without networking."""
+    from revision_r1.data import CACHE_FORMAT_VERSION, _cache_paths
+
+    try:
+        frozen = DATASETS[dataset][split]
+        expected = preflight[dataset][split]
+        archive_md5 = str(expected["md5"])
+        archive_sha256 = str(expected["sha256"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"preflight lacks {dataset}/{split} archive identity") from exc
+    if archive_md5 != frozen["md5"] or len(archive_sha256) != 64:
+        raise ValueError(f"preflight {dataset}/{split} hashes differ from the frozen dataset identity")
+    root = Path(cache_root).expanduser().resolve()
+    candidates = sorted(root.glob(f"{archive_md5}_*_stream_f32_v{CACHE_FORMAT_VERSION}/manifest.json"))
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise ValueError(
+            f"multiple local cache manifests match {dataset}/{split} archive MD5 {archive_md5}; refusing ambiguous cache"
+        )
+    manifest_path = candidates[0]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"local dataset cache manifest is unreadable: {manifest_path}") from exc
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("archive_md5") != archive_md5
+        or manifest.get("archive_sha256") != archive_sha256
+        or not isinstance(manifest.get("x_key"), str)
+        or not isinstance(manifest.get("y_key"), str)
+    ):
+        raise ValueError(f"local dataset cache manifest has a different source identity: {manifest_path}")
+    paths = _cache_paths(root, archive_md5, manifest["x_key"], manifest["y_key"])
+    if paths[2] != manifest_path or not all(path.is_file() and not path.is_symlink() for path in paths):
+        raise ValueError(f"local dataset cache is incomplete or unsafe: {manifest_path.parent}")
+    return paths, manifest
+
+
+def inspect_dataset_sources(
+    data_roots: dict[str, str | Path], cache_root: str | Path, preflight: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Inventory exact Drive NPZ sources or local cache candidates; never downloads."""
+    if set(data_roots) != set(DATASET_ORDER):
+        raise ValueError("dataset roots must exactly match the frozen dataset names")
+    report: dict[str, dict[str, Any]] = {}
+    for dataset in DATASET_ORDER:
+        root = Path(data_roots[dataset]).expanduser()
+        splits: dict[str, Any] = {}
+        for split in ("train", "test"):
+            source = root / DATASETS[dataset][split]["filename"]
+            if source.is_symlink():
+                raise ValueError(f"dataset source path must not be a symlink: {source}")
+            if source.is_file():
+                splits[split] = {
+                    "source": "CANONICAL_DRIVE_NPZ",
+                    "path": str(source),
+                    "sha256_verification": "performed_before_dataset_use",
+                }
+                continue
+            candidate = _verified_cache_candidate(cache_root, dataset, split, preflight)
+            if candidate is None:
+                raise FileNotFoundError(
+                    f"{dataset}/{split} is missing from canonical Drive and has no matching local verified-cache candidate; "
+                    f"expected Drive file {source}; no external download will be attempted"
+                )
+            paths, manifest = candidate
+            splits[split] = {
+                "source": "LOCAL_ARCHIVE_IDENTITY_MATCHED_CACHE",
+                "cache_directory": str(paths[0].parent),
+                "archive_sha256": manifest["archive_sha256"],
+                "cache_content_hashes": "verified immediately before dataset use",
+            }
+        report[dataset] = {"data_root": str(root), "splits": splits, "external_downloads": "DISABLED"}
+    return report
+
+
+def _load_verified_cache_split(
+    cache_root: str | Path, dataset: str, split: str, preflight: dict[str, Any],
+):
+    import numpy as np
+    from revision_r1.data import DatasetBundle, _load_verified_cache
+
+    candidate = _verified_cache_candidate(cache_root, dataset, split, preflight)
+    if candidate is None:
+        raise FileNotFoundError(f"no checksum-verified local cache candidate exists for {dataset}/{split}")
+    paths, cache_manifest = candidate
+    spec = DATASETS[dataset][split]
+    x, y, manifest = _load_verified_cache(
+        paths, str(preflight[dataset][split]["md5"]), manifest_x := cache_manifest["x_key"],
+        manifest_y := cache_manifest["y_key"], tuple(spec["shape"]),
+        str(preflight[dataset][split]["sha256"]),
+    )
+    if x is None or y is None or not isinstance(manifest, dict):
+        raise ValueError(f"local cache could not be loaded for {dataset}/{split}")
+    if x.dtype != np.dtype("float32") or y.dtype != np.dtype("int64"):
+        raise ValueError(f"local cache dtype differs from the production coordinate contract for {dataset}/{split}")
+    rows_per_chunk = max(1, (8 << 20) // max(4, int(x.shape[1]) * 4))
+    for start in range(0, len(x), rows_per_chunk):
+        if not np.isfinite(x[start:start + rows_per_chunk]).all():
+            raise ValueError(f"local cache contains nonfinite features for {dataset}/{split}")
+    labels, counts = np.unique(y, return_counts=True)
+    if not np.array_equal(labels, np.arange(100, dtype=np.int64)):
+        raise ValueError(f"local cache labels do not contain exactly classes 0..99 for {dataset}/{split}")
+    metadata = {
+        "path": str(Path(cache_root).expanduser().resolve() / f"{DATASETS[dataset][split]['filename']} (verified local cache)"),
+        "filename": DATASETS[dataset][split]["filename"], "split": split,
+        "md5": str(preflight[dataset][split]["md5"]),
+        "sha256": str(preflight[dataset][split]["sha256"]),
+        "x_key": manifest_x, "y_key": manifest_y,
+        "shape": list(x.shape), "dtype": str(x.dtype),
+        "source_dtype": str(manifest["x_source_dtype"]),
+        "label_dtype": str(y.dtype), "source_label_dtype": str(manifest["y_source_dtype"]),
+        "class_count": int(labels.size),
+        "class_counts": {str(int(label)): int(count) for label, count in zip(labels, counts)},
+        "cache_enabled": True, "archive_absent_cache_hashes_verified": True,
+    }
+    return x, y, metadata
+
+
 def load_validated_dataset_bundle(
     data_root: str | Path, dataset: str, cache_root: str | Path, preflight: dict[str, Any],
     *, progress_callback=None,
 ):
-    """Load once through the existing MD5/SHA-256-verified NPZ/cache path."""
-    from revision_r1.data import preflight_dataset
+    """Load pinned Drive NPZs or their checksum-verified local mmap caches."""
+    from revision_r1.data import DatasetBundle, load_npz_arrays, require_memory_mapped_production_bundle
 
-    bundle = preflight_dataset(
-        data_root, dataset, cache_dir=cache_root, progress_callback=progress_callback,
-    )
-    from revision_r1.data import require_memory_mapped_production_bundle
+    if dataset not in DATASETS:
+        raise ValueError(f"unsupported dataset {dataset!r}")
+    root = Path(data_root).expanduser()
+    spec = DATASETS[dataset]
+    loaded: dict[str, tuple[Any, Any, dict[str, Any]]] = {}
+    for split in ("train", "test"):
+        archive = root / spec[split]["filename"]
+        if archive.is_symlink():
+            raise ValueError(f"dataset archive must not be a symlink: {archive}")
+        if archive.is_file():
+            arrays = load_npz_arrays(
+                archive, split=split, expected_md5=spec[split]["md5"],
+                expected_shape=tuple(spec[split]["shape"]), expected_labels=range(100),
+                cache_dir=cache_root, progress_callback=progress_callback,
+            )
+        else:
+            arrays = _load_verified_cache_split(cache_root, dataset, split, preflight)
+        if (
+            arrays[2].get("md5") != preflight[dataset][split].get("md5")
+            or arrays[2].get("sha256") != preflight[dataset][split].get("sha256")
+        ):
+            raise ValueError(f"{dataset}/{split} content identity differs from mounted-Drive preflight")
+        loaded[split] = arrays
+    train_x, train_y, train_meta = loaded["train"]
+    test_x, test_y, test_meta = loaded["test"]
+    if train_x.shape[1] != test_x.shape[1] or train_x.shape[1] != int(spec["feature_dim"]):
+        raise ValueError(f"{dataset} train/test feature coordinate dimensions differ")
+    bundle = DatasetBundle(dataset, train_x, train_y, test_x, test_y, train_meta, test_meta)
 
     require_memory_mapped_production_bundle(bundle)
     observed = _bundle_identity(bundle)
     expected = {"namespace": "PRODUCTION", "dataset": dataset, **_preflight_identity(preflight, dataset)}
     if observed != expected:
         raise ValueError(f"{dataset} NPZ identity differs from the mounted-Drive preflight record")
-    spec = DATASETS[dataset]
     if (
         bundle.feature_dim != int(spec["feature_dim"])
         or list(bundle.train_metadata.get("shape", [])) != list(spec["train"]["shape"])
@@ -2115,6 +2680,9 @@ def inspect_production_capacity(
     verified_dataset_cache_bytes: int = 0,
 ) -> dict[str, Any]:
     """Inspect exact Drive destinations/account quota and current local free space."""
+    if _BOUND_STORAGE_SESSION is not None and api_factory is not None:
+        if api_factory() is not _BOUND_DRIVE_API_SERVICE:
+            raise StorageCapacityError("capacity check attempted with a Drive client outside the verified storage session")
     output_destination = inspect_drive_destination(output_path, api_factory=api_factory)
     checkpoint_destination = inspect_drive_destination(checkpoint_path, api_factory=api_factory)
     same_account = output_destination["quota_account_email"] == checkpoint_destination["quota_account_email"]
@@ -2156,6 +2724,17 @@ def inspect_production_capacity(
         ),
         "authenticated_user": output_destination["authenticated_user"],
         "quota_account_email": output_destination["quota_account_email"],
+        "canonical_storage_identity_verified": bool(
+            _BOUND_STORAGE_SESSION is not None
+            and _BOUND_STORAGE_SESSION.get("status") == "PASS"
+            and _BOUND_STORAGE_SESSION.get("storage_account_email") == CANONICAL_STORAGE_ACCOUNT_EMAIL
+            and _BOUND_STORAGE_SESSION.get("canonical_revision_folder_id") == CANONICAL_REVISION_FOLDER_ID
+            and output_destination["quota_account_email"] == CANONICAL_STORAGE_ACCOUNT_EMAIL
+            and checkpoint_destination["quota_account_email"] == CANONICAL_STORAGE_ACCOUNT_EMAIL
+        ),
+        "canonical_revision_folder_id": (
+            _BOUND_STORAGE_SESSION.get("canonical_revision_folder_id") if _BOUND_STORAGE_SESSION else None
+        ),
         "destination_owner": output_destination["destination_owner"],
         "output_destination": output_destination,
         "checkpoint_destination": checkpoint_destination,
@@ -2791,8 +3370,8 @@ def _rotation_deferred_pruning_evidence(
     return {
         "status": "CODE_PATH_CONFIRMED_RUN_LOG_NOT_CORROBORATED",
         "reason": (
-            "the checkpoint rotation code retains stale files when Drive canDelete is false; "
-            "available per-attempt progress logs did not identify the currently present files"
+            "checkpoint rotation preserves stale files not owned by the canonical storage account or without "
+            "verified Drive canDelete; available per-attempt progress logs did not identify the currently present files"
         ),
         "deferred_files_still_present": [],
     }
@@ -4514,6 +5093,40 @@ def _record_completed_run(
     return registry, True
 
 
+def reuse_validated_first_run_measurement(
+    plan: dict[str, Any], record: dict[str, Any], output_root: str | Path,
+) -> dict[str, Any]:
+    """Validate finalized run 1 and reuse its already-registered measurement unchanged."""
+    if not plan.get("runs") or record != plan["runs"][0] or int(record.get("run_index", -1)) != 1:
+        raise ValueError("only frozen completed run 1 can be reused without execution")
+    root = Path(output_root).expanduser().resolve()
+    registry = _read_matrix_registry(root, plan)
+    entry = registry["completed_runs"].get(record["run_key"])
+    if not isinstance(entry, dict):
+        raise ValueError("finalized first run is not present in the existing completion registry; refusing to repair or rerun it")
+    validated = _validate_completed_run(
+        plan, record, None, run_output_root(root, record), synthetic=False,
+    )
+    if (
+        entry.get("run_id") != validated.get("run_id")
+        or entry.get("artifact_manifest_sha256") != validated.get("artifact_manifest_sha256")
+    ):
+        raise ValueError("registered first-run completion differs from its validated artifact manifest")
+    measurement = entry.get("storage_measurement")
+    if (
+        not isinstance(measurement, dict)
+        or measurement.get("status") != "MEASURED_VALIDATED_PRODUCTION_RUN"
+        or measurement.get("run_key") != record["run_key"]
+        or measurement.get("run_id") != validated.get("run_id")
+        or type(measurement.get("max_checkpoint_payload_bytes")) is not int
+        or measurement["max_checkpoint_payload_bytes"] <= 0
+        or type(measurement.get("run_output_bytes")) is not int
+        or measurement["run_output_bytes"] < 0
+    ):
+        raise ValueError("registered first run lacks its original validated storage measurement; refusing remeasurement/finalization")
+    return measurement
+
+
 class _MatrixLeaseHeartbeat:
     def __init__(self, path: Path, *, interval_seconds: float = 60.0, ttl_seconds: float = 300.0):
         from revision_r1.locking import RunLease
@@ -4545,6 +5158,19 @@ class _MatrixLeaseHeartbeat:
         self.lease.release()
 
 
+def _require_canonical_storage_api_factory(api_factory) -> None:
+    if _BOUND_STORAGE_SESSION is None or _BOUND_DRIVE_API_SERVICE is None:
+        raise StorageCapacityError("canonical main-account Drive storage session has not been verified; no production run started")
+    if (
+        _BOUND_STORAGE_SESSION.get("status") != "PASS"
+        or _BOUND_STORAGE_SESSION.get("storage_account_email") != CANONICAL_STORAGE_ACCOUNT_EMAIL
+        or _BOUND_STORAGE_SESSION.get("canonical_revision_folder_id") != CANONICAL_REVISION_FOLDER_ID
+    ):
+        raise StorageCapacityError("canonical storage-session identity is invalid; no production run started")
+    if api_factory is None or api_factory() is not _BOUND_DRIVE_API_SERVICE:
+        raise StorageCapacityError("production operation did not receive the exact verified Drive API client; no run started")
+
+
 def execute_frozen_plan_record(
     plan: dict[str, Any], record: dict[str, Any], bundle, *,
     output_root: str | Path, checkpoint_root: str | Path,
@@ -4560,6 +5186,7 @@ def execute_frozen_plan_record(
     capacity_scope: str = "first_run",
     completed_runs: int = 0,
     matrix_lease: _MatrixLeaseHeartbeat | None = None,
+    api_factory=None,
 ) -> dict[str, Any]:
     """Execute exactly one plan record through the unmodified runner.
 
@@ -4576,6 +5203,8 @@ def execute_frozen_plan_record(
         raise ValueError("synthetic runner execution is allowed only in explicit non-reportable test namespaces")
     if not synthetic and not production_authorized:
         raise RuntimeError("production run launch switch is disabled; no run started")
+    if not synthetic:
+        _require_canonical_storage_api_factory(api_factory)
     validate_frozen_plan(plan, expected_source_sha256=training_source_sha256(Path(__file__).resolve().parents[1]))
     plan_row = next((row for row in plan["runs"] if row.get("run_index") == record.get("run_index")), None)
     if plan_row is None:
@@ -4601,6 +5230,8 @@ def execute_frozen_plan_record(
             raise ValueError("production update counts must be loaded from the hash-verified schedule CSV")
         if storage_snapshot is None or storage_projection is None:
             raise StorageCapacityError("production run requires a current, owner-verified storage snapshot and projection")
+        if storage_snapshot.get("canonical_storage_identity_verified") is not True:
+            raise StorageCapacityError("production run requires verified canonical main-account storage identity; no run started")
         if (
             storage_snapshot.get("write_capability_verified") is not True
             or storage_snapshot.get("new_file_owner_verified") is not True
@@ -4722,9 +5353,20 @@ def execute_frozen_plan_record(
         def instrumented_mirror(local_path, drive_path, identity, **kwargs):
             nonlocal latest_drive, drive_write_bytes, drive_write_seconds
             started = time.perf_counter()
-            copied = previous_mirror(local_path, drive_path, identity, **kwargs)
-            elapsed = time.perf_counter() - started
             destination = Path(drive_path).resolve()
+            if not synthetic and destination.is_relative_to(checkpoints.resolve()):
+                generation = kwargs.get("generation")
+                copied = publish_verified_drive_checkpoint_generation(
+                    previous_mirror, local_path, drive_path, identity,
+                    drive_checkpoint_root=checkpoints,
+                    drive_mount_root="/content/drive/MyDrive",
+                    api_factory=api_factory,
+                    generation=generation,
+                    **kwargs,
+                )
+            else:
+                copied = previous_mirror(local_path, drive_path, identity, **kwargs)
+            elapsed = time.perf_counter() - started
             if not synthetic and destination.is_relative_to(checkpoints.resolve()):
                 timing = getattr(copied, "timings", {})
                 for name in drive_write_timings:
@@ -4860,7 +5502,12 @@ def execute_frozen_plan_record(
                 synthetic=synthetic, device=device,
                 drive_checkpoint_root=remote_checkpoint,
                 local_checkpoint_root=local_namespace,
-                drive_delete_callback=(None if synthetic else permanently_delete_recovery_checkpoint),
+                drive_delete_callback=(
+                    None if synthetic else
+                    lambda path, **kwargs: permanently_delete_recovery_checkpoint(
+                        path, api_factory=api_factory, **kwargs,
+                    )
+                ),
             )
         except Exception as exc:
             failed_event = {
@@ -4993,13 +5640,44 @@ def execute_first_production_run(
     """Run the first counted production run only after explicit enable + gates."""
     if launch_enabled is not True:
         raise RuntimeError("LAUNCH_FIRST_PRODUCTION_RUN is False; no production run started")
+    _require_canonical_storage_api_factory(api_factory)
     validate_runtime_bound_plan(plan, schedule_path, schedule_manifest_path, preflight)
-    reference = load_v62_recovery_checkpoint_bound(v62_recovery_report_path)
     first = plan["runs"][0]
     if (first["dataset"], int(first["seed"]), first["arm"]) != FIRST_RUN:
         raise ValueError("frozen first run is not EMBER / seed 42 / Full Hybrid")
     output_run = run_output_root(output_root, first)
     drive_checkpoint_run = run_checkpoint_root(checkpoint_root, first)
+    matrix_registry = _read_matrix_registry(Path(output_root).expanduser().resolve(), plan)
+    if first["run_key"] in matrix_registry.get("completed_runs", {}):
+        measurement = reuse_validated_first_run_measurement(plan, first, output_run)
+        return {
+            "status": "ALREADY_FINALIZED_COMPLETED_RUN",
+            "run_key": first["run_key"],
+            "run_index": 1,
+            "output_path": str(output_run),
+            "drive_checkpoint_root": str(drive_checkpoint_run),
+            "storage_measurement": measurement,
+            "completion_count": len(matrix_registry["completed_runs"]),
+            "training_source_sha256": plan["training_source_sha256"],
+            "schedule_sha256": plan["schedule_sha256"],
+            "training_started": False,
+            "finalizer_rerun": False,
+            "measurement_reused_without_recomputation": True,
+        }
+    run_status_path = (
+        output_run / "registry" / "runs" / _run_id_for(first, synthetic=False) / "registry.json"
+    )
+    if run_status_path.is_file():
+        try:
+            existing_run_status = json.loads(run_status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing_run_status = {}
+        if existing_run_status.get("status") == "completed":
+            raise ValueError(
+                "first-run artifacts are completed but absent from the frozen matrix registry; "
+                "refusing to retrain, remeasure, rerun finalization, or register them again"
+            )
+    reference = load_v62_recovery_checkpoint_bound(v62_recovery_report_path)
     try:
         validated_existing = _validate_completed_run(plan, first, None, output_run, synthetic=False)
     except Exception:
@@ -5162,6 +5840,7 @@ def execute_first_production_run(
             storage_snapshot=snapshot, storage_projection=projection, capacity_scope="first_run",
             completed_runs=0, matrix_lease=matrix_lease,
             required_resume_manifest=resume_gate["selected_integrity_verified_candidate"],
+            api_factory=api_factory,
         )
         if result.get("status") not in {"COMPLETED_VALIDATED", "ALREADY_VALIDATED"}:
             return {**result, "first_run_storage_projection_before_run": projection, "v62_reference": reference}
@@ -5203,6 +5882,7 @@ def continue_production_matrix(
     """Continue/resume records 2–100 sequentially, skipping only validated completions."""
     if launch_enabled is not True:
         raise RuntimeError("LAUNCH_REMAINING_MATRIX is False; no matrix run started")
+    _require_canonical_storage_api_factory(api_factory)
     validate_runtime_bound_plan(plan, schedule_path, schedule_manifest_path, preflight)
     root = Path(output_root).expanduser().resolve()
     lease = _MatrixLeaseHeartbeat(root / ".matrix_execution.lease.json")
@@ -5213,17 +5893,7 @@ def continue_production_matrix(
     with lease:
         first = plan["runs"][0]
         first_output = run_output_root(root, first)
-        first_checkpoint = run_checkpoint_root(checkpoint_root, first)
-        try:
-            first_validated = _validate_completed_run(plan, first, None, first_output, synthetic=False)
-        except Exception as exc:
-            raise ValueError("remaining matrix is blocked: first counted production run is not identity-matched and artifact-validated") from exc
-        first_measurement = measure_completed_production_run(
-            plan, first, None, first_output, first_checkpoint,
-        )
-        first_registry, _ = _record_completed_run(
-            root, plan, first, first_validated, storage_measurement=first_measurement,
-        )
+        first_measurement = reuse_validated_first_run_measurement(plan, first, first_output)
         observed_measurements = [first_measurement]
         bundle_cache = _SequentialDatasetBundleCache(
             lambda dataset: load_validated_dataset_bundle(
@@ -5306,6 +5976,7 @@ def continue_production_matrix(
                 production_authorized=True, device="cuda", progress_callback=progress_callback,
                 storage_snapshot=latest_capacity, storage_projection=latest_projection,
                 capacity_scope="matrix", completed_runs=completed_count, matrix_lease=lease,
+                api_factory=api_factory,
             )
             if result.get("status") == "INTERRUPTED_RESUMABLE":
                 return {

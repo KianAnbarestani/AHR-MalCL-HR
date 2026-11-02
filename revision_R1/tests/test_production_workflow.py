@@ -461,6 +461,7 @@ def test_first_run_holds_matrix_lease_before_and_during_dataset_load(tmp_path, m
         expected_anchor_corrections=0, expected_budget_changes=0,
     )
     monkeypatch.setattr(production_workflow, "validate_runtime_bound_plan", lambda observed, *_a, **_k: observed)
+    monkeypatch.setattr(production_workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
     v62 = _write_v62_producer_report_fixture(tmp_path)
     monkeypatch.setattr(production_workflow, "load_v62_recovery_checkpoint_bound", lambda _path: {
         "max_checkpoint_payload_bytes": 180_000_000,
@@ -825,14 +826,28 @@ def _drive_service(
 
 def _verified_probe_metadata(service, parent_id, name):
     """Mock only Drive's remote metadata response; probe file I/O stays real."""
-    if "probe-file-id" in service.deleted_ids:
+    probe_id = f"probe-file:{name}"
+    if probe_id in service.deleted_ids:
         return None
     authenticated_user = service._about["user"]["emailAddress"]
     return {
-        "id": "probe-file-id", "name": name, "mimeType": "application/octet-stream",
+        "id": probe_id, "name": name, "mimeType": "application/octet-stream",
         "parents": [parent_id], "owners": [{"emailAddress": authenticated_user}],
         "ownedByMe": True, "quotaBytesUsed": "64", "size": "64",
     }
+
+
+def _bind_main_storage_for_delete_test(monkeypatch, service):
+    monkeypatch.setattr(production_workflow, "CANONICAL_REVISION_FOLDER_ID", "revision-folder")
+    monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", service, raising=False)
+    monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", {
+        "status": "PASS", "storage_account_email": "kian.anb777@gmail.com",
+        "canonical_revision_folder_id": "revision-folder",
+    }, raising=False)
+    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, components: {
+        "folder_id": "revision-folder" if tuple(components) == ("ReVision",) else "recovery-folder",
+        "path_exists": True, "can_add_children": True,
+    })
 
 
 def test_drive_path_resolution_checks_owner_and_follows_shortcut_targets():
@@ -850,6 +865,523 @@ def test_drive_path_resolution_checks_owner_and_follows_shortcut_targets():
     assert future["path_exists"] is False
     assert future["parent_id"] == "revision-folder"
     assert future["unresolved_components"] == ["new-production-root", "checkpoints"]
+
+
+def test_canonical_storage_session_binds_main_account_exact_folder_and_mount_probe(tmp_path, monkeypatch):
+    service = _drive_service(
+        target_owner="kian.anb777@gmail.com",
+        authenticated_user="kian.anb777@gmail.com",
+    )
+    drive_root = tmp_path / "MyDrive"
+    revision_path = drive_root / "ReVision"
+    revision_path.mkdir(parents=True)
+    monkeypatch.setattr(production_workflow, "_DRIVE_WRITE_PROBE_CACHE", {})
+    monkeypatch.setattr(production_workflow, "_lookup_drive_child", _verified_probe_metadata)
+    monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", None, raising=False)
+    monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", None, raising=False)
+    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, components: {
+        "path_exists": True,
+        "folder_id": production_workflow.CANONICAL_REVISION_FOLDER_ID,
+        "owner_email": "kian.anb777@gmail.com", "can_add_children": True,
+    })
+    monkeypatch.setattr(production_workflow, "CANONICAL_REVISION_FOLDER_ID", "revision-folder")
+
+    evidence = production_workflow.verify_canonical_storage_session(
+        api_factory=lambda: service,
+        drive_mount_root=drive_root,
+        expected_account_email="kian.anb777@gmail.com",
+        expected_revision_folder_id="revision-folder",
+    )
+
+    assert evidence["status"] == "PASS"
+    assert evidence["storage_account_email"] == "kian.anb777@gmail.com"
+    assert evidence["canonical_revision_folder_id"] == "revision-folder"
+    assert evidence["probe"]["probe_parent_id"] == "revision-folder"
+    assert evidence["probe"]["new_file_owner"] == "kian.anb777@gmail.com"
+    assert evidence["probe"]["permanent_recovery_delete_verified"] is True
+    assert production_workflow._BOUND_DRIVE_API_SERVICE is service
+    assert list(revision_path.iterdir()) == []
+
+
+def test_canonical_storage_account_survives_compute_account_switch_with_same_resume_identity(tmp_path, monkeypatch):
+    """Runtime billing identity is not part of the persistent run/checkpoint identity."""
+    from revision_r1.checkpointing import save_generation, load_latest_valid
+    from revision_r1.state import PhaseCursor, RunState
+
+    storage_service = _drive_service(
+        target_owner="kian.anb777@gmail.com",
+        authenticated_user="kian.anb777@gmail.com",
+    )
+    drive_root = tmp_path / "MyDrive"
+    (drive_root / "ReVision").mkdir(parents=True)
+    monkeypatch.setattr(production_workflow, "_lookup_drive_child", _verified_probe_metadata)
+    monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", None, raising=False)
+    monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", None, raising=False)
+    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, _components: {
+        "path_exists": True,
+        "folder_id": production_workflow.CANONICAL_REVISION_FOLDER_ID,
+        "owner_email": "kian.anb777@gmail.com", "can_add_children": True,
+    })
+    identity = {"run_id": "existing-run", "training_source_sha256": "a" * 64,
+                "schedule_sha256": SCHEDULE_SHA, "config_sha256": "b" * 64}
+    local_recovery = tmp_path / "local" / "recovery"
+    save_generation(
+        local_recovery,
+        RunState(identity=identity, cursor=PhaseCursor(task_index=4, phase="classifier")),
+        identity, kind="recovery",
+    )
+    generation_before = (local_recovery / "generation-000001.manifest.json").read_bytes()
+
+    for compute_account in ("compute-one@example.org", "compute-two@example.org"):
+        evidence = production_workflow.verify_canonical_storage_session(
+            api_factory=lambda: storage_service,
+            drive_mount_root=drive_root,
+            expected_account_email="kian.anb777@gmail.com",
+            expected_revision_folder_id=production_workflow.CANONICAL_REVISION_FOLDER_ID,
+        )
+        production_workflow._require_canonical_storage_api_factory(lambda: storage_service)
+        loaded = load_latest_valid(local_recovery, identity)
+        assert evidence["storage_account_email"] == "kian.anb777@gmail.com"
+        assert compute_account != evidence["storage_account_email"]
+        assert loaded.state.cursor.task_index == 4
+        assert loaded.state.identity == identity
+        assert (local_recovery / "generation-000001.manifest.json").read_bytes() == generation_before
+
+
+def test_checkpoint_publication_uses_real_serialization_verifies_shortcut_owner_and_prunes_after_api_readback(
+    tmp_path, monkeypatch,
+):
+    from revision_r1.checkpointing import mirror_checkpoint_generations, save_generation
+    from revision_r1.state import PhaseCursor, RunState
+
+    storage_service = _drive_service(
+        target_owner="kian.anb777@gmail.com", authenticated_user="kian.anb777@gmail.com",
+        quota_limit="100000000000", quota_usage="1000000",
+    )
+    drive_root = tmp_path / "MyDrive"
+    actual_revision = tmp_path / "shortcut-target" / "ReVision"
+    actual_revision.mkdir(parents=True)
+    (drive_root).mkdir()
+    (drive_root / "ReVision").symlink_to(actual_revision, target_is_directory=True)
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    destination = checkpoint_root / "run" / "recovery"
+    destination.mkdir(parents=True)
+    source = tmp_path / "local" / "recovery"
+    identity = {"run_id": "checkpoint-run", "training_source_sha256": "a" * 64,
+                "schedule_sha256": SCHEDULE_SHA, "config_sha256": "b" * 64}
+    for task in range(3):
+        save_generation(
+            source,
+            RunState(identity=identity, cursor=PhaseCursor(task_index=task, phase="classifier")),
+            identity, kind="recovery", retain_generations=None,
+        )
+    initial_first = mirror_checkpoint_generations(
+        source, destination, identity, keep=2, prune_destination=False, generation=1,
+    )
+    initial_second = mirror_checkpoint_generations(
+        source, destination, identity, keep=2, prune_destination=False, generation=2,
+    )
+    assert initial_first and initial_second
+    monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", storage_service, raising=False)
+    monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", {
+        "status": "PASS", "storage_account_email": "kian.anb777@gmail.com",
+        "canonical_revision_folder_id": "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x",
+    }, raising=False)
+    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, components: {
+        "path_exists": True,
+        "folder_id": production_workflow.CANONICAL_REVISION_FOLDER_ID if tuple(components) == ("ReVision",) else "recovery-folder",
+        "parent_id": "parent-folder", "owner_email": "kian.anb777@gmail.com",
+        "can_add_children": True, "traversed_shortcut": True,
+    })
+
+    api_events = []
+
+    def api_metadata(_service, parent_id, name):
+        path = destination / name
+        if not path.is_file():
+            return None
+        payload = path.read_bytes()
+        record = {
+            "id": f"drive-{name}", "name": name, "mimeType": "application/octet-stream",
+            "parents": [parent_id], "owners": [{"emailAddress": "kian.anb777@gmail.com"}],
+            "ownedByMe": True, "size": str(len(payload)), "quotaBytesUsed": str(len(payload)),
+            "md5Checksum": hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+            "capabilities": {"canDelete": True},
+        }
+        api_events.append((name, record["owners"][0]["emailAddress"], record["id"]))
+        return record
+
+    monkeypatch.setattr(production_workflow, "_lookup_drive_child", api_metadata)
+    deletion_events = []
+
+    def exact_delete(path):
+        assert any(name == "generation-000003.pt" for name, _owner, _id in api_events)
+        assert any(name == "generation-000003.manifest.json" for name, _owner, _id in api_events)
+        deletion_events.append(path.name)
+        path.unlink()
+        return True
+
+    result = production_workflow.publish_verified_drive_checkpoint_generation(
+        mirror_checkpoint_generations, source, destination, identity,
+        drive_checkpoint_root=checkpoint_root, drive_mount_root=drive_root,
+        api_factory=lambda: storage_service, generation=3, keep=2,
+        delete_callback=exact_delete, preverified_manifests=(),
+    )
+
+    assert result
+    assert all(owner == "kian.anb777@gmail.com" for _name, owner, _id in api_events)
+    assert {name for name, _owner, _id in api_events} >= {
+        "generation-000003.pt", "generation-000003.manifest.json",
+    }
+    assert deletion_events == ["generation-000001.pt", "generation-000001.manifest.json"]
+    assert {int(path.name[11:17]) for path in destination.glob("generation-*.manifest.json")} == {2, 3}
+
+
+def test_checkpoint_publication_retries_partial_drive_copy_and_idempotent_replay(tmp_path, monkeypatch):
+    import errno
+    import shutil
+    from revision_r1 import checkpointing
+    from revision_r1.state import PhaseCursor, RunState
+
+    storage_service = _drive_service(
+        target_owner="kian.anb777@gmail.com", authenticated_user="kian.anb777@gmail.com",
+        quota_limit="100000000000", quota_usage="1000000",
+    )
+    drive_root = tmp_path / "MyDrive"
+    destination = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints" / "run" / "recovery"
+    destination.mkdir(parents=True)
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    source = tmp_path / "local" / "recovery"
+    identity = {"run_id": "retry-run", "training_source_sha256": "a" * 64,
+                "schedule_sha256": SCHEDULE_SHA, "config_sha256": "b" * 64}
+    from revision_r1.checkpointing import save_generation, mirror_checkpoint_generations
+    manifest = save_generation(
+        source, RunState(identity=identity, cursor=PhaseCursor(task_index=1, phase="classifier")),
+        identity, kind="recovery",
+    )
+    monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", storage_service, raising=False)
+    monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", {
+        "status": "PASS", "storage_account_email": "kian.anb777@gmail.com",
+        "canonical_revision_folder_id": "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x",
+    }, raising=False)
+    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, components: {
+        "path_exists": True,
+        "folder_id": production_workflow.CANONICAL_REVISION_FOLDER_ID if tuple(components) == ("ReVision",) else "recovery-folder",
+        "parent_id": "parent-folder", "owner_email": "kian.anb777@gmail.com",
+        "can_add_children": True,
+    })
+    monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _s, parent, name: (
+        {"id": f"drive-{name}", "name": name, "mimeType": "application/octet-stream",
+         "parents": [parent], "owners": [{"emailAddress": "kian.anb777@gmail.com"}],
+         "ownedByMe": True, "size": str((destination / name).stat().st_size),
+         "quotaBytesUsed": str((destination / name).stat().st_size),
+         "md5Checksum": hashlib.md5((destination / name).read_bytes(), usedforsecurity=False).hexdigest()}
+        if (destination / name).is_file() else None
+    ))
+    real_copyfileobj = shutil.copyfileobj
+    copies = {"count": 0}
+
+    def interrupted_copy(source_stream, destination_stream, length=0):
+        copies["count"] += 1
+        if copies["count"] == 1:
+            destination_stream.write(source_stream.read(128))
+            raise OSError(errno.EIO, "simulated interrupted mounted Drive write")
+        return real_copyfileobj(source_stream, destination_stream, length)
+
+    monkeypatch.setattr(checkpointing.shutil, "copyfileobj", interrupted_copy)
+    published = production_workflow.publish_verified_drive_checkpoint_generation(
+        mirror_checkpoint_generations, source, destination, identity,
+        drive_checkpoint_root=checkpoint_root, drive_mount_root=drive_root,
+        api_factory=lambda: storage_service, generation=int(manifest["generation"]),
+        keep=2, preverified_manifests=(manifest,), delete_callback=lambda _path: False,
+    )
+    assert published
+    assert copies["count"] == 2
+    assert (destination / manifest["payload_file"]).stat().st_size == manifest["payload_bytes"]
+    repeated = production_workflow.publish_verified_drive_checkpoint_generation(
+        mirror_checkpoint_generations, source, destination, identity,
+        drive_checkpoint_root=checkpoint_root, drive_mount_root=drive_root,
+        api_factory=lambda: storage_service, generation=int(manifest["generation"]),
+        keep=2, preverified_manifests=(manifest,), delete_callback=lambda _path: False,
+    )
+    assert not repeated
+    assert copies["count"] == 2
+
+
+def test_checkpoint_publication_capacity_rejects_before_serialized_bytes_are_copied(tmp_path, monkeypatch):
+    from revision_r1.checkpointing import save_generation, mirror_checkpoint_generations
+    from revision_r1.state import PhaseCursor, RunState
+
+    low_quota_service = _drive_service(
+        target_owner="kian.anb777@gmail.com", authenticated_user="kian.anb777@gmail.com",
+        quota_limit="1000000000", quota_usage="999999999",
+    )
+    drive_root = tmp_path / "MyDrive"
+    destination = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints" / "run" / "recovery"
+    destination.mkdir(parents=True)
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    source = tmp_path / "local" / "recovery"
+    identity = {"run_id": "low-quota-run", "training_source_sha256": "a" * 64,
+                "schedule_sha256": SCHEDULE_SHA, "config_sha256": "b" * 64}
+    manifest = save_generation(
+        source, RunState(identity=identity, cursor=PhaseCursor(task_index=1, phase="classifier")),
+        identity, kind="recovery",
+    )
+    monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", low_quota_service, raising=False)
+    monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", {
+        "status": "PASS", "storage_account_email": "kian.anb777@gmail.com",
+        "canonical_revision_folder_id": "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x",
+    }, raising=False)
+    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, components: {
+        "path_exists": True,
+        "folder_id": production_workflow.CANONICAL_REVISION_FOLDER_ID if tuple(components) == ("ReVision",) else "recovery-folder",
+        "parent_id": "parent-folder", "owner_email": "kian.anb777@gmail.com",
+        "can_add_children": True,
+    })
+    attempted = []
+
+    def should_not_mirror(*_args, **_kwargs):
+        attempted.append(True)
+        return mirror_checkpoint_generations(*_args, **_kwargs)
+
+    with pytest.raises(StorageCapacityError, match="Drive capacity gate stopped before checkpoint publication"):
+        production_workflow.publish_verified_drive_checkpoint_generation(
+            should_not_mirror, source, destination, identity,
+            drive_checkpoint_root=checkpoint_root, drive_mount_root=drive_root,
+            api_factory=lambda: low_quota_service, generation=int(manifest["generation"]),
+            keep=2, preverified_manifests=(manifest,), delete_callback=lambda _path: False,
+        )
+    assert not attempted
+    assert not list(destination.glob("generation-*.pt"))
+
+
+def test_checkpoint_publication_retry_classifies_only_transient_errors():
+    import errno
+
+    transient = StorageCapacityError("temporary DriveFS error")
+    transient.__cause__ = OSError(errno.EIO, "transient DriveFS I/O")
+    class HttpErrorLike(Exception):
+        def __init__(self, status):
+            self.resp = type("Response", (), {"status": status})()
+
+    assert production_workflow._retryable_checkpoint_publication_error(transient)
+    assert production_workflow._retryable_checkpoint_publication_error(HttpErrorLike(429))
+    assert production_workflow._retryable_checkpoint_publication_error(HttpErrorLike(503))
+    assert not production_workflow._retryable_checkpoint_publication_error(HttpErrorLike(403))
+    assert not production_workflow._retryable_checkpoint_publication_error(StorageCapacityError("wrong identity"))
+
+
+@pytest.mark.parametrize(
+    "authenticated_user,expected_folder_id,match",
+    [
+        ("other@example.org", "revision-folder", "storage account mismatch"),
+        ("kian.anb777@gmail.com", "wrong-folder", "canonical ReVision folder ID mismatch"),
+    ],
+)
+def test_canonical_storage_session_rejects_wrong_account_or_folder_before_probe(
+    tmp_path, monkeypatch, authenticated_user, expected_folder_id, match,
+):
+    service = _drive_service(
+        target_owner="kian.anb777@gmail.com", authenticated_user=authenticated_user,
+    )
+    drive_root = tmp_path / "MyDrive"
+    (drive_root / "ReVision").mkdir(parents=True)
+    monkeypatch.setattr(production_workflow, "_DRIVE_WRITE_PROBE_CACHE", {})
+    monkeypatch.setattr(production_workflow, "_lookup_drive_child", _verified_probe_metadata)
+    monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", None, raising=False)
+    monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", None, raising=False)
+
+    with pytest.raises(StorageCapacityError, match=match):
+        production_workflow.verify_canonical_storage_session(
+            api_factory=lambda: service,
+            drive_mount_root=drive_root,
+            expected_account_email="kian.anb777@gmail.com",
+            expected_revision_folder_id=expected_folder_id,
+        )
+
+    assert list((drive_root / "ReVision").iterdir()) == []
+    assert production_workflow._BOUND_DRIVE_API_SERVICE is None
+
+
+def test_matrix_capacity_gate_requires_only_next_run_incremental_storage_and_reserve():
+    plan = project_storage(_production_source_plan(), observed_checkpoint_bytes=1_000_000)
+    snapshot = {
+        "drive_available_bytes": plan["drive"]["first_run_required_without_reserve_bytes"]
+        + DEFAULT_STORAGE_RESERVE_BYTES,
+        "local_available_bytes": plan["local"]["next_run_required_without_reserve_bytes"]
+        + DEFAULT_STORAGE_RESERVE_BYTES,
+        "local_existing_dataset_cache_bytes": plan["local"]["dataset_cache_upper_bytes"],
+        "production_measurements_validated": True,
+    }
+
+    require_run_capacity(snapshot, plan, scope="matrix", completed_runs=1)
+
+    snapshot["drive_available_bytes"] -= 1
+    with pytest.raises(StorageCapacityError, match="matrix.*required"):
+        require_run_capacity(snapshot, plan, scope="matrix", completed_runs=1)
+
+
+def test_dataset_bundle_reuses_verified_local_cache_when_drive_npz_is_missing(tmp_path, monkeypatch):
+    import revision_r1.data as data_module
+
+    rng = np.random.default_rng(23)
+    labels = np.arange(100, dtype=np.int64)
+    train_x = rng.normal(size=(100, 4)).astype(np.float32)
+    test_x = rng.normal(size=(100, 4)).astype(np.float32)
+    data_root = tmp_path / "Drive" / "datasets"
+    data_root.mkdir(parents=True)
+    train_path, test_path = data_root / "train.npz", data_root / "test.npz"
+    np.savez(train_path, X_train=train_x, y_train=labels)
+    np.savez(test_path, X_test=test_x, y_test=labels)
+    mini_spec = {
+        "ember": {
+            "train": {"filename": "train.npz", "md5": data_module.file_digest(train_path, "md5"), "shape": [100, 4]},
+            "test": {"filename": "test.npz", "md5": data_module.file_digest(test_path, "md5"), "shape": [100, 4]},
+            "feature_dim": 4,
+            "anchor_k": 1,
+        }
+    }
+    monkeypatch.setattr(production_workflow, "DATASETS", mini_spec)
+    monkeypatch.setattr(data_module, "DATASETS", mini_spec)
+    cache_root = tmp_path / "local-cache"
+    from revision_r1.data import preflight_dataset
+
+    cached_bundle = preflight_dataset(data_root, "ember", cache_dir=cache_root)
+    preflight = {
+        "ember": {
+            "train": {"md5": cached_bundle.train_metadata["md5"], "sha256": cached_bundle.train_metadata["sha256"]},
+            "test": {"md5": cached_bundle.test_metadata["md5"], "sha256": cached_bundle.test_metadata["sha256"]},
+        }
+    }
+    train_path.unlink()
+    test_path.unlink()
+
+    actual = production_workflow.load_validated_dataset_bundle(data_root, "ember", cache_root, preflight)
+
+    assert isinstance(actual.x_train, np.memmap)
+    assert isinstance(actual.y_test, np.memmap)
+    np.testing.assert_array_equal(actual.x_train, train_x)
+    np.testing.assert_array_equal(actual.x_test, test_x)
+    assert actual.train_metadata["sha256"] == preflight["ember"]["train"]["sha256"]
+    assert actual.test_metadata["sha256"] == preflight["ember"]["test"]["sha256"]
+    cache_paths = data_module._cache_paths(
+        cache_root.resolve(), actual.train_metadata["md5"],
+        actual.train_metadata["x_key"], actual.train_metadata["y_key"],
+    )
+    cache_paths[0].write_bytes(cache_paths[0].read_bytes() + b"tamper")
+    with pytest.raises(ValueError, match="checksum"):
+        production_workflow.load_validated_dataset_bundle(data_root, "ember", cache_root, preflight)
+
+
+def test_dataset_source_inventory_uses_drive_npz_and_never_downloads(tmp_path):
+    preflight = _preflight()
+    roots = {name: tmp_path / name for name in production_workflow.DATASET_ORDER}
+    for dataset, root in roots.items():
+        root.mkdir()
+        spec = production_workflow.DATASETS[dataset]
+        for split in ("train", "test"):
+            (root / spec[split]["filename"]).write_bytes(b"fixture presence only")
+
+    report = production_workflow.inspect_dataset_sources(roots, tmp_path / "cache", preflight)
+
+    assert report["ember"]["splits"]["train"]["source"] == "CANONICAL_DRIVE_NPZ"
+    assert report["az_class"]["splits"]["test"]["sha256_verification"] == "performed_before_dataset_use"
+    assert all(row["external_downloads"] == "DISABLED" for row in report.values())
+
+
+def test_dataset_source_inventory_fails_if_drive_and_verified_cache_are_both_missing(tmp_path):
+    preflight = _preflight()
+    roots = {name: tmp_path / name for name in production_workflow.DATASET_ORDER}
+    for root in roots.values():
+        root.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="no external download will be attempted"):
+        production_workflow.inspect_dataset_sources(roots, tmp_path / "cache", preflight)
+
+
+def test_completed_first_run_is_validated_and_reused_without_remeasurement_or_reregistration(tmp_path, monkeypatch):
+    plan = _production_source_plan()
+    first = plan["runs"][0]
+    artifact_sha = "a" * 64
+    measurement = {
+        "status": "MEASURED_VALIDATED_PRODUCTION_RUN",
+        "run_key": first["run_key"],
+        "run_id": production_workflow._run_id_for(first, synthetic=False),
+        "max_checkpoint_payload_bytes": 100,
+        "run_output_bytes": 200,
+    }
+    entry = {
+        "run_key": first["run_key"], "run_index": first["run_index"],
+        "config_sha256": first["config_sha256"],
+        "training_source_sha256": plan["training_source_sha256"],
+        "schedule_sha256": plan["schedule_sha256"],
+        "class_order_sha256": first["class_order_sha256"],
+        "dataset_identity": first.get("dataset_identity"),
+        "run_id": measurement["run_id"], "artifact_manifest_sha256": artifact_sha,
+        "storage_measurement": measurement,
+    }
+    monkeypatch.setattr(
+        production_workflow, "_read_matrix_registry",
+        lambda *_args: {"completed_runs": {first["run_key"]: entry}},
+    )
+    monkeypatch.setattr(
+        production_workflow, "_validate_completed_run",
+        lambda *_args, **_kwargs: {"run_id": measurement["run_id"], "artifact_manifest_sha256": artifact_sha},
+    )
+    monkeypatch.setattr(
+        production_workflow, "measure_completed_production_run",
+        lambda *_args, **_kwargs: pytest.fail("completed run must not be measured/finalized again"),
+    )
+    monkeypatch.setattr(
+        production_workflow, "_record_completed_run",
+        lambda *_args, **_kwargs: pytest.fail("completed run must not be registered again"),
+    )
+
+    reused = production_workflow.reuse_validated_first_run_measurement(
+        plan, first, tmp_path / "run1-output",
+    )
+
+    assert reused == measurement
+
+
+def test_execute_first_run_skips_registered_finalized_run_before_reference_or_runner(tmp_path, monkeypatch):
+    plan = _production_source_plan()
+    first = plan["runs"][0]
+    measurement = {
+        "status": "MEASURED_VALIDATED_PRODUCTION_RUN", "run_key": first["run_key"],
+        "run_id": "existing-run-id", "max_checkpoint_payload_bytes": 1_000,
+        "run_output_bytes": 2_000,
+    }
+    monkeypatch.setattr(production_workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
+    monkeypatch.setattr(production_workflow, "validate_runtime_bound_plan", lambda value, *_a, **_k: value)
+    monkeypatch.setattr(
+        production_workflow, "_read_matrix_registry",
+        lambda *_args: {"completed_runs": {first["run_key"]: {"already": "registered"}}},
+    )
+    monkeypatch.setattr(production_workflow, "reuse_validated_first_run_measurement", lambda *_a: measurement)
+    monkeypatch.setattr(
+        production_workflow, "load_v62_recovery_checkpoint_bound",
+        lambda *_a, **_k: pytest.fail("finalized run must not reload the old checkpoint reference"),
+    )
+    monkeypatch.setattr(
+        production_workflow, "measure_completed_production_run",
+        lambda *_a, **_k: pytest.fail("finalized run must not be remeasured"),
+    )
+    monkeypatch.setattr(
+        production_workflow, "_record_completed_run",
+        lambda *_a, **_k: pytest.fail("finalized run must not be registered again"),
+    )
+
+    result = execute_first_production_run(
+        plan, preflight={}, schedule_path="unused", schedule_manifest_path="unused",
+        v62_recovery_report_path="unused", data_roots={}, cache_root=tmp_path / "cache",
+        output_root=tmp_path / "results", checkpoint_root=tmp_path / "checkpoints",
+        local_checkpoint_root=tmp_path / "local", launch_enabled=True,
+    )
+
+    assert result["status"] == "ALREADY_FINALIZED_COMPLETED_RUN"
+    assert result["run_key"] == "ember_seed42_full_hybrid"
+    assert result["storage_measurement"] is measurement
 
 
 def test_drive_folder_resolution_emits_explicit_mime_type_comparisons_and_escaped_name():
@@ -941,11 +1473,11 @@ def test_drive_destination_verifies_owner_and_shared_editor_by_new_file_owner(tm
 
 
 def test_recovery_pruner_deletes_exact_generation_when_drive_confirms_delete_capability(monkeypatch):
-    service = _drive_service(target_owner="folder-owner@example.org", authenticated_user="editor@example.org")
+    service = _drive_service(target_owner="kian.anb777@gmail.com", authenticated_user="kian.anb777@gmail.com")
     service.records["checkpoint-file"] = {
         "id": "checkpoint-file", "name": "generation-000001.pt",
         "mimeType": "application/octet-stream", "parents": ["recovery-folder"],
-        "owners": [{"emailAddress": "folder-owner@example.org"}], "ownedByMe": False,
+        "owners": [{"emailAddress": "kian.anb777@gmail.com"}], "ownedByMe": True,
         "capabilities": {"canDelete": True},
     }
     service.records["recovery-folder"] = {
@@ -953,9 +1485,8 @@ def test_recovery_pruner_deletes_exact_generation_when_drive_confirms_delete_cap
         "parents": ["checkpoints-folder"], "owners": [{"emailAddress": "folder-owner@example.org"}],
         "capabilities": {"canAddChildren": True},
     }
+    _bind_main_storage_for_delete_test(monkeypatch, service)
     monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path, **_kwargs: ("/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery", ("ReVision", "revision_R1", "production", "checkpoints", "recovery")))
-    monkeypatch.setattr(production_workflow, "_drive_account_snapshot", lambda _service: {"authenticated_user": "editor@example.org"})
-    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, _components: {"folder_id": "recovery-folder", "path_exists": True})
     monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _service, parent, name: next((row for row in service.records.values() if parent in row.get("parents", []) and row.get("name") == name), None))
 
     result = production_workflow.permanently_delete_recovery_checkpoint(
@@ -973,8 +1504,35 @@ def test_recovery_pruner_deletes_exact_generation_when_drive_confirms_delete_cap
         )
 
 
+def test_recovery_pruner_preserves_mixed_owner_history_even_when_can_delete_is_true(monkeypatch):
+    service = _drive_service(target_owner="kian.anb777@gmail.com", authenticated_user="kian.anb777@gmail.com")
+    service.records["historical-checkpoint"] = {
+        "id": "historical-checkpoint", "name": "generation-000001.pt",
+        "mimeType": "application/octet-stream", "parents": ["recovery-folder"],
+        "owners": [{"emailAddress": "previous-editor@example.org"}], "ownedByMe": False,
+        "capabilities": {"canDelete": True},
+    }
+    _bind_main_storage_for_delete_test(monkeypatch, service)
+    monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path, **_kwargs: (
+        "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery",
+        ("ReVision", "revision_R1", "production", "checkpoints", "recovery"),
+    ))
+    monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _service, parent, name: next((
+        row for row in service.records.values() if parent in row.get("parents", []) and row.get("name") == name
+    ), None))
+
+    result = production_workflow.permanently_delete_recovery_checkpoint(
+        "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/run/recovery/generation-000001.pt",
+        api_factory=lambda: service,
+    )
+
+    assert result is False
+    assert "historical-checkpoint" in service.records
+    assert service.deleted_ids == set()
+
+
 def test_recovery_pruner_defers_exact_legacy_file_when_drive_denies_delete(monkeypatch):
-    service = _drive_service(target_owner="folder-owner@example.org", authenticated_user="editor@example.org")
+    service = _drive_service(target_owner="kian.anb777@gmail.com", authenticated_user="kian.anb777@gmail.com")
     service.records["legacy-checkpoint"] = {
         "id": "legacy-checkpoint", "name": "generation-000279.pt",
         "mimeType": "application/x-zip", "parents": ["recovery-folder"],
@@ -986,18 +1544,11 @@ def test_recovery_pruner_defers_exact_legacy_file_when_drive_denies_delete(monke
         "parents": ["checkpoints-folder"], "owners": [{"emailAddress": "folder-owner@example.org"}],
         "capabilities": {"canAddChildren": True},
     }
+    _bind_main_storage_for_delete_test(monkeypatch, service)
     monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path, **_kwargs: (
         "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery",
         ("ReVision", "revision_R1", "production", "checkpoints", "recovery"),
     ))
-    monkeypatch.setattr(
-        production_workflow, "_drive_account_snapshot",
-        lambda _service: {"authenticated_user": "editor@example.org"},
-    )
-    monkeypatch.setattr(
-        production_workflow, "resolve_drive_folder",
-        lambda _service, _components: {"folder_id": "recovery-folder", "path_exists": True},
-    )
     monkeypatch.setattr(
         production_workflow, "_lookup_drive_child",
         lambda _service, parent, name: next((
@@ -1017,20 +1568,18 @@ def test_recovery_pruner_defers_exact_legacy_file_when_drive_denies_delete(monke
 
 
 def test_recovery_pruner_rejects_replaced_file_id_before_delete(monkeypatch):
-    service = _drive_service(target_owner="folder-owner@example.org", authenticated_user="editor@example.org")
+    service = _drive_service(target_owner="kian.anb777@gmail.com", authenticated_user="kian.anb777@gmail.com")
     service.records["replacement-file"] = {
         "id": "replacement-file", "name": "generation-000001.pt",
         "mimeType": "application/octet-stream", "parents": ["recovery-folder"],
         "owners": [{"emailAddress": "editor@example.org"}], "ownedByMe": True,
         "capabilities": {"canDelete": True},
     }
+    _bind_main_storage_for_delete_test(monkeypatch, service)
     monkeypatch.setattr(production_workflow, "_logical_drive_path_components", lambda _path, **_kwargs: (
         "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/recovery",
         ("ReVision", "revision_R1", "production", "checkpoints", "recovery"),
     ))
-    monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda *_args: {
-        "folder_id": "recovery-folder", "path_exists": True,
-    })
     monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _service, _parent, _name:
                         service.records["replacement-file"])
 
@@ -1504,28 +2053,15 @@ def test_capacity_gates_keep_reserve_and_separate_first_run_from_matrix():
         require_run_capacity({"drive_available_bytes": first_run_required - 1, "local_available_bytes": local_required}, projection, scope="first_run")
     with pytest.raises(StorageCapacityError, match="validated first-run"):
         require_run_capacity({"drive_available_bytes": first_run_required, "local_available_bytes": local_required}, projection, scope="matrix")
-    with pytest.raises(StorageCapacityError, match="matrix.*required"):
-        require_run_capacity({
-            "drive_available_bytes": first_run_required,
-            "local_available_bytes": local_required,
-            "local_existing_dataset_cache_bytes": projection["local"]["dataset_cache_upper_bytes"],
-            "production_measurements_validated": True,
-        }, projection, scope="matrix")
-    remaining_drive = (
-        99 * projection["drive"]["first_run_retained_bytes"]
-        + projection["drive"]["matrix_temporary_checkpoint_headroom_bytes"]
-        + projection["drive"]["matrix_temporary_output_headroom_bytes"]
-        + DEFAULT_STORAGE_RESERVE_BYTES
-    )
     require_run_capacity({
-        "drive_available_bytes": remaining_drive,
+        "drive_available_bytes": first_run_required,
         "local_available_bytes": projection["local"]["next_run_peak_with_reserve_bytes"],
         "local_existing_dataset_cache_bytes": projection["local"]["dataset_cache_upper_bytes"],
         "production_measurements_validated": True,
     }, projection, scope="matrix", completed_runs=1)
     with pytest.raises(StorageCapacityError, match="matrix.*required"):
         require_run_capacity({
-            "drive_available_bytes": remaining_drive - 1,
+            "drive_available_bytes": first_run_required - 1,
             "local_available_bytes": projection["local"]["next_run_peak_with_reserve_bytes"],
             "local_existing_dataset_cache_bytes": projection["local"]["dataset_cache_upper_bytes"],
             "production_measurements_validated": True,
@@ -1665,6 +2201,7 @@ def test_production_capacity_failure_precedes_run_executor_and_writes(tmp_path, 
     checkpoint_root = tmp_path / "drive-checkpoints"
     projection = project_storage(plan, observed_checkpoint_bytes=1000)
     snapshot = {
+        "canonical_storage_identity_verified": True,
         "destination_owner_verified": True, "write_capability_verified": True,
         "permanent_recovery_delete_verified": True,
         "new_file_owner_verified": True, "quota_metadata_verified": True,
@@ -1672,6 +2209,7 @@ def test_production_capacity_failure_precedes_run_executor_and_writes(tmp_path, 
         "drive_available_bytes": 0, "local_available_bytes": 0,
     }
     monkeypatch.setattr(runner_module, "run_one", lambda *args, **kwargs: pytest.fail("runner must not start when capacity gate fails"))
+    monkeypatch.setattr(production_workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
 
     with pytest.raises(StorageCapacityError, match="first_run capacity gate stopped before writes"):
         execute_frozen_plan_record(
@@ -1978,7 +2516,7 @@ class _FinalizationDriveFiles(_FakeFiles):
         ))
         record = {
             "id": file_id, "name": body["name"], "mimeType": body["mimeType"],
-            "parents": [parent_id], "owners": [{"emailAddress": "current-editor@example.org"}],
+            "parents": [parent_id], "owners": [{"emailAddress": "kian.anb777@gmail.com"}],
             "ownedByMe": True, "capabilities": {"canAddChildren": True},
             "appProperties": dict(body.get("appProperties", {})),
             "size": "0", "quotaBytesUsed": "0", "version": "1",
@@ -2076,7 +2614,7 @@ class _FinalizationDriveFiles(_FakeFiles):
                         self.records[file_id] = {
                             "id": file_id, "name": path.name,
                             "mimeType": "application/vnd.google-apps.folder", "parents": [parent],
-                            "owners": [{"emailAddress": "current-editor@example.org"}],
+                            "owners": [{"emailAddress": "kian.anb777@gmail.com"}],
                             "ownedByMe": True, "capabilities": {"canAddChildren": True},
                         }
                     continue
@@ -2086,7 +2624,7 @@ class _FinalizationDriveFiles(_FakeFiles):
                     file_id = f"mounted-{parent}-{path.name}"
                     record = {
                         "id": file_id, "name": path.name, "mimeType": "application/json",
-                        "parents": [parent], "owners": [{"emailAddress": "current-editor@example.org"}],
+                        "parents": [parent], "owners": [{"emailAddress": "kian.anb777@gmail.com"}],
                         "ownedByMe": True, "capabilities": {"canDelete": True},
                     }
                     self.records[file_id] = record
@@ -2107,11 +2645,11 @@ def _finalization_drive_service(
     records = {}
     parent = "root"
     for index, name in enumerate(components):
-        folder_id = f"folder-{index}"
+        folder_id = production_workflow.CANONICAL_REVISION_FOLDER_ID if index == 0 else f"folder-{index}"
         records[folder_id] = {
             "id": folder_id, "name": name, "mimeType": "application/vnd.google-apps.folder",
-            "parents": [parent], "owners": [{"emailAddress": "folder-owner@example.org"}],
-            "ownedByMe": False, "capabilities": {"canAddChildren": True},
+            "parents": [parent], "owners": [{"emailAddress": "kian.anb777@gmail.com"}],
+            "ownedByMe": True, "capabilities": {"canAddChildren": True},
         }
         parent = folder_id
     local_paths = {}
@@ -2120,13 +2658,13 @@ def _finalization_drive_service(
         local_paths[file_id] = path
         records[file_id] = {
             "id": file_id, "name": path.name, "mimeType": "application/octet-stream",
-            "parents": [parent], "owners": [{"emailAddress": "previous-editor@example.org"}],
-            "ownedByMe": False, "size": str(path.stat().st_size),
+            "parents": [parent], "owners": [{"emailAddress": "kian.anb777@gmail.com"}],
+            "ownedByMe": True, "size": str(path.stat().st_size),
             "quotaBytesUsed": str(path.stat().st_size),
             "capabilities": {"canDelete": path.name not in denied_names},
         }
     service = _FakeDriveService(records, {
-        "user": {"emailAddress": "current-editor@example.org"},
+        "user": {"emailAddress": "kian.anb777@gmail.com"},
         "storageQuota": {"limit": "10000000000", "usage": "1000000000"},
     })
     service._files = _FinalizationDriveFiles(

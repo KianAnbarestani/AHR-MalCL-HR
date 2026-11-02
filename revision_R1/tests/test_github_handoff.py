@@ -121,12 +121,19 @@ def test_private_repository_missing_or_invalid_secret_fails_without_token_leak(
 def test_stable_notebook_pins_commit_and_keeps_production_gated():
     commit = "0123456789abcdef0123456789abcdef01234567"
     notebook = notebook_document(commit)
-    assert len(notebook["cells"]) == 9  # opening markdown, then Cells A through H
+    assert len(notebook["cells"]) == 8  # opening markdown, then Cells A through G
     cells = ["".join(cell.get("source", [])) for cell in notebook["cells"]]
     all_source = "\n".join(cells)
 
-    assert [f"Cell {letter}" in cells[index] for index, letter in enumerate("ABCDEFGH", start=1)] == [True] * 8
+    assert [f"Cell {letter}" in cells[index] for index, letter in enumerate("ABCDEFG", start=1)] == [True] * 7
     assert commit in cells[1]
+    assert cells[1].index("auth.authenticate_user()") < cells[1].index('drive.mount("/content/drive", force_remount=True)')
+    assert "kian.anb777@gmail.com" in cells[1]
+    assert "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x" in cells[1]
+    assert "verify_canonical_storage_session(" in cells[1]
+    assert "STORAGE_API_FACTORY" in cells[1]
+    assert "force_remount=True" in cells[1]
+    assert "wrong storage account" in cells[1].lower()
     assert '_git(["checkout", "--detach", "FETCH_HEAD"]' in cells[1]
     assert "GITHUB_READ_TOKEN" in cells[1]
     assert "Authorization" in cells[1]
@@ -155,12 +162,23 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "output_new_file_owner" in cells[3]
     assert "checkpoint_new_file_owner" in cells[3]
     assert "quota_account_email" in cells[3]
-    assert "LAUNCH_FIRST_PRODUCTION_RUN = False" in cells[5]
+    assert "reuse_validated_first_run_measurement(" in cells[3]
+    assert "require_run_capacity(CAPACITY, STORAGE_PROJECTION, scope=\"first_run\")" not in cells[3]
+    assert "prepare_dataset_roots" not in cells[2]
+    assert "inspect_dataset_sources(" in cells[2]
+    assert "no external download will be attempted" in cells[2]
+    assert "if _npz.is_file():" in cells[2]
+    assert "LAUNCH_FIRST_PRODUCTION_RUN" not in cells[5]
+    assert "ALREADY_FINALIZED_COMPLETED_RUN" in cells[5]
+    assert "execute_first_production_run(" not in cells[5]
     assert "LAUNCH_REMAINING_MATRIX = False" in cells[6]
-    assert "FINALIZE_COMPLETED_FIRST_RUN = False" in cells[8]
-    assert "finalize_completed_production_run(" in cells[8]
-    assert "execute_first_production_run(" not in cells[8]
-    assert "continue_production_matrix(" not in cells[8]
+    assert "api_factory=STORAGE_API_FACTORY" in cells[6]
+    assert "api_factory=STORAGE_API_FACTORY" in cells[7]
+    assert "finalize_completed_production_run(" not in all_source
+    assert "execute_first_production_run(" not in all_source
+    assert "continue_production_matrix(" in cells[6]
+    assert "training_source_sha256" in cells[3]
+    assert "selected_git_commit" in cells[3]
     assert "fine-grained read-only" in cells[0]
     assert "GITHUB_READ_TOKEN" in cells[0]
 
@@ -170,6 +188,8 @@ def test_production_readme_has_one_github_execution_order_and_no_zip_setup():
 
     assert readme.count("## Exact execution order") == 1
     assert "verify the distributed ZIP" not in readme
-    assert "My Drive/ReVision/Revision_R1_Production_Colab.ipynb" in readme
+    assert "Revision_R1_Production_Colab_d6c99c94.ipynb" in readme
+    assert "kian.anb777@gmail.com" in readme
+    assert "Mixed-owner historical generations" in readme
     assert "PyTorch 2.11.0+cu128" in readme
     assert "PyTorch CUDA build 12.8" in readme

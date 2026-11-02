@@ -239,6 +239,8 @@ from google.colab import auth, drive
 GITHUB_REPOSITORY = "KianAnbarestani/AHR-MalCL-HR"
 PINNED_GIT_COMMIT = "__PINNED_COMMIT__"  # Change only this full SHA for a tested code release.
 GITHUB_TOKEN_SECRET_NAME = "GITHUB_READ_TOKEN"  # Used only if the repository is private.
+STORAGE_ACCOUNT_EMAIL = "kian.anb777@gmail.com"
+CANONICAL_REVISION_FOLDER_ID = "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x"
 EXPECTED_TRAINING_SOURCE_SHA256 = "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
 EXPECTED_SCHEDULE_SHA256 = "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212"
 if len(PINNED_GIT_COMMIT) != 40 or any(c not in "0123456789abcdef" for c in PINNED_GIT_COMMIT):
@@ -256,8 +258,11 @@ DRIVE_PATHS = {
     "export_root": "/content/drive/MyDrive/ReVision/revision_R1/production/exports",
     "checkpoint_backup_root": "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoint_backups",
 }
-drive.mount("/content/drive", force_remount=False)
+# The compute account may differ. Select STORAGE_ACCOUNT_EMAIL in both Google prompts.
+# If cached ADC selects another account, stop and restart a fresh runtime.
+print(f"Canonical Drive storage account: {STORAGE_ACCOUNT_EMAIL}; choose it in the Google auth/mount prompts.")
 auth.authenticate_user()
+drive.mount("/content/drive", force_remount=True)
 
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
 def _github_metadata(token=None):
@@ -395,6 +400,13 @@ from scripts.production_workflow import training_source_sha256
 from revision_r1.compatibility import runtime_source_sha256, verify_checkpoint_compatibility
 import revision_r1.runner as runner_module
 import scripts.production_workflow as production_workflow_module
+import google.auth
+from googleapiclient.discovery import build
+STORAGE_CREDENTIALS, STORAGE_GCLOUD_PROJECT = google.auth.default(
+    scopes=["https://www.googleapis.com/auth/drive"]
+)
+STORAGE_API_SERVICE = build("drive", "v3", credentials=STORAGE_CREDENTIALS, cache_discovery=False)
+STORAGE_API_FACTORY = lambda: STORAGE_API_SERVICE
 ACTUAL_TRAINING_SOURCE_SHA256 = training_source_sha256(PROJECT)
 CHECKPOINT_COMPATIBILITY = verify_checkpoint_compatibility(PROJECT)
 ACTUAL_RUNTIME_SOURCE_SHA256 = runtime_source_sha256(PROJECT)
@@ -405,6 +417,33 @@ if (ACTUAL_TRAINING_SOURCE_SHA256 != EXPECTED_TRAINING_SOURCE_SHA256
     raise ValueError("Training-core hash is incompatible with the resumable first-run checkpoint; no fallback/restart is allowed")
 if not Path(runner_module.__file__).resolve().is_relative_to(PROJECT.resolve()):
     raise ImportError(f"Training runner imported outside the pinned Git checkout: {runner_module.__file__}")
+try:
+    STORAGE_SESSION_EVIDENCE = production_workflow_module.verify_canonical_storage_session(
+        api_factory=STORAGE_API_FACTORY,
+        drive_mount_root="/content/drive/MyDrive",
+        expected_account_email=STORAGE_ACCOUNT_EMAIL,
+        expected_revision_folder_id=CANONICAL_REVISION_FOLDER_ID,
+        path_bindings={
+            "revision_root": "/content/drive/MyDrive/ReVision",
+            "datasets": "/content/drive/MyDrive/AHR_MalCL/datasets",
+            "preflight": "/content/drive/MyDrive/ReVision/revision_R1/results/preflight",
+            "validation_reports": "/content/drive/MyDrive/ReVision/revision_R1/results/validation/reports",
+            "production_results": "/content/drive/MyDrive/ReVision/revision_R1/production/results",
+            "production_checkpoints": "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints",
+        },
+        required_path_keys=(
+            "revision_root", "datasets", "preflight", "validation_reports",
+            "production_results", "production_checkpoints",
+        ),
+    )
+except Exception as exc:
+    raise RuntimeError(
+        "Canonical Drive storage verification failed before any run. Both the mounted filesystem and Drive API "
+        f"must use {STORAGE_ACCOUNT_EMAIL} and ReVision folder {CANONICAL_REVISION_FOLDER_ID}; wrong storage account "
+        "selection is not recoverable by changing run identities. If cached credentials "
+        "selected another account, restart the runtime and select the canonical account when prompted; do not "
+        f"proceed or change paths. Cause: {type(exc).__name__}: {exc}"
+    ) from exc
 print(json.dumps({"repository": GITHUB_REPOSITORY, "repository_private": bool(REPOSITORY_METADATA.get("private")),
                   "selected_git_commit": ACTUAL_GIT_COMMIT, "checkout": str(CHECKOUT_PATH),
                   "detached_checkout": True, "package_manifest_sha256": PACKAGE_MANIFEST_SHA256,
@@ -412,9 +451,218 @@ print(json.dumps({"repository": GITHUB_REPOSITORY, "repository_private": bool(RE
                   "runtime_source_sha256": ACTUAL_RUNTIME_SOURCE_SHA256,
                   "effective_schedule_sha256": EXPECTED_SCHEDULE_SHA256,
                   "python": platform.python_version(), "numpy": np.__version__, "torch": torch.__version__,
-                  "gpu": torch.cuda.get_device_name(0)}, indent=2))
+                  "gpu": torch.cuda.get_device_name(0),
+                  "storage_account": STORAGE_SESSION_EVIDENCE["storage_account_email"],
+                  "storage_quota_account": STORAGE_SESSION_EVIDENCE["storage_quota_account_email"],
+                  "canonical_revision_folder_id": STORAGE_SESSION_EVIDENCE["canonical_revision_folder_id"],
+                  "mount_and_api_identity_bound": True}, indent=2))
 '''
     return template.replace("__PINNED_COMMIT__", commit_sha)
+
+
+def _github_data_cell() -> str:
+    return '''# Cell B — exact canonical Drive datasets; no external downloads.
+from revision_r1.validation_workflow import resolve_effective_artifacts
+from revision_r1.config import DATASETS
+from revision_r1.data import inspect_npz_array_layout
+from scripts.production_workflow import inspect_dataset_sources
+
+PREFLIGHT_PATH = Path(DRIVE_PATHS["preflight_path"]).expanduser()
+if not PREFLIGHT_PATH.is_file():
+    raise FileNotFoundError(f"Passed Drive preflight not found: {PREFLIGHT_PATH}")
+EFFECTIVE_SCHEDULE_PATH, EFFECTIVE_SCHEDULE_MANIFEST_PATH, PREFLIGHT = resolve_effective_artifacts(
+    PREFLIGHT_PATH, expected_sha256=EXPECTED_SCHEDULE_SHA256, discover_manifest=True,
+)
+if PREFLIGHT.get("status") != "PREFLIGHT_VALIDATED_NO_TRAINING" or PREFLIGHT.get("training_reproduction_claimed") is not False:
+    raise ValueError("Drive preflight is not the validated no-training schedule/data record")
+DATA_ROOTS = {
+    "ember": Path(DRIVE_PATHS["ember_data_root"]).expanduser(),
+    "az_class": Path(DRIVE_PATHS["az_data_root"]).expanduser(),
+}
+DATASET_SOURCE_REPORT = inspect_dataset_sources(DATA_ROOTS, DRIVE_PATHS["dataset_cache_root"], PREFLIGHT)
+DATASET_LAYOUTS = {}
+for _dataset, _root in DATA_ROOTS.items():
+    _layout = {}
+    for _split in ("train", "test"):
+        _npz = _root / DATASETS[_dataset][_split]["filename"]
+        if _npz.is_file():
+            _layout[_split] = inspect_npz_array_layout(_npz, split=_split)
+        else:
+            _layout[_split] = {"archive": "ABSENT", "source": DATASET_SOURCE_REPORT[_dataset]["splits"][_split]["source"]}
+    DATASET_LAYOUTS[_dataset] = _layout
+
+PACKAGED_SCHEDULE_PATH = PROJECT / "configs" / "update_budget.csv"
+PACKAGED_SCHEDULE_MANIFEST_PATH = PROJECT / "configs" / "update_budget_manifest.json"
+PACKAGED_SCHEDULE_SHA256 = hashlib.sha256(PACKAGED_SCHEDULE_PATH.read_bytes()).hexdigest()
+PACKAGED_SCHEDULE_MANIFEST = json.loads(PACKAGED_SCHEDULE_MANIFEST_PATH.read_text(encoding="utf-8"))
+if PACKAGED_SCHEDULE_SHA256 != PACKAGED_SCHEDULE_MANIFEST.get("source_csv_sha256"):
+    raise ValueError("Original packaged schedule/manifest pair is altered")
+print("Effective schedule:", EFFECTIVE_SCHEDULE_PATH)
+print("Effective schedule SHA-256:", EXPECTED_SCHEDULE_SHA256, "| rows:", PREFLIGHT["schedule"]["row_count"])
+print("Matching manifest:", EFFECTIVE_SCHEDULE_MANIFEST_PATH)
+print("Original packaged schedule SHA-256 (unchanged):", PACKAGED_SCHEDULE_SHA256)
+print("Canonical dataset sources (missing Drive files require a matching local verified cache):")
+print(json.dumps(DATASET_SOURCE_REPORT, sort_keys=True, indent=2))
+print("If both canonical Drive files and a matching verified local cache are absent, preflight fails; no external download will be attempted.")
+print("External dataset downloads: DISABLED")
+'''
+
+
+def _github_readiness_cell() -> str:
+    return '''# Cell C — validate the frozen plan, reuse Run 1's existing measurement, and gate the next pending run.
+from scripts.production_workflow import (
+    _expected_plan_runner_identity, _preflight_addressed_cache_bytes, _read_matrix_registry,
+    bind_runtime_schedule, build_frozen_run_plan, inspect_production_capacity,
+    load_v62_recovery_checkpoint_bound, project_storage, require_run_capacity,
+    reuse_validated_first_run_measurement, run_checkpoint_root, run_output_root,
+    validate_frozen_plan, validate_runtime_bound_plan,
+)
+from revision_r1.storage import DEFAULT_STORAGE_RESERVE_BYTES, require_available_bytes
+
+BASE_PLAN_PATH = PROJECT / "configs" / "production_run_plan_v1.json"
+BASE_PLAN = json.loads(BASE_PLAN_PATH.read_text(encoding="utf-8"))
+validate_frozen_plan(BASE_PLAN, expected_source_sha256=ACTUAL_TRAINING_SOURCE_SHA256)
+RUNTIME_PLAN = bind_runtime_schedule(BASE_PLAN, EFFECTIVE_SCHEDULE_PATH, EFFECTIVE_SCHEDULE_MANIFEST_PATH, PREFLIGHT)
+validate_runtime_bound_plan(RUNTIME_PLAN, EFFECTIVE_SCHEDULE_PATH, EFFECTIVE_SCHEDULE_MANIFEST_PATH, PREFLIGHT)
+if RUNTIME_PLAN["run_count"] != 100 or RUNTIME_PLAN["runs"][0]["run_key"] != "ember_seed42_full_hybrid":
+    raise ValueError("Runtime-bound matrix/order differs from the frozen protocol")
+
+OUTPUT_ROOT = Path(DRIVE_PATHS["output_root"]).expanduser()
+CHECKPOINT_ROOT = Path(DRIVE_PATHS["checkpoint_root"]).expanduser()
+LOCAL_CHECKPOINT_ROOT = Path(DRIVE_PATHS["local_checkpoint_root"]).expanduser()
+CACHE_ROOT = Path(DRIVE_PATHS["dataset_cache_root"]).expanduser()
+FIRST_RUN = RUNTIME_PLAN["runs"][0]
+FIRST_RUN_MEASUREMENT = reuse_validated_first_run_measurement(RUNTIME_PLAN, FIRST_RUN, OUTPUT_ROOT)
+MATRIX_REGISTRY = _read_matrix_registry(OUTPUT_ROOT.resolve(), RUNTIME_PLAN)
+if FIRST_RUN["run_key"] not in MATRIX_REGISTRY["completed_runs"]:
+    raise RuntimeError("Run 1 is not registered complete; this release will not launch or finalize it")
+COMPLETED_RUN_KEYS = set(MATRIX_REGISTRY["completed_runs"])
+NEXT_PENDING_RECORD = next((row for row in RUNTIME_PLAN["runs"][1:] if row["run_key"] not in COMPLETED_RUN_KEYS), None)
+V62_REFERENCE = load_v62_recovery_checkpoint_bound(DRIVE_PATHS["v62_recovery_report"])
+OBSERVED_CHECKPOINT_PAYLOAD_BYTES = max(
+    int(FIRST_RUN_MEASUREMENT["max_checkpoint_payload_bytes"]),
+    int(V62_REFERENCE["max_checkpoint_payload_bytes"]),
+)
+STORAGE_PROJECTION = project_storage(
+    RUNTIME_PLAN,
+    observed_checkpoint_bytes=OBSERVED_CHECKPOINT_PAYLOAD_BYTES,
+    observed_output_bytes=int(FIRST_RUN_MEASUREMENT["run_output_bytes"]),
+    checkpoint_reference_provenance=(
+        "registered Run 1 measurement reused plus the verified v6.2 operational reference; "
+        "planning estimate only, not a new measurement"
+    ),
+    checkpoint_size_evidence={
+        "run_1_registered_measurement_reused": FIRST_RUN_MEASUREMENT,
+        "v6_2_reference_payload_bytes": int(V62_REFERENCE["max_checkpoint_payload_bytes"]),
+        "projection_source_bytes": OBSERVED_CHECKPOINT_PAYLOAD_BYTES,
+    },
+)
+if NEXT_PENDING_RECORD is None:
+    CAPACITY = inspect_production_capacity(
+        OUTPUT_ROOT, CHECKPOINT_ROOT, LOCAL_CHECKPOINT_ROOT, CACHE_ROOT,
+        api_factory=STORAGE_API_FACTORY,
+    )
+else:
+    NEXT_OUTPUT = run_output_root(OUTPUT_ROOT, NEXT_PENDING_RECORD)
+    NEXT_CHECKPOINT = run_checkpoint_root(CHECKPOINT_ROOT, NEXT_PENDING_RECORD)
+    NEXT_LOCAL_CHECKPOINT = run_checkpoint_root(LOCAL_CHECKPOINT_ROOT, NEXT_PENDING_RECORD)
+    CAPACITY = inspect_production_capacity(
+        OUTPUT_ROOT, CHECKPOINT_ROOT, LOCAL_CHECKPOINT_ROOT, CACHE_ROOT,
+        api_factory=STORAGE_API_FACTORY,
+        current_run_output_path=NEXT_OUTPUT,
+        current_run_checkpoint_path=NEXT_CHECKPOINT,
+        current_run_local_checkpoint_path=NEXT_LOCAL_CHECKPOINT,
+        expected_run_identity=_expected_plan_runner_identity(RUNTIME_PLAN, NEXT_PENDING_RECORD),
+        verified_dataset_cache_bytes=_preflight_addressed_cache_bytes(
+            PREFLIGHT, CACHE_ROOT, dataset=NEXT_PENDING_RECORD["dataset"],
+        ),
+    )
+    CAPACITY["production_measurements_validated"] = True
+    require_run_capacity(
+        CAPACITY, STORAGE_PROJECTION, scope="matrix",
+        completed_runs=len(MATRIX_REGISTRY["completed_runs"]),
+    )
+if CAPACITY.get("canonical_storage_identity_verified") is not True:
+    raise RuntimeError("Capacity evidence is not bound to the canonical main-account storage session")
+
+# Bind the selected release separately; never include storage/compute account in training identity.
+CODE_BINDING_PATH = OUTPUT_ROOT / "runtime_code_binding" / RUNTIME_PLAN["plan_sha256"] / f"{ACTUAL_GIT_COMMIT}.json"
+CODE_BINDING = {
+    "schema_version": 1, "selected_git_commit": ACTUAL_GIT_COMMIT,
+    "package_manifest_sha256": PACKAGE_MANIFEST_SHA256,
+    "training_source_sha256": ACTUAL_TRAINING_SOURCE_SHA256,
+    "runtime_source_sha256": ACTUAL_RUNTIME_SOURCE_SHA256,
+    "effective_schedule_sha256": EXPECTED_SCHEDULE_SHA256,
+    "frozen_plan_sha256": RUNTIME_PLAN["plan_sha256"],
+    "first_run_key": FIRST_RUN["run_key"], "first_run_config_sha256": FIRST_RUN["config_sha256"],
+}
+CODE_BINDING_BYTES = (json.dumps(CODE_BINDING, sort_keys=True, indent=2, allow_nan=False) + "\\n").encode("utf-8")
+PLAN_PATH = OUTPUT_ROOT / "plans" / f"production_run_plan_{RUNTIME_PLAN['plan_sha256']}.json"
+PLAN_BYTES = (json.dumps(RUNTIME_PLAN, sort_keys=True, indent=2, allow_nan=False) + "\\n").encode("utf-8")
+for _path, _payload in ((CODE_BINDING_PATH, CODE_BINDING_BYTES), (PLAN_PATH, PLAN_BYTES)):
+    if _path.exists() and _path.read_bytes() != _payload:
+        raise ValueError(f"Existing immutable plan/binding differs; preserved without overwrite: {_path}")
+PENDING_IMMUTABLE_BYTES = sum(len(_payload) for _path, _payload in (
+    (CODE_BINDING_PATH, CODE_BINDING_BYTES), (PLAN_PATH, PLAN_BYTES),
+) if not _path.exists())
+if NEXT_PENDING_RECORD is not None:
+    require_available_bytes(
+        OUTPUT_ROOT,
+        required_bytes=int(STORAGE_PROJECTION["drive"]["next_run_required_without_reserve_bytes"]) + PENDING_IMMUTABLE_BYTES,
+        reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
+        available_bytes=CAPACITY["drive_available_bytes"],
+        storage_kind="canonical Drive next-run and immutable plan capacity",
+    )
+def _write_immutable_drive_file(_path, _payload):
+    _path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with _path.open("xb") as _stream:
+            _stream.write(_payload)
+            _stream.flush()
+            os.fsync(_stream.fileno())
+    except FileExistsError:
+        if _path.read_bytes() != _payload:
+            raise ValueError(f"Concurrent immutable file differs; preserved: {_path}")
+    if _path.read_bytes() != _payload:
+        raise IOError(f"Immutable file read-back differs: {_path}")
+_write_immutable_drive_file(CODE_BINDING_PATH, CODE_BINDING_BYTES)
+_write_immutable_drive_file(PLAN_PATH, PLAN_BYTES)
+
+drive_available = CAPACITY["drive_available_bytes"]
+matrix_peak = int(STORAGE_PROJECTION["drive"]["matrix_peak_with_reserve_bytes"])
+matrix_status = "CAPACITY_UNKNOWN" if drive_available is None else (
+    "PROJECTED_FIT" if drive_available >= matrix_peak else "INSUFFICIENT_FOR_FULL_MATRIX"
+)
+print(json.dumps({
+    "status": "CANONICAL_STORAGE_READY_NEXT_RUN_GATED",
+    "storage_account": CAPACITY["quota_account_email"],
+    "canonical_revision_folder_id": CAPACITY["canonical_revision_folder_id"],
+    "output_folder_owner": CAPACITY["output_destination"]["destination_owner"],
+    "checkpoint_folder_owner": CAPACITY["checkpoint_destination"]["destination_owner"],
+    "output_new_file_owner": CAPACITY["output_destination"]["new_file_owner"],
+    "checkpoint_new_file_owner": CAPACITY["checkpoint_destination"]["new_file_owner"],
+    "quota_status": CAPACITY["quota_status"], "drive_available_bytes": drive_available,
+    "next_pending_run": None if NEXT_PENDING_RECORD is None else NEXT_PENDING_RECORD["run_key"],
+    "next_run_peak_with_reserve_bytes": STORAGE_PROJECTION["drive"]["next_run_peak_with_reserve_bytes"],
+    "full_matrix_projection_status_informational_only": matrix_status,
+    "full_matrix_peak_with_reserve_bytes": matrix_peak,
+    "completed_run_1": "FINALIZED_COMPLETED_RUN_REUSED_AND_SKIPPED",
+    "run_1_measurement_recomputed": False, "run_1_registry_modified": False,
+    "training_source_sha256": ACTUAL_TRAINING_SOURCE_SHA256,
+    "selected_git_commit": ACTUAL_GIT_COMMIT,
+    "schedule_sha256": EXPECTED_SCHEDULE_SHA256,
+    "plan_sha256": RUNTIME_PLAN["plan_sha256"],
+    "runtime_plan_path": str(PLAN_PATH), "code_binding_path": str(CODE_BINDING_PATH),
+    "checkpoint_policy": "local recovery every 5 minutes; Drive every 15 minutes plus task boundaries/interruption; two verified recovery generations; task boundaries retained separately",
+}, sort_keys=True, indent=2))
+'''
+
+
+def _github_completed_run_guard_cell() -> str:
+    return '''# Cell E — deliberate no-op: Run 1 is already finalized and registered.
+print("ALREADY_FINALIZED_COMPLETED_RUN — Run 1 was identity-validated and its existing storage measurement reused in Cell C.")
+print("This cell will not train, load a model, remeasure, re-register, or rerun finalization for Run 1.")
+'''
 
 
 def notebook_document(commit_sha: str) -> dict[str, Any]:
@@ -423,53 +671,33 @@ def notebook_document(commit_sha: str) -> dict[str, Any]:
     document = zip_notebook_document("0" * 64)
     document["cells"][0]["source"] = (
         "# revision_R1 production — GitHub-pinned runner\n\n"
-        "Cells A–G use one explicitly selected full Git commit per Colab session. Cell A fetches it once and checks out detached into a commit-versioned local directory, then verifies both manifests, the compatible training-core hash, and the frozen schedule. It never auto-runs the latest branch head.\n\n"
-        "The repository is currently public, so no GitHub token is required. If it is later made private, use the fine-grained read-only Colab Secret `GITHUB_READ_TOKEN` (Contents: Read-only, restricted to this repository; enable notebook access). Never paste credentials into cells or outputs.\n\n"
-        "Run A → B → C → D; D is read-only. Cell C verifies shared-Editor write/quota evidence and binds the selected commit and protocol to the frozen plan. Production Cells E/F remain disabled by default. The Drive paths, checkpoint identities, and resume behavior are unchanged."
+        "Cells A–G use one explicitly selected full Git commit per Colab session. Cell A fetches it once and checks out detached into a commit-versioned local directory, then verifies both manifests, the compatible training-core hash, and frozen schedule.\n\n"
+        "Storage identity is independent of the Colab compute account: `kian.anb777@gmail.com`, ReVision folder ID `1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x`. Select that account in Cell A's Google authorization prompts. The mounted filesystem and Drive API are checked against the account, exact folder/paths, a tiny write/read/delete probe, new-file ownership, and quota. Wrong cached credentials fail closed; restart the runtime and choose the canonical account.\n\n"
+        "The repository is currently public, so no GitHub token is required. If private later, use the fine-grained read-only Colab Secret `GITHUB_READ_TOKEN` (Contents: Read-only, restricted to this repo; enable notebook access). Never paste credentials into cells or outputs.\n\n"
+        "Run A → B → C → D. D is read-only. B uses Drive datasets or checksum-verified local caches only; external downloads are disabled. Run 1 is already finalized/registered and is reused without remeasurement; E is a no-op. F remains disabled by default."
     ).splitlines(keepends=True)
     document["cells"][1]["source"] = _github_setup_cell(commit_sha).splitlines(keepends=True)
-
-    cell_c = "".join(document["cells"][3]["source"])
-    insertion = '''# Bind this exact Git commit separately from the training-source/checkpoint identity.
-CODE_BINDING_PATH = (OUTPUT_ROOT / "runtime_code_binding" / RUNTIME_PLAN["plan_sha256"]
-                     / f"{ACTUAL_GIT_COMMIT}.json")
-CODE_BINDING = {
-    "schema_version": 1,
-    "selected_git_commit": ACTUAL_GIT_COMMIT,
-    "package_manifest_sha256": PACKAGE_MANIFEST_SHA256,
-    "training_source_sha256": ACTUAL_TRAINING_SOURCE_SHA256,
-    "runtime_source_sha256": ACTUAL_RUNTIME_SOURCE_SHA256,
-    "effective_schedule_sha256": EXPECTED_SCHEDULE_SHA256,
-    "frozen_plan_sha256": RUNTIME_PLAN["plan_sha256"],
-    "first_run_key": RUNTIME_PLAN["runs"][0]["run_key"],
-    "first_run_config_sha256": RUNTIME_PLAN["runs"][0]["config_sha256"],
-}
-CODE_BINDING_BYTES = (json.dumps(CODE_BINDING, sort_keys=True, indent=2, allow_nan=False) + "\\n").encode("utf-8")
-CODE_BINDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-if CODE_BINDING_PATH.exists():
-    if CODE_BINDING_PATH.read_bytes() != CODE_BINDING_BYTES:
-        raise ValueError(f"Existing commit/protocol binding differs; preserved without overwrite: {CODE_BINDING_PATH}")
-else:
-    try:
-        with CODE_BINDING_PATH.open("xb") as _binding_stream:
-            _binding_stream.write(CODE_BINDING_BYTES)
-            _binding_stream.flush()
-            os.fsync(_binding_stream.fileno())
-    except FileExistsError:
-        if CODE_BINDING_PATH.read_bytes() != CODE_BINDING_BYTES:
-            raise ValueError(f"Concurrent commit/protocol binding differs; preserved: {CODE_BINDING_PATH}")
-
-'''
-    anchor = "# Persist the runtime-bound plan immutably so a runtime reset resumes the same plan.\n"
-    if anchor not in cell_c:
-        raise ValueError("production Cell C template changed; cannot safely inject the immutable code binding")
-    cell_c = cell_c.replace(anchor, insertion + anchor, 1)
-    cell_c = cell_c.replace('"checkpoint_folder_owner": CAPACITY["checkpoint_destination"]["destination_owner"],',
-        '"checkpoint_folder_owner": CAPACITY["checkpoint_destination"]["destination_owner"],\n'
-        '    "output_new_file_owner": CAPACITY["output_destination"]["new_file_owner"],\n'
-        '    "checkpoint_new_file_owner": CAPACITY["checkpoint_destination"]["new_file_owner"],\n'
-        '    "new_file_owner_verified": CAPACITY["new_file_owner_verified"],')
-    document["cells"][3]["source"] = cell_c.splitlines(keepends=True)
+    document["cells"][2]["source"] = _github_data_cell().splitlines(keepends=True)
+    document["cells"][3]["source"] = _github_readiness_cell().splitlines(keepends=True)
+    document["cells"][5]["source"] = _github_completed_run_guard_cell().splitlines(keepends=True)
+    cell_f = "".join(document["cells"][6]["source"])
+    if "progress_callback=live_progress,\n    )" not in cell_f:
+        raise ValueError("matrix continuation template changed; cannot bind the canonical Drive API client")
+    cell_f = cell_f.replace(
+        "progress_callback=live_progress,\n    )",
+        "progress_callback=live_progress, api_factory=STORAGE_API_FACTORY,\n    )",
+    )
+    document["cells"][6]["source"] = cell_f.splitlines(keepends=True)
+    cell_g = "".join(document["cells"][7]["source"])
+    cell_g = cell_g.replace(
+        "inspect_drive_destination(EXPORT_ROOT)",
+        "inspect_drive_destination(EXPORT_ROOT, api_factory=STORAGE_API_FACTORY)",
+    ).replace(
+        "inspect_drive_destination(CHECKPOINT_BACKUP_ROOT)",
+        "inspect_drive_destination(CHECKPOINT_BACKUP_ROOT, api_factory=STORAGE_API_FACTORY)",
+    )
+    document["cells"][7]["source"] = cell_g.splitlines(keepends=True)
+    document["cells"] = document["cells"][:8]  # opening markdown, then A–G; no Run 1 finalizer.
     for index, cell in enumerate(document["cells"]):
         if cell.get("cell_type") == "code":
             compile("".join(cell["source"]), f"notebook-cell-{index}", "exec")

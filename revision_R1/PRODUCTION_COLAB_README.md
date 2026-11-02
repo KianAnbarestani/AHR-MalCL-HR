@@ -1,305 +1,59 @@
-# revision_R1 production Colab handoff — GitHub-pinned source
+# revision_R1 production Colab handoff
 
-The production source is fetched from `KianAnbarestani/AHR-MalCL-HR` at the
-explicit full commit SHA in the stable notebook
-`My Drive/ReVision/Revision_R1_Production_Colab.ipynb`. The current repository
-is public; no GitHub token is needed. If the owner later makes it private,
-Cell A accepts a fine-grained read-only token from the Colab Secret
-`GITHUB_READ_TOKEN` (Contents: Read-only, restricted to this repository,
-with notebook access enabled). The token is never placed in notebook source,
-output, a saved Git remote, Drive, or the repository.
-
-Cell A fetches once, checks out the selected commit detached into a
-commit-versioned local directory, and verifies `PACKAGE_MANIFEST.json`,
-`BUILD_MANIFEST.json`, all listed file hashes, training-source identity
-`1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c`, and
-the required effective schedule SHA-256
-`7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212`. A
-reporting-only commit is bound separately from the training/checkpoint
-identity; a changed training core or frozen protocol is rejected rather than
-silently starting a new run. The checkout is reused for the entire session.
-
-The Colab account can be any Editor of the existing shared ReVision folder.
-Cell C verifies write capability and reports the owner and quota identity of
-new files separately. If quota attribution or numeric capacity is not
-established, it fails closed; it never substitutes folder-owner quota or
-changes sharing/ownership. All Drive paths and existing run/checkpoint
-identities remain unchanged.
-
-## Colab runtime contract
-
-Cell A requires Python 3.12.13, NumPy 2.0.2, PyTorch 2.11.0+cu128, and the
-PyTorch CUDA build 12.8 with an available CUDA device. These are the observed
-Colab/T4 runtime values used to prepare this handoff. PyTorch is checked
-in-place and is not installed or replaced by the notebook, so a different
-Colab image fails closed and must be reviewed and tested before production.
+The single stable notebook in `My Drive/ReVision` is
+`Revision_R1_Production_Colab_d6c99c94.ipynb`. The runner code is fetched
+from the explicitly pinned GitHub commit; the notebook does not depend on a
+code ZIP in Drive.
 
 ## Exact execution order
 
-Run Cells A → B → C → D. Cell D is read-only. For the already-completed first
-run whose matrix finalization found four recovery generations, use Cell H
-only: it revalidates the completed outputs, inventories and hashes the
-recovery files against Drive metadata, preserves the newest complete
-generation and its valid fallback, and prunes only stale recovery files for
-which Drive confirms exact-file `canDelete`. A small identity-bound journal is
-verified through Drive API metadata and byte read-back before pruning; each
-deletion is bound to its exact journaled Drive file ID and parent-folder ID.
-This makes interrupted pruning safe to retry without risking a same-name
-replacement. It then reuses the existing storage measurement and idempotent
-completion registration. If deletion is denied,
-integrity is uncertain, or the matrix lease is owned elsewhere, it stops
-without pruning. Cell H does not load data/checkpoints into the model, create
-replay, initialize a model, or train. It records the complete initial
-inventory and the source progress evidence explaining deferred pruning in its
-report. This is not a launch/resume cell.
+Run Cells A → B → C → D. A fetches one detached, pinned commit and verifies
+both package manifests, the frozen schedule/training identity, and the
+canonical Drive storage identity. B checks the passed preflight and exact
+Drive dataset paths or verified local caches; it does not download datasets.
+C checks only the next pending run's incremental capacity plus reserve, shows
+the full-matrix projection as informational, and skips the already-finalized
+Run 1 after reusing its existing registered measurement. D is read-only.
 
-Cells E and F remain disabled until the user explicitly enables them after
-reviewing current lease, checkpoint, and capacity evidence. E resumes the
-first `ember_seed42_full_hybrid` run; F continues the remaining matrix. Cell G
-exports lightweight results. See `README_GITHUB_COLAB.md` for the Secret
-setup and routine pinned-commit update procedure. No new production training
-is launched by this finalization handoff.
+Cell E is a no-op for the finalized Run 1. Cell F can continue remaining
+records only after the user explicitly changes its launch switch and reviews
+leases; it skips validated completions and resumes interrupted runs from the
+canonical verified checkpoints. Cell G exports compact results. No cell
+starts production by default.
 
-Cell C persists an immutable runtime-bound plan in the configured production
-results root. It reports both the first-run requirement and the projected
-full-matrix requirement. The v6.2 checkpoint measurement is a conservative
-size proxy, not a production measurement. The full-matrix estimate includes
-11 retained task-boundary generations and two recovery generations per run,
-result/prediction storage floors, atomic-write headroom, dataset-cache space,
-and the unchanged 512 MiB reserve. It does not equate retained bytes with
-cumulative Drive writes: periodic verified checkpoint synchronization adds
-write volume, which is measured separately during production.
+## Runtime
 
-Cell D is read-only. It reports the exact matrix/run lease paths and raw JSON,
-heartbeat/expiry times, run status, progress, hashes of the newest recovery
-checkpoint candidates (streamed in 8 MiB blocks), current process/runtime ID,
-PID, process-start UTC time, cgroup/host memory, and NPZ
-shape/dtype/uncompressed byte sizes from headers only. It also searches the
-persisted v1.2 status/registry/progress/preparation records for PID 44230 and
-reports their file timestamps. The supplied kernel excerpt has no event
-timestamp; if the PID is absent from those records, the diagnostic says so
-explicitly rather than inferring the failed phase. It never removes/recover
-locks, loads checkpoints, or starts training. The historical report confirms a
-Colab cgroup OOM kill for PID 44230 at 9,534,112 kB anon RSS; it does not
-identify the exact allocation. Cell D also displays the exact v1.3 training
-identity's first-run resume gate, matching checkpoint generations, registry,
-and last progress record. A PID from a previous VM cannot prove a worker
-is live or dead. Inspect Colab Manage Sessions and all open notebooks, then
-share the diagnostic before enabling Cell E. Drive locking is best-effort and
-remote runtime visibility is not available from this notebook.
+Cell A expects Python 3.12.13, NumPy 2.0.2, PyTorch 2.11.0+cu128, PyTorch CUDA build 12.8, and an available GPU. It checks these in place and does not install or replace PyTorch.
 
-## Dataset availability and web fallback
+## Storage and identity
 
-Cell B checks the exact EMBER-Class and AZ-Class `.npz` files in the configured
-Drive data roots. If a dataset pair is complete, it uses those Drive files
-without copying them. If one or more files are missing, only the missing
-prepared files are downloaded from the authors' fixed Zenodo dataset record
-(`https://doi.org/10.5281/zenodo.14537891`) into
-`/content/revision_R1_production/datasets`. The four pinned record files have
-the same MD5 identities and byte sizes as the dataset record and the runner's
-frozen references. Download bytes are checked against exact size, the record
-MD5, and the SHA-256 already recorded by the passed preflight. In a partially
-populated Drive dataset, existing files are exposed to the local staging root
-through symlinks; the Drive originals are never written, replaced, or deleted.
+Compute-account changes do not change storage: use `kian.anb777@gmail.com`
+and ReVision folder ID `1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x`. Select that
+account in Cell A's Google prompts. The code binds the Drive API and mounted
+filesystem to that identity using an exact folder/path check and tiny
+write/read/delete probe. Wrong cached credentials, unknown quota, Viewer
+access, or an unverified destination stop before runs. No sharing changes,
+ownership transfers, or service accounts are used. There is no editor allowlist:
+durable storage always uses the one canonical account.
 
-Before any network download, Cell B checks local free space for all missing
-files plus the existing 512 MiB reserve. It fails with a clear storage error
-before downloading if that capacity is unavailable. Downloaded files live on
-the ephemeral Colab runtime and may need to be fetched again after a runtime
-reset. Cell D records the selected dataset roots and source; Cell E/F still
-run the normal full MD5/SHA-256, shape, and array validation before training.
-The checkpoint preflight hashes only the two retained payloads in bounded
-8 MiB blocks and never deserializes them. Its cursor/counters come from the
-last progress snapshot and are labeled informational because that snapshot
-can be newer than the last Drive-synchronized generation. Cell E stages the
-matching manifest locally as a fail-closed marker; if Drive restore fails, the
-runner raises rather than treating local staging as a fresh-run request. The
-runner then deserializes candidates sequentially and owns corruption fallback.
+The Drive API uses `https://www.googleapis.com/auth/drive` because it must
+inspect existing user-owned datasets/checkpoints and write/delete verified
+files. Tokens remain in session memory. The current GitHub repository is
+public; if it becomes private, use the restricted read-only Colab Secret
+`GITHUB_READ_TOKEN`.
 
-Cell E is the only launch for run 1: `ember / seed 42 / full_hybrid`. Its
-`LAUNCH_FIRST_PRODUCTION_RUN` and `ACKNOWLEDGE_NO_OTHER_COLAB_WORKER` switches
-both default to `False`. It rechecks the matrix lease immediately before
-launch; malformed, unreadable, live, or same-host-live PID records fail
-closed. An expired lease is never manually deleted: the existing guarded
-`RunLease.acquire` expiry recovery is the only recovery path, and requires the
-explicit no-other-worker acknowledgement. The matrix lease is acquired before
-dataset hashing/loading and held through training, preventing duplicate
-dataset-sized RAM work in parallel cells. Preparation progress is written to
-Drive before and throughout dataset loading, so an OOM phase can be diagnosed
-after a runtime reset. Before allocation, Cell E re-hashes the exact v1.3
-recovery generations. It is resume-only: if the source, config, schedule,
-dataset identity, generation set, payload size, or payload hash fails, the
-first run stops and never initializes from scratch.
+Training core remains
+`1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c`; the
+schedule remains
+`7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212`.
+The selected Git commit is bound separately. No datasets, checkpoints,
+results, credentials, or caches belong in Git.
 
-The checkpoint-performance release updates checkpoint persistence and
-resource reporting while preserving the 27-file training-behavior
-fingerprint and its exact identity
-`1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c`. The
-authentic v1.2 ZIP and all 27 source-file hashes are verified from the
-distributed v1.2 artifact during packaging, but v1.2 checkpoints are never
-resumed by the current training identity. They are inspected read-only and
-remain untouched. A matching v1.3 first-run checkpoint is required; the
-notebook no longer offers a “start fresh” acknowledgement for that run. After
-an interruption, rerun A–D and then E; the strict checkpoint gate and runner
-restore the newest valid matching recovery generation, falling back only to
-another matching valid generation.
-
-Cell F handles only runs 2–100 and also defaults to `False`. It requires the
-first counted run to be registered and artifact-validated, then it checks the
-full remaining-matrix capacity before each new/resumed run. It skips only
-matching, revalidated completions. No ETA is extrapolated from Full Hybrid to
-other arms. Both launch cells use one bounded updating display with a five-
-event summary and a plain-text fallback. Every emitted safe-boundary event is
-also appended to a unique attempt JSONL under
-`results/progress/<plan>/events/`; the latest-progress snapshot remains in its
-existing location. Updates occur immediately at task/phase transitions and
-roughly every 12 seconds otherwise. GAN epochs/batches/critic substeps,
-scheduled classifier updates, already-computed losses, source draws and pool
-proportions, completed-task metrics, component timings, available memory,
-checkpoint sync bytes/age, progress observer overhead, per-attempt/cumulative time, and same-phase ETA are
-shown only where the runner has evidence. Non-GAN work and unstored training
-accuracy are `N/A`; the critic trace stores total critic loss, not a separate
-gradient-penalty term, so that term is also `N/A`. The completion registry does
-not persist a central failed-run count; the display says so instead of
-inventing one. No extra model pass, evaluation, RNG use, or CUDA
-synchronization is added for display; ETA is not transferred across arms or
-phases.
-
-Cell G writes compact progress and validated lightweight result archives.
-Those archives exclude model/checkpoint payloads and are capacity-checked
-before writing with a 1% compression-growth margin, 16 MiB archive metadata
-headroom, and the unchanged 512 MiB reserve. A full checkpoint archive is separately controlled by
-`EXPORT_CHECKPOINT_BACKUP = False`; if enabled, every manifest/payload is
-identity- and checksum-verified first, and available Drive capacity plus the
-reserve is required. Neither exporter deletes or prunes source artifacts.
-
-## Drive ownership and storage readiness
-
-Production output/checkpoint/export paths default below the authenticated
-account's `MyDrive`. A My Drive folder shared with any authenticated Google
-account as an Editor is supported; folder-owner email need not match. The
-notebook resolves shortcuts, checks exact-folder `canAddChildren`, and
-verifies a tiny mounted write is owned by the authenticated account and has
-positive `quotaBytesUsed`. Only that uniquely named probe is removed. The
-proof is cached for the current Python runtime per account and folder; capabilities and
-quota are refreshed on every check.
-
-Capacity comes from the authenticated account's Drive API `storageQuota`, the
-quota associated with newly created files. Workspace storage may be pooled,
-and the API response does not always identify pooling. If finite `limit` and
-`usage` are not both present, capacity is reported as unknown and production
-stops without inferring free bytes. A missing limit may represent unlimited
-quota, but this workflow does not manufacture a numeric estimate. Existing
-shared-folder files remain charged to their owners. Shared drives remain
-unsupported because their pooled quota is not measured by this My Drive
-check. Output and checkpoint roots must resolve under the same authenticated
-quota account, not the same folder owner.
-
-The current quota must be queried in Colab rather than inferred from an older
-observation. Four GiB is not sufficient for the complete 100-run retained
-checkpoint matrix. A known v6.2 recovery payload was 181,822,939 bytes; using
-that only as an illustrative lower-bound input, 13 retained checkpoint
-payloads per run plus the 256 MiB/run output floor implies at least about
-246 GiB peak for 100 runs after atomic-write headrooms and the 512 MiB
-reserve. Cell C uses the larger of that verified v6.2 reference and the
-observed maximum exact-identity recovery/task-boundary payload already on
-Drive, applies the existing 1.5x + 16 MiB production margin, counts the
-current run's existing bytes, and computes the live projection. The selected
-recovery candidate is hash-verified; other matching files are checked by
-manifest identity and observed size without an additional multi-gigabyte
-read. Do not enable Cell E unless live quota is numerically verified and the
-projection fits.
-The displayed deficit includes the 512 MiB reserve. Configure the final
-output/checkpoint destination before Cell D; moving completed runs is
-unsupported because completion records contain absolute artifact paths.
-Only recovery generations rotate. A newly uploaded generation must pass
-read-back verification before stale recovery files are considered for
-permanent pruning. Deletion requires exact path/name/ID verification and
-Drive's `capabilities.canDelete == true` for the authenticated account; a
-shared-folder Editor may delete a file they do not own when Drive grants that
-capability. If Drive explicitly denies deletion, the generation is preserved
-and reported as deferred rather than aborting a resumed run. This can leave
-more than two physical recovery generations until a capable account can clean
-them; actual retained bytes are reported. Task-boundary snapshots remain
-separate and are never pruned. Files already in Drive Trash are not removed
-automatically and continue to consume quota.
-
-The read-only resume gate may report more than two recovery manifests when
-older files could not be pruned. It checks every parseable manifest's run
-identity and hashes the two newest candidates; extra same-identity manifests
-are reported but do not alone block resumption. A mismatched identity or the
-absence of a verified candidate still blocks. Before loading, the runner
-revalidates the namespace and selects a valid checkpoint; it never starts a
-fresh run to work around recovery evidence.
-
-## RAM/OOM safeguards
-
-Production cache creation streams compressed NPZ members to `.npy` files in
-8 MiB blocks and opens the verified arrays as read-only memory maps. Feature
-finite checks, taskwise scaler statistics, GAN batches, classifier replay
-batches, stored-logit refresh, evaluation, and class-mean extraction use
-bounded row batches rather than constructing whole-dataset float64 or
-standardized copies. The inverse-frequency mixed-pool replacement sampler,
-256-example classifier updates, source proportions, class/task ordering,
-optimizer/loss protocol, and schedule are unchanged. A 1 GiB host/cgroup RAM
-reserve is required before checkpoint serialization/read-back and before
-uncached bulk decoding; low headroom stops before the allocation. This reserve
-is separate from the unchanged 512 MiB Drive/local-disk reserve.
-
-During checkpoint publication, the first integrity read-back object is
-released before the published payload is deserialized for independent
-manifest/hash validation. This prevents two complete in-memory RunState graphs
-from overlapping; serialization bytes, hashes, and identity checks are
-unchanged.
-
-The loader logs each stage with available host/cgroup RAM, process RSS and
-peak RSS, cgroup usage/limit/peak and OOM events. `resource_metrics.json`
-records memory samples at task/phase boundaries and final artifact export.
-These safeguards reduce avoidable anonymous-array peaks but do not constitute
-a measured production memory bound; Colab Cell D and the first production run
-remain the hardware validation points.
-
-Local scale testing measured a 1.17 GB float32 memmap feature cache for a
-120,000 × 2,439 synthetic fixture and a 1.43 GiB process peak RSS while
-streaming compressed NPZ data and fitting the scaler in 2,048-row chunks. This
-validates that fixture only; it is not a measurement of real EMBER/AZ data,
-Colab cgroup headroom, or a complete production task.
-
-The production checkpoint policy is completion-based and monotonic: local
-recovery serialization every five minutes, Drive recovery publication every
-15 minutes, plus task-boundary and graceful-interruption checkpoints. One new
-recovery generation is published per periodic sync; the existing pair is not
-re-uploaded. Recovery rotation preserves two verified Drive generations.
-Task-boundary snapshots remain a separate retained archive in Drive and local
-staging. Runtime resets clear ephemeral local staging; the next session
-restores from the identity-verified Drive checkpoint. A reset can lose updates
-since the last verified Drive synchronization; this is not zero-loss. Drive
-locking is best-effort, not a transactional distributed mutex. Keep one
-notebook session active for this matrix. If local capacity approaches its
-gate, stop cleanly and resume after a runtime reset rather than deleting
-recovery state.
-The legacy checkpoint cadence fields remain in the frozen RunConfig because
-they are part of the existing config/checkpoint identity. The 300/900-second
-runtime policy is an operational override, reported separately in
-`resource_metrics.json`; no model or update-budget field changes.
-
-## Protocol and evidence boundary
-
-The matrix is 2 datasets × 10 seeds/orders (42–51) × 5 arms = 100 runs. Each
-has an initial 50-class task and ten five-class increments, fixed classifier
-batch size 256, and all 11 update budgets from the exact effective-schedule
-hash `7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212`.
-It preserves mixed-pool inverse-label-frequency replacement sampling,
-independent RNG streams, paired initializations/orders, training-only
-preprocessing, raw-coordinate replay, and declared DER++ terms. Matching
-classifier-update budgets do not imply matching total compute or source
-exposure; generator and critic updates/timing are reported separately.
-
-The successful v6.2 GAN-recovery report is reused only as verified recovery
-and conservative storage-size evidence. Its classifier PASS is not rerun, and
-its synthetic validation identity is never used for production. New runs use
-the actual hash of the packaged training core and are never relabeled as
-historical reproduction. Production outputs, predictions, resource metrics,
-checkpoint manifests, progress, and completion registry remain in the
-configured Drive paths. The working-tree source, historical results, and
-manuscript are not changed by running the notebook.
+Local recovery cadence is five minutes; Drive recovery cadence is fifteen
+minutes, plus task boundaries and graceful interruption. Publication is
+capacity-checked and verified through the canonical API before pruning.
+Two verified recovery generations are retained where owned by the canonical
+account; all task-boundary files remain. Mixed-owner historical generations
+are preserved even when `canDelete` is true, so protected legacy files may
+temporarily exceed the recovery count target. No old research artifacts are
+automatically migrated, rewritten, transferred, or deleted.
