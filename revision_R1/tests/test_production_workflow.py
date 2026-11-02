@@ -693,6 +693,28 @@ class _FakeRequest:
         return self.value
 
 
+class _FakeMediaRequest(_FakeRequest):
+    """Drive-media test request exposing raw HTTP bytes to the real downloader."""
+
+    def __init__(self, payload: bytes):
+        super().__init__(payload)
+        self.uri = "https://www.googleapis.com/drive/v3/files/test-file?alt=media"
+        self.headers = {}
+
+        class _Http:
+            def request(_self, uri, method, body=None, headers=None, **_kwargs):
+                import httplib2
+
+                assert method == "GET"
+                response = httplib2.Response({
+                    "status": "200", "content-type": "application/json",
+                    "content-length": str(len(payload)),
+                })
+                return response, payload
+
+        self.http = _Http()
+
+
 class _FakeFiles:
     def __init__(self, records, deleted_ids):
         self.records = records
@@ -720,7 +742,7 @@ class _FakeFiles:
             path = getattr(self, "local_paths", {}).get(fileId)
             if path is None or not path.is_file():
                 raise FileNotFoundError(record.get("name", fileId))
-            return _FakeRequest(path.read_bytes())
+            return _FakeMediaRequest(path.read_bytes())
         path = getattr(self, "local_paths", {}).get(fileId)
         if path is not None and path.is_file():
             self.records[fileId]["size"] = str(path.stat().st_size)
@@ -2001,7 +2023,7 @@ class _FinalizationDriveFiles(_FakeFiles):
         if alt == "media" and self.fail_media_readback:
             raise OSError("injected Drive media read-back failure")
         if alt == "media" and fileId in self.remote_contents:
-            return _FakeRequest(self.remote_contents[fileId])
+            return _FakeMediaRequest(self.remote_contents[fileId])
         if alt is None and self.stale_metadata_snapshots.get(fileId):
             return _FakeRequest(self.stale_metadata_snapshots[fileId].pop(0))
         if alt is None and fileId in self.remote_contents:
@@ -2107,6 +2129,55 @@ def _finalization_drive_service(
         fail_updates_after_accept=fail_updates_after_accept,
     )
     return service
+
+
+def test_drive_journal_read_uses_raw_media_bytes_not_json_decoded_execute():
+    import httplib2
+    from googleapiclient.model import JsonModel
+
+    raw_payload = b'{\n  "journal_revision": 7,\n  "note": "preserve exact bytes"\n}'
+
+    class _RawHttp:
+        def request(self, uri, method, body=None, headers=None, **_kwargs):
+            assert method == "GET"
+            assert headers["range"].startswith("bytes=0-")
+            response = httplib2.Response({
+                "status": "200", "content-type": "application/json",
+                "content-length": str(len(raw_payload)),
+            })
+            return response, raw_payload
+
+    class _JsonDecodedMediaRequest:
+        uri = "https://www.googleapis.com/drive/v3/files/journal-id?alt=media"
+        headers = {}
+
+        def __init__(self):
+            self.http = _RawHttp()
+
+        def execute(self):
+            # HttpRequest.execute() uses JsonModel for this JSON response and
+            # therefore returns an object instead of the original media bytes.
+            return JsonModel().deserialize(raw_payload)
+
+    request = _JsonDecodedMediaRequest()
+
+    class _Files:
+        def get(self, *, fileId, alt=None, **_kwargs):
+            assert fileId == "journal-id"
+            assert alt == "media"
+            return request
+
+    class _Service:
+        def files(self):
+            return _Files()
+
+    observed = production_workflow._get_drive_journal_payload(
+        _Service(), "journal-id", expected={"file_id": "journal-id"},
+    )
+
+    assert isinstance(request.execute(), dict)
+    assert observed == raw_payload
+    assert observed != json.dumps(json.loads(raw_payload)).encode("utf-8")
 
 
 @pytest.mark.parametrize(

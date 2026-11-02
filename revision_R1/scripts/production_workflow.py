@@ -2873,9 +2873,21 @@ def _get_drive_journal_payload(service, file_id: str, *, expected: dict[str, Any
         if delay:
             time.sleep(delay)
         try:
-            payload = service.files().get(
+            request = service.files().get(
                 fileId=file_id, alt="media", supportsAllDrives=True,
-            ).execute()
+            )
+            # HttpRequest.execute() passes successful application/json media
+            # through Google API's JsonModel and returns a dict. Journals need
+            # byte-for-byte integrity checks, so download the media response
+            # through MediaIoBaseDownload instead of the JSON deserializer.
+            from googleapiclient.http import MediaIoBaseDownload
+
+            output = io.BytesIO()
+            downloader = MediaIoBaseDownload(output, request)
+            done = False
+            while not done:
+                _progress, done = downloader.next_chunk()
+            payload = output.getvalue()
         except Exception as exc:
             if not _journal_retryable_drive_error(exc) or attempt + 1 == len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
                 raise RecoveryJournalPublicationError(
@@ -3039,7 +3051,9 @@ def _verify_journal_api_readback(
                 supportsAllDrives=True,
             ).execute()
             _verify_drive_journal_location(last_metadata, file_id=file_id, parent_id=parent_id, name=name)
-            last_payload = service.files().get(fileId=file_id, alt="media", supportsAllDrives=True).execute()
+            last_payload = _get_drive_journal_payload(
+                service, file_id, expected=expected,
+            )
         except RecoveryJournalPublicationError:
             raise
         except Exception as exc:
