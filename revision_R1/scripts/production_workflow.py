@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import contextlib
 import hashlib
+import io
 import json
 import math
 import os
@@ -48,6 +49,7 @@ OUTPUT_BYTES_FLOOR_PER_RUN = 256 * 1024 * 1024
 ZIP_ARCHIVE_GROWTH_MARGIN = 0.01
 TASK_BOUNDARY_GENERATIONS_PER_RUN = 11
 RECOVERY_GENERATIONS_PER_RUN = 2
+RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS = (0.0, 0.25, 0.5, 1.0, 2.0)
 DRIVE_WRITE_PROBE_BYTES = b"revision_R1 shared-folder capacity probe v1\n"
 DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0, 8.0, 15.0)
 _DRIVE_WRITE_PROBE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
@@ -55,6 +57,22 @@ V62_RECOVERY_BUILD_ID = "revision_R1_colab_validation_v6_2_final_gan_recovery_qa
 V62_RECOVERY_WORKFLOW_ID = "2b4d8f5f1f29a938"
 V62_RECOVERY_REPORT_NAME = "resume_validation_2b4d8f5f1f29a938_20261026T142320Z_946699443.json"
 V62_RECOVERY_CODE_SHA256 = "adb4ee76f1d7fb82a35ffaf4f38f5ddaa9b7649c36098f6110f47a938f9faf88"
+
+
+class RecoveryJournalPublicationError(RuntimeError):
+    """Drive journal identity, publication, or remote read-back failed closed."""
+
+    def __init__(
+        self, message: str, *, phase: str, expected: dict[str, Any] | None = None,
+        observed: dict[str, Any] | None = None,
+    ) -> None:
+        self.phase = phase
+        self.expected = expected or {}
+        self.observed = observed or {}
+        details = {
+            "phase": phase, "expected": self.expected, "observed": self.observed,
+        }
+        super().__init__(f"{message}; journal publication diagnostics={json.dumps(details, sort_keys=True, default=str)}")
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -2720,20 +2738,422 @@ def _finalization_journal_digest(document: dict[str, Any]) -> str:
     return _sha256_json(payload)
 
 
+def _journal_transaction_key(document: dict[str, Any]) -> str:
+    fields = ("plan_sha256", "run_key", "run_id", "identity_sha256")
+    transaction = {key: document.get(key) for key in fields}
+    if any(not isinstance(value, str) or not value for value in transaction.values()):
+        raise RecoveryJournalPublicationError(
+            "retention journal lacks immutable transaction identity",
+            phase="transaction-identity", expected={"required_fields": list(fields)},
+            observed=transaction,
+        )
+    return _sha256_json(transaction)
+
+
+def _journal_retryable_drive_error(exc: Exception) -> bool:
+    if isinstance(exc, (OSError, TimeoutError, ConnectionError)):
+        return True
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        return False
+    return status in {408, 409, 429} or 500 <= status <= 599
+
+
+def _journal_observed_metadata(metadata: dict[str, Any] | None, payload: bytes | None) -> dict[str, Any]:
+    remote_doc = None
+    if isinstance(payload, (bytes, bytearray)):
+        try:
+            value = json.loads(bytes(payload).decode("utf-8"))
+            remote_doc = value if isinstance(value, dict) else None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+    try:
+        size_bytes = _optional_nonnegative_int(metadata.get("size"), "journal observed size") if isinstance(metadata, dict) else None
+    except StorageCapacityError:
+        size_bytes = metadata.get("size") if isinstance(metadata, dict) else None
+    return {
+        "file_id": metadata.get("id") if isinstance(metadata, dict) else None,
+        "name": metadata.get("name") if isinstance(metadata, dict) else None,
+        "parent_ids": metadata.get("parents") if isinstance(metadata, dict) else None,
+        "mime_type": metadata.get("mimeType") if isinstance(metadata, dict) else None,
+        "size_bytes": size_bytes,
+        "md5_checksum": metadata.get("md5Checksum") if isinstance(metadata, dict) else None,
+        "sha256": hashlib.sha256(bytes(payload)).hexdigest() if isinstance(payload, (bytes, bytearray)) else None,
+        "journal_revision": remote_doc.get("journal_revision") if remote_doc else None,
+        "app_properties": metadata.get("appProperties") if isinstance(metadata, dict) else None,
+        "drive_version": metadata.get("version") if isinstance(metadata, dict) else None,
+        "owners": metadata.get("owners", []) if isinstance(metadata, dict) else [],
+    }
+
+
+def _journal_error(
+    message: str, *, phase: str, expected: dict[str, Any],
+    metadata: dict[str, Any] | None = None, payload: bytes | None = None,
+    observed: dict[str, Any] | None = None,
+) -> RecoveryJournalPublicationError:
+    actual = _journal_observed_metadata(metadata, payload)
+    if observed:
+        actual.update(observed)
+    return RecoveryJournalPublicationError(
+        message, phase=phase, expected=expected, observed=actual,
+    )
+
+
+def _list_drive_journal_children(service, parent_id: str, name: str) -> list[dict[str, Any]]:
+    query = (
+        f"'{_drive_query_literal(parent_id)}' in parents and name='{_drive_query_literal(name)}' "
+        "and trashed=false"
+    )
+    for attempt, delay in enumerate(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        rows: list[dict[str, Any]] = []
+        page_token = None
+        try:
+            while True:
+                response = service.files().list(
+                    q=query, pageSize=100, pageToken=page_token,
+                    fields=("nextPageToken,files(id,name,mimeType,parents,size,md5Checksum,version,"
+                            "owners(emailAddress,displayName),appProperties,capabilities(canEdit,canDelete))"),
+                    includeItemsFromAllDrives=True, supportsAllDrives=True,
+                ).execute()
+                rows.extend(response.get("files", []))
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    return rows
+        except Exception as exc:
+            if not _journal_retryable_drive_error(exc) or attempt + 1 == len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+                raise RecoveryJournalPublicationError(
+                    f"Drive could not list the exact retention-journal parent/name: {exc}",
+                    phase="journal-name-resolution",
+                    expected={"parent_id": parent_id, "name": name},
+                    observed={"retryable": _journal_retryable_drive_error(exc), "attempt": attempt + 1},
+                ) from exc
+    return []
+
+
+def _get_drive_journal_metadata(service, file_id: str) -> dict[str, Any]:
+    last_error = None
+    for attempt, delay in enumerate(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        try:
+            metadata = service.files().get(
+                fileId=file_id,
+                fields=("id,name,mimeType,parents,size,md5Checksum,version,owners(emailAddress,displayName),"
+                        "appProperties,capabilities(canEdit,canDelete)"),
+                supportsAllDrives=True,
+            ).execute()
+        except Exception as exc:
+            last_error = exc
+            if not _journal_retryable_drive_error(exc) or attempt + 1 == len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+                raise RecoveryJournalPublicationError(
+                    f"Drive could not read retention-journal metadata by exact file ID: {exc}",
+                    phase="journal-metadata-read", expected={"file_id": file_id},
+                    observed={"retryable": _journal_retryable_drive_error(exc), "attempt": attempt + 1},
+                ) from exc
+            continue
+        if not isinstance(metadata, dict):
+            raise RecoveryJournalPublicationError(
+                "Drive returned malformed retention-journal metadata",
+                phase="journal-metadata-read", expected={"file_id": file_id},
+                observed={"metadata_type": type(metadata).__name__},
+            )
+        return metadata
+    raise RecoveryJournalPublicationError(
+        f"Drive metadata read did not converge: {last_error}", phase="journal-metadata-read",
+        expected={"file_id": file_id}, observed={"retryable": True},
+    )
+
+
+def _get_drive_journal_payload(service, file_id: str, *, expected: dict[str, Any]) -> bytes:
+    for attempt, delay in enumerate(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        try:
+            payload = service.files().get(
+                fileId=file_id, alt="media", supportsAllDrives=True,
+            ).execute()
+        except Exception as exc:
+            if not _journal_retryable_drive_error(exc) or attempt + 1 == len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+                raise RecoveryJournalPublicationError(
+                    f"Drive could not read retention-journal bytes by exact file ID: {exc}",
+                    phase="journal-payload-read", expected=expected,
+                    observed={"file_id": file_id, "retryable": _journal_retryable_drive_error(exc), "attempt": attempt + 1},
+                ) from exc
+            continue
+        if not isinstance(payload, (bytes, bytearray)):
+            raise RecoveryJournalPublicationError(
+                "Drive returned non-byte retention-journal content",
+                phase="journal-payload-read", expected=expected,
+                observed={"file_id": file_id, "payload_type": type(payload).__name__},
+            )
+        return bytes(payload)
+    raise RecoveryJournalPublicationError(
+        "Drive journal payload read did not converge", phase="journal-payload-read",
+        expected=expected, observed={"file_id": file_id},
+    )
+
+
+def _verify_drive_journal_location(metadata: dict[str, Any], *, file_id: str, parent_id: str, name: str) -> None:
+    parent_ids = [str(value) for value in metadata.get("parents", [])]
+    if (
+        str(metadata.get("id") or "") != file_id
+        or metadata.get("name") != name
+        or parent_ids != [parent_id]
+        or metadata.get("mimeType") in {DRIVE_FOLDER_MIME, DRIVE_SHORTCUT_MIME}
+    ):
+        raise RecoveryJournalPublicationError(
+            "Drive journal file ID, name, type, or parent differs from the exact binding",
+            phase="journal-location-verification",
+            expected={"file_id": file_id, "parent_id": parent_id, "name": name},
+            observed=_journal_observed_metadata(metadata, None),
+        )
+
+
+def _verify_remote_journal_identity(
+    remote: dict[str, Any], local: dict[str, Any], *, file_id: str, parent_id: str,
+) -> None:
+    if (
+        remote.get("journal_sha256") != _finalization_journal_digest(remote)
+        or _journal_transaction_key(remote) != _journal_transaction_key(local)
+        or remote.get("journal_drive_file_id") not in {None, file_id}
+        or remote.get("journal_drive_parent_id") not in {None, parent_id}
+    ):
+        raise RecoveryJournalPublicationError(
+            "existing Drive journal bytes are corrupt or belong to a different finalization transaction",
+            phase="journal-existing-content-verification",
+            expected={"file_id": file_id, "parent_id": parent_id, "transaction_key": _journal_transaction_key(local)},
+            observed={
+                "remote_transaction_key": _journal_transaction_key(remote),
+                "remote_file_id": remote.get("journal_drive_file_id"),
+                "remote_parent_id": remote.get("journal_drive_parent_id"),
+                "remote_journal_sha256": remote.get("journal_sha256"),
+                "calculated_journal_sha256": _finalization_journal_digest(remote),
+                "journal_revision": remote.get("journal_revision"),
+            },
+        )
+
+
+def _read_valid_remote_journal(
+    service, metadata: dict[str, Any], *, document: dict[str, Any], parent_id: str,
+) -> tuple[dict[str, Any] | None, bytes, dict[str, Any]]:
+    file_id = str(metadata["id"])
+    expected = {
+        "file_id": file_id, "parent_id": parent_id, "name": metadata.get("name"),
+        "transaction_key": _journal_transaction_key(document),
+    }
+    payload = b""
+    for attempt, delay in enumerate(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        metadata = _get_drive_journal_metadata(service, file_id)
+        _verify_drive_journal_location(metadata, file_id=file_id, parent_id=parent_id, name=str(expected["name"]))
+        payload = _get_drive_journal_payload(service, file_id, expected=expected)
+        marker = (metadata.get("appProperties") or {}).get("revision_r1_finalization_key")
+        if not payload and marker == expected["transaction_key"]:
+            return None, payload, metadata
+        try:
+            remote_size = _optional_nonnegative_int(metadata.get("size"), "journal remote size")
+        except StorageCapacityError:
+            remote_size = None
+        md5 = hashlib.md5(payload, usedforsecurity=False).hexdigest()
+        metadata_matches = (
+            remote_size == len(payload)
+            and (not metadata.get("md5Checksum") or metadata.get("md5Checksum") == md5)
+        )
+        if metadata_matches:
+            break
+        if attempt + 1 == len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+            raise _journal_error(
+                "Drive journal metadata remained stale/inconsistent with exact API bytes",
+                phase="journal-existing-metadata-verification",
+                expected={**expected, "size_bytes": len(payload), "md5_checksum": md5},
+                metadata=metadata, payload=payload,
+            )
+    try:
+        remote = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _journal_error(
+            "existing Drive journal is neither the recognized empty placeholder nor valid JSON",
+            phase="journal-existing-content-verification", expected=expected,
+            metadata=metadata, payload=payload,
+        ) from exc
+    if not isinstance(remote, dict):
+        raise _journal_error(
+            "existing Drive journal is not a JSON object", phase="journal-existing-content-verification",
+            expected=expected, metadata=metadata, payload=payload,
+        )
+    _verify_remote_journal_identity(remote, document, file_id=file_id, parent_id=parent_id)
+    return remote, payload, metadata
+
+
+def _journal_media_upload(payload: bytes):
+    try:
+        from googleapiclient.http import MediaIoBaseUpload
+    except ImportError as exc:
+        raise RecoveryJournalPublicationError(
+            "google-api-python-client is unavailable for Drive journal upload",
+            phase="journal-api-upload", expected={"dependency": "google-api-python-client"},
+        ) from exc
+    return MediaIoBaseUpload(io.BytesIO(payload), mimetype="application/json", resumable=False)
+
+
+def _serialize_journal_for_drive(
+    document: dict[str, Any], *, file_id: str, parent_id: str, revision: int,
+) -> tuple[dict[str, Any], bytes]:
+    candidate = dict(document)
+    candidate["journal_drive_file_id"] = file_id
+    candidate["journal_drive_parent_id"] = parent_id
+    candidate["journal_revision"] = revision
+    candidate.pop("journal_sha256", None)
+    candidate["journal_sha256"] = _finalization_journal_digest(candidate)
+    # Match _atomic_json byte-for-byte (it intentionally emits no trailing newline).
+    payload = json.dumps(candidate, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
+    return candidate, payload
+
+
+def _verify_journal_api_readback(
+    service, *, metadata: dict[str, Any], document: dict[str, Any], payload: bytes,
+    file_id: str, parent_id: str, name: str, update_response: dict[str, Any] | None,
+) -> dict[str, Any]:
+    revision = int(document["journal_revision"])
+    expected_md5 = hashlib.md5(payload, usedforsecurity=False).hexdigest()
+    update_version = update_response.get("version") if isinstance(update_response, dict) else None
+    expected = {
+        "file_id": file_id, "parent_id": parent_id, "name": name,
+        "size_bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+        "md5_checksum": expected_md5, "journal_revision": revision,
+        "drive_version": update_version,
+    }
+    last_metadata, last_payload, last_mismatch = metadata, None, "stale read-back"
+    for attempt, delay in enumerate(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        try:
+            last_metadata = service.files().get(
+                fileId=file_id,
+                fields=("id,name,mimeType,parents,size,md5Checksum,version,owners(emailAddress,displayName),appProperties"),
+                supportsAllDrives=True,
+            ).execute()
+            _verify_drive_journal_location(last_metadata, file_id=file_id, parent_id=parent_id, name=name)
+            last_payload = service.files().get(fileId=file_id, alt="media", supportsAllDrives=True).execute()
+        except RecoveryJournalPublicationError:
+            raise
+        except Exception as exc:
+            last_mismatch = f"Drive API read-back request failed: {exc}"
+            if not _journal_retryable_drive_error(exc) or attempt + 1 == len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+                raise _journal_error(
+                    last_mismatch, phase="journal-api-readback", expected=expected,
+                    metadata=last_metadata, payload=last_payload,
+                    observed={"retryable": _journal_retryable_drive_error(exc), "attempt": attempt + 1},
+                ) from exc
+            continue
+        if not isinstance(last_payload, (bytes, bytearray)):
+            raise _journal_error(
+                "Drive API returned non-byte journal read-back", phase="journal-api-readback",
+                expected=expected, metadata=last_metadata,
+                observed={"payload_type": type(last_payload).__name__},
+            )
+        last_payload = bytes(last_payload)
+        observed = _journal_observed_metadata(last_metadata, last_payload)
+        app_properties = last_metadata.get("appProperties") or {}
+        try:
+            observed_size = _optional_nonnegative_int(last_metadata.get("size"), "journal size")
+            observed_version = int(last_metadata["version"]) if last_metadata.get("version") is not None else None
+            expected_version = int(update_version) if update_version is not None else None
+        except (StorageCapacityError, TypeError, ValueError):
+            observed_size, observed_version, expected_version = None, None, None
+        identity_ok = (
+            str(last_metadata.get("id") or "") == file_id
+            and last_metadata.get("name") == name
+            and parent_id in [str(value) for value in last_metadata.get("parents", [])]
+            and last_metadata.get("mimeType") not in {DRIVE_FOLDER_MIME, DRIVE_SHORTCUT_MIME}
+        )
+        revision_ok = (
+            app_properties.get("revision_r1_finalization_key") == _journal_transaction_key(document)
+            and str(app_properties.get("revision_r1_journal_revision") or "") == str(revision)
+            and observed.get("journal_revision") == revision
+        )
+        bytes_ok = (
+            observed_size == len(payload)
+            and last_payload == payload
+            and (not last_metadata.get("md5Checksum") or last_metadata.get("md5Checksum") == expected_md5)
+        )
+        version_ok = expected_version is None or observed_version == expected_version
+        if identity_ok and revision_ok and bytes_ok and version_ok:
+            return last_metadata
+        if not identity_ok:
+            raise _journal_error(
+                "Drive journal read-back has a different ID, name, or parent",
+                phase="journal-api-readback-identity", expected=expected,
+                metadata=last_metadata, payload=last_payload,
+            )
+        if expected_version is not None and observed_version is not None and observed_version > expected_version:
+            raise _journal_error(
+                "Drive journal version advanced unexpectedly during publication",
+                phase="journal-api-readback-conflict", expected=expected,
+                metadata=last_metadata, payload=last_payload,
+            )
+        last_mismatch = (
+            f"expected_size={len(payload)}, observed_size={observed_size}, "
+            f"expected_sha256={expected['sha256']}, observed_sha256={observed.get('sha256')}, "
+            f"expected_journal_revision={revision}, observed_journal_revision={observed.get('journal_revision')}"
+        )
+    raise _journal_error(
+        f"Drive journal publication/read-back did not converge after bounded retries: {last_mismatch}",
+        phase="journal-api-readback", expected=expected, metadata=last_metadata, payload=last_payload,
+    )
+
+
 def _save_recovery_finalization_journal(
     path: Path, document: dict[str, Any], service, *, drive_root: Path,
 ) -> int:
-    payload = dict(document)
-    payload.pop("journal_sha256", None)
-    document["journal_sha256"] = _sha256_json(payload)
-    serialized = json.dumps(document, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
+    if not isinstance(document, dict):
+        raise RecoveryJournalPublicationError(
+            "retention journal is not a JSON object", phase="journal-local-validation",
+            expected={"document_type": "dict"}, observed={"document_type": type(document).__name__},
+        )
+    transaction_key = _journal_transaction_key(document)
+    baseline = None
+    if path.is_file():
+        try:
+            baseline = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RecoveryJournalPublicationError(
+                f"existing local retention journal is unreadable and was preserved: {exc}",
+                phase="journal-local-baseline-read", expected={"path": str(path)},
+            ) from exc
+        if (
+            not isinstance(baseline, dict)
+            or baseline.get("journal_sha256") != _finalization_journal_digest(baseline)
+            or _journal_transaction_key(baseline) != transaction_key
+        ):
+            raise RecoveryJournalPublicationError(
+                "existing local retention journal failed checksum or transaction validation; preserved",
+                phase="journal-local-baseline-validation",
+                expected={"path": str(path), "transaction_key": transaction_key},
+                observed={
+                    "stored_sha256": baseline.get("journal_sha256") if isinstance(baseline, dict) else None,
+                    "calculated_sha256": _finalization_journal_digest(baseline) if isinstance(baseline, dict) else None,
+                },
+            )
+    local_revision = int((baseline or document).get("journal_revision", 0))
+    if local_revision < 0:
+        raise RecoveryJournalPublicationError(
+            "local journal has an invalid negative revision", phase="journal-local-baseline-validation",
+            expected={"minimum_revision": 0}, observed={"journal_revision": local_revision},
+        )
     quota = _drive_account_snapshot(service)
     available = quota.get("available_bytes")
     if available is None:
         raise StorageCapacityError(
             "Drive quota is unknown; cannot safely persist the recovery-retention journal before pruning"
         )
-    required_bytes = max(1, len(serialized) * 2)
+    rough_payload = json.dumps(document, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
+    required_bytes = max(4096, (len(rough_payload) + 2048) * 2)
     require_available_bytes(
         path, required_bytes=required_bytes, reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
         available_bytes=int(available), storage_kind="Drive recovery-finalization journal",
@@ -2751,72 +3171,288 @@ def _save_recovery_finalization_journal(
     location = _ensure_drive_folder_path(service, components)
     parent_id = str(location.get("folder_id") or "")
     if location.get("path_exists") is not True or not parent_id:
-        raise StorageCapacityError("cannot resolve the exact Drive folder for the recovery-retention journal")
-    _atomic_json(path, document)
-    try:
-        observed = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise StorageCapacityError("recovery-retention journal read-back failed; no additional checkpoint pruning will continue") from exc
-    if observed != document or observed.get("journal_sha256") != _finalization_journal_digest(observed):
-        raise StorageCapacityError("recovery-retention journal read-back/hash verification failed")
-    deadline = time.monotonic() + 20.0
-    metadata = None
-    while time.monotonic() < deadline:
-        metadata = _lookup_drive_child(service, parent_id, path.name)
-        if isinstance(metadata, dict):
-            break
-        time.sleep(0.25)
-    if not isinstance(metadata, dict):
-        raise StorageCapacityError(
-            "Drive API cannot see the recovery-retention journal in its exact parent; no checkpoint pruning is allowed"
+        raise RecoveryJournalPublicationError(
+            "cannot resolve the exact Drive folder for the recovery-retention journal",
+            phase="journal-parent-resolution", expected={"path": str(path.parent)},
+            observed={"path_exists": location.get("path_exists"), "folder_id": parent_id},
         )
-    file_id = str(metadata.get("id") or "")
-    if (
-        not file_id
-        or metadata.get("name") != path.name
-        or parent_id not in [str(value) for value in metadata.get("parents", [])]
-        or metadata.get("mimeType") == DRIVE_FOLDER_MIME
-    ):
-        raise StorageCapacityError("Drive journal metadata does not match the exact journal path; pruning is blocked")
-    bound_id = document.get("journal_drive_file_id")
-    bound_parent = document.get("journal_drive_parent_id")
-    if (bound_id and str(bound_id) != file_id) or (bound_parent and str(bound_parent) != parent_id):
-        raise StorageCapacityError("Drive journal identity changed since its retention record was prepared")
-    if not bound_id or not bound_parent:
-        document["journal_drive_file_id"] = file_id
-        document["journal_drive_parent_id"] = parent_id
-        payload = dict(document)
-        payload.pop("journal_sha256", None)
-        document["journal_sha256"] = _sha256_json(payload)
-        serialized = json.dumps(document, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
-        _atomic_json(path, document)
 
-    try:
-        remote_metadata = service.files().get(
-            fileId=file_id, fields="id,name,mimeType,parents,size,owners(emailAddress),quotaBytesUsed",
-            supportsAllDrives=True,
-        ).execute()
-        remote_size = _optional_nonnegative_int(remote_metadata.get("size"), "recovery-retention journal size")
-        if (
-            remote_metadata.get("id") != file_id
-            or remote_metadata.get("name") != path.name
-            or parent_id not in [str(value) for value in remote_metadata.get("parents", [])]
-            or remote_size != len(serialized)
-        ):
-            raise StorageCapacityError("Drive journal metadata does not match the current journal bytes")
-        remote_payload = service.files().get(
-            fileId=file_id, alt="media", supportsAllDrives=True,
-        ).execute()
-    except StorageCapacityError:
-        raise
-    except Exception as exc:
-        raise StorageCapacityError(
-            f"Drive journal publication/read-back failed; no checkpoint pruning is allowed: {exc}"
-        ) from exc
-    if not isinstance(remote_payload, (bytes, bytearray)) or bytes(remote_payload) != serialized:
-        raise StorageCapacityError(
-            "Drive journal remote read-back differs from the local journal; no checkpoint pruning is allowed"
+    matches = _list_drive_journal_children(service, parent_id, path.name)
+    if len(matches) > 1:
+        raise RecoveryJournalPublicationError(
+            "duplicate Drive files have the exact retention-journal name; refusing filename-based selection",
+            phase="journal-name-ambiguity",
+            expected={"parent_id": parent_id, "name": path.name, "bound_file_id": document.get("journal_drive_file_id")},
+            observed={"matching_file_ids": [row.get("id") for row in matches]},
         )
+    bound_parent = document.get("journal_drive_parent_id")
+    if bound_parent and str(bound_parent) != parent_id:
+        raise RecoveryJournalPublicationError(
+            "journal is bound to a different Drive parent", phase="journal-parent-binding",
+            expected={"parent_id": parent_id}, observed={"bound_parent_id": str(bound_parent)},
+        )
+    bound_id = str(document.get("journal_drive_file_id") or "")
+    if bound_id:
+        if matches and str(matches[0].get("id") or "") != bound_id:
+            raise RecoveryJournalPublicationError(
+                "Drive name lookup disagrees with the journal's bound file ID",
+                phase="journal-file-id-binding", expected={"file_id": bound_id, "parent_id": parent_id},
+                observed={"matching_file_id": matches[0].get("id")},
+            )
+        file_id = bound_id
+        metadata = _get_drive_journal_metadata(service, file_id)
+        _verify_drive_journal_location(metadata, file_id=file_id, parent_id=parent_id, name=path.name)
+    elif matches:
+        file_id = str(matches[0].get("id") or "")
+        if not file_id:
+            raise RecoveryJournalPublicationError(
+                "Drive exact-name journal record has no file ID", phase="journal-file-id-binding",
+                expected={"parent_id": parent_id, "name": path.name}, observed={"metadata": matches[0]},
+            )
+        metadata = _get_drive_journal_metadata(service, file_id)
+        _verify_drive_journal_location(metadata, file_id=file_id, parent_id=parent_id, name=path.name)
+    else:
+        if location.get("can_add_children") is not True:
+            raise RecoveryJournalPublicationError(
+                "authenticated editor lacks verified child-create permission at the exact journal parent",
+                phase="journal-create-permission", expected={"parent_id": parent_id, "can_add_children": True},
+                observed={"can_add_children": location.get("can_add_children"), "owner_email": location.get("owner_email")},
+            )
+        try:
+            generated = service.files().generateIds(count=1, space="drive", fields="ids").execute()
+            ids = generated.get("ids", []) if isinstance(generated, dict) else []
+            file_id = str(ids[0]) if ids else ""
+        except Exception as exc:
+            raise RecoveryJournalPublicationError(
+                f"Drive could not allocate a journal file ID: {exc}", phase="journal-id-allocation",
+                expected={"parent_id": parent_id, "name": path.name},
+                observed={"retryable": _journal_retryable_drive_error(exc)},
+            ) from exc
+        if not file_id:
+            raise RecoveryJournalPublicationError(
+                "Drive returned no preallocated journal file ID", phase="journal-id-allocation",
+                expected={"parent_id": parent_id, "name": path.name}, observed={"response": generated},
+            )
+        create_body = {
+            "id": file_id, "name": path.name, "mimeType": "application/json", "parents": [parent_id],
+            "appProperties": {
+                "revision_r1_finalization_key": transaction_key,
+                "revision_r1_journal_revision": "0",
+            },
+        }
+        last_create_error = None
+        for attempt, delay in enumerate(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+            if delay:
+                time.sleep(delay)
+            try:
+                service.files().create(
+                    body=create_body,
+                    fields="id,name,mimeType,parents,size,md5Checksum,version,owners(emailAddress),appProperties",
+                    supportsAllDrives=True,
+                ).execute()
+                break
+            except Exception as exc:
+                last_create_error = exc
+                if not _journal_retryable_drive_error(exc) or attempt + 1 == len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+                    if getattr(getattr(exc, "resp", None), "status", None) == 409:
+                        conflict = _get_drive_journal_metadata(service, file_id)
+                        if (
+                            conflict.get("name") == path.name
+                            and parent_id in [str(value) for value in conflict.get("parents", [])]
+                            and (conflict.get("appProperties") or {}).get("revision_r1_finalization_key") == transaction_key
+                        ):
+                            break
+                    raise RecoveryJournalPublicationError(
+                        f"Drive journal create failed: {exc}", phase="journal-create",
+                        expected={"file_id": file_id, "parent_id": parent_id, "name": path.name},
+                        observed={"retryable": _journal_retryable_drive_error(exc), "attempt": attempt + 1},
+                    ) from exc
+                # The same preallocated Drive ID makes retrying an ambiguous create safe.
+        metadata = _get_drive_journal_metadata(service, file_id)
+        _verify_drive_journal_location(metadata, file_id=file_id, parent_id=parent_id, name=path.name)
+        if (metadata.get("appProperties") or {}).get("revision_r1_finalization_key") != transaction_key:
+            raise RecoveryJournalPublicationError(
+                f"created Drive journal has the wrong transaction marker (last create error={last_create_error})",
+                phase="journal-create-verification",
+                expected={"file_id": file_id, "parent_id": parent_id, "transaction_key": transaction_key},
+                observed=_journal_observed_metadata(metadata, None),
+            )
+
+    remote_document, remote_payload, metadata = _read_valid_remote_journal(
+        service, metadata, document=document, parent_id=parent_id,
+    )
+    pending_placeholder = (
+        remote_document is None and not remote_payload
+        and (metadata.get("appProperties") or {}).get("revision_r1_finalization_key") == transaction_key
+    )
+    if remote_document is None and not pending_placeholder:
+        raise RecoveryJournalPublicationError(
+            "Drive file is not a valid journal or a recognized empty publication placeholder",
+            phase="journal-placeholder-verification",
+            expected={"file_id": file_id, "parent_id": parent_id, "transaction_key": transaction_key},
+            metadata=metadata, payload=remote_payload,
+        )
+
+    input_is_unmodified = (
+        isinstance(document.get("journal_sha256"), str)
+        and document.get("journal_sha256") == _finalization_journal_digest(document)
+    )
+    remote_revision = int(remote_document.get("journal_revision", 0)) if remote_document else 0
+    if baseline is None and remote_document is not None:
+        raise RecoveryJournalPublicationError(
+            "remote journal exists but the local retry copy is absent; restore it before preparing another state",
+            phase="journal-local-remote-conflict",
+            expected={"file_id": file_id, "parent_id": parent_id, "transaction_key": transaction_key},
+            metadata=metadata, payload=remote_payload,
+        )
+    if baseline is not None and remote_document is not None:
+        baseline_revision = int(baseline.get("journal_revision", 0))
+        baseline_hash = baseline.get("journal_sha256")
+        if remote_revision > baseline_revision:
+            if not input_is_unmodified:
+                raise _journal_error(
+                    "remote journal revision is newer than a locally modified retry state; preserving both",
+                    phase="journal-revision-conflict",
+                    expected={"local_revision": baseline_revision, "remote_revision": remote_revision},
+                    metadata=metadata, payload=remote_payload,
+                )
+            document.clear()
+            document.update(remote_document)
+            _atomic_json(path, remote_document)
+            return len(remote_payload)
+        legacy_unbound_equivalent = (
+            remote_revision == baseline_revision == 0
+            and not remote_document.get("journal_drive_file_id")
+            and not remote_document.get("journal_drive_parent_id")
+            and {
+                key: value for key, value in remote_document.items()
+                if key not in {"journal_sha256", "journal_drive_file_id", "journal_drive_parent_id", "journal_revision"}
+            } == {
+                key: value for key, value in baseline.items()
+                if key not in {"journal_sha256", "journal_drive_file_id", "journal_drive_parent_id", "journal_revision"}
+            }
+        )
+        if remote_revision == baseline_revision and remote_document.get("journal_sha256") != baseline_hash and not legacy_unbound_equivalent:
+            raise _journal_error(
+                "Drive and local journals conflict at the same logical revision",
+                phase="journal-revision-conflict",
+                expected={"local_revision": baseline_revision, "local_sha256": baseline_hash},
+                metadata=metadata, payload=remote_payload,
+                observed={"remote_revision": remote_revision, "remote_sha256": remote_document.get("journal_sha256")},
+            )
+        if (
+            remote_revision == baseline_revision
+            and remote_document.get("journal_sha256") == baseline_hash
+            and input_is_unmodified
+            and remote_document.get("journal_drive_file_id") == file_id
+            and remote_document.get("journal_drive_parent_id") == parent_id
+            and (metadata.get("appProperties") or {}).get("revision_r1_finalization_key") == transaction_key
+            and str((metadata.get("appProperties") or {}).get("revision_r1_journal_revision") or "") == str(remote_revision)
+            and remote_payload == json.dumps(remote_document, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
+        ):
+            return len(remote_payload)
+
+    revision = max(local_revision, remote_revision) + 1
+    candidate, serialized = _serialize_journal_for_drive(
+        document, file_id=file_id, parent_id=parent_id, revision=revision,
+    )
+    required_bytes = max(4096, (len(serialized) + 1024) * 2)
+    require_available_bytes(
+        path, required_bytes=required_bytes, reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
+        available_bytes=int(available), storage_kind="Drive recovery-finalization journal upload",
+    )
+    require_available_bytes(
+        path, required_bytes=required_bytes, reserve_bytes=DEFAULT_STORAGE_RESERVE_BYTES,
+        available_bytes=shutil.disk_usage(drive_root).free, storage_kind="Colab local journal staging",
+    )
+    update_response = None
+    for attempt, delay in enumerate(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        try:
+            update_response = service.files().update(
+                fileId=file_id,
+                body={"appProperties": {
+                    "revision_r1_finalization_key": transaction_key,
+                    "revision_r1_journal_revision": str(revision),
+                }},
+                media_body=_journal_media_upload(serialized),
+                fields="id,name,mimeType,parents,size,md5Checksum,version,owners(emailAddress),appProperties",
+                supportsAllDrives=True,
+            ).execute()
+            break
+        except Exception as exc:
+            if not _journal_retryable_drive_error(exc) or attempt + 1 == len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+                observed_metadata = None
+                observed_payload = None
+                try:
+                    observed_metadata = _get_drive_journal_metadata(service, file_id)
+                    observed_payload = _get_drive_journal_payload(
+                        service, file_id,
+                        expected={"file_id": file_id, "parent_id": parent_id, "journal_revision": revision},
+                    )
+                except Exception:
+                    pass
+                if (
+                    _journal_retryable_drive_error(exc)
+                    and observed_metadata is not None
+                    and observed_payload == serialized
+                ):
+                    # The transport may have failed after Drive committed the
+                    # update. Accept only an exact ID-bound API read-back; never
+                    # infer success from the request exception alone.
+                    try:
+                        _verify_journal_api_readback(
+                            service, metadata=observed_metadata, document=candidate,
+                            payload=serialized, file_id=file_id, parent_id=parent_id,
+                            name=path.name, update_response=observed_metadata,
+                        )
+                    except RecoveryJournalPublicationError:
+                        pass
+                    else:
+                        update_response = observed_metadata
+                        break
+                raise _journal_error(
+                    f"Drive API rejected or did not confirm retention-journal update: {exc}",
+                    phase="journal-api-update",
+                    expected={
+                        "file_id": file_id, "parent_id": parent_id, "size_bytes": len(serialized),
+                        "sha256": hashlib.sha256(serialized).hexdigest(), "journal_revision": revision,
+                    },
+                    metadata=observed_metadata, payload=observed_payload,
+                    observed={"retryable": _journal_retryable_drive_error(exc), "attempt": attempt + 1},
+                ) from exc
+    if not isinstance(update_response, dict):
+        raise RecoveryJournalPublicationError(
+            "Drive API update returned no metadata", phase="journal-api-update",
+            expected={"file_id": file_id, "journal_revision": revision},
+            observed={"response_type": type(update_response).__name__},
+        )
+
+    verified_metadata = _verify_journal_api_readback(
+        service, metadata=metadata, document=candidate, payload=serialized,
+        file_id=file_id, parent_id=parent_id, name=path.name, update_response=update_response,
+    )
+    after_publish = _list_drive_journal_children(service, parent_id, path.name)
+    if len(after_publish) > 1 or (after_publish and str(after_publish[0].get("id") or "") != file_id):
+        raise RecoveryJournalPublicationError(
+            "Drive journal name became ambiguous after publication; checkpoints remain untouched",
+            phase="journal-post-publication-ambiguity",
+            expected={"file_id": file_id, "parent_id": parent_id, "name": path.name},
+            observed={"matching_file_ids": [row.get("id") for row in after_publish]},
+        )
+    try:
+        _atomic_json(path, candidate)
+    except OSError as exc:
+        raise _journal_error(
+            f"Drive journal is verified but local retry-copy write failed: {exc}",
+            phase="journal-local-publication-after-drive-commit",
+            expected={"file_id": file_id, "parent_id": parent_id, "size_bytes": len(serialized),
+                      "sha256": hashlib.sha256(serialized).hexdigest(), "journal_revision": revision},
+            metadata=verified_metadata, payload=serialized,
+        ) from exc
+    document.clear()
+    document.update(candidate)
     return len(serialized)
 
 
@@ -2843,6 +3479,8 @@ def _validate_recovery_finalization_journal(
         or not isinstance(document.get("orphan_manifest_reconciliation", {}), dict)
         or not document.get("journal_drive_file_id")
         or not document.get("journal_drive_parent_id")
+        or type(document.get("journal_revision", 0)) is not int
+        or document.get("journal_revision", 0) < 0
         or document.get("status") not in {"PREPARED", "RETENTION_VERIFIED"}
     ):
         raise ValueError(f"recovery-retention journal does not match the frozen run identity: {path}")
@@ -2895,6 +3533,169 @@ def _validate_recovery_finalization_journal(
             raise ValueError("recovery-retention journal contains unverified orphan-manifest deletion metadata")
         orphan_names.add(item["name"])
     return document
+
+
+def _restore_remote_recovery_finalization_journal(
+    path: Path, plan: dict[str, Any], record: dict[str, Any], identity: dict[str, Any],
+    service, *, drive_root: Path, recovery_folder_id: str,
+) -> bool:
+    """Restore a published finalization transaction when Drive committed before local write.
+
+    This is specifically the retry case where the API accepted the journal bytes
+    but the Colab process stopped before materializing its local retry copy.
+    Existing local files are never replaced by this recovery path.
+    """
+    if path.exists():
+        return False
+    _configured, components = _logical_drive_path_components(path.parent, drive_root=drive_root)
+    try:
+        location = resolve_drive_folder(service, components)
+    except Exception as exc:
+        raise RecoveryJournalPublicationError(
+            f"could not resolve the exact Drive parent while recovering the finalization journal: {exc}",
+            phase="journal-restore-parent-resolution",
+            expected={"logical_components": components},
+        ) from exc
+    if location.get("path_exists") is not True or not location.get("folder_id"):
+        return False
+    parent_id = str(location["folder_id"])
+    matches = _list_drive_journal_children(service, parent_id, path.name)
+    if len(matches) > 1:
+        raise RecoveryJournalPublicationError(
+            "duplicate Drive files have the exact retention-journal name; refusing remote recovery",
+            phase="journal-restore-name-ambiguity",
+            expected={"parent_id": parent_id, "name": path.name},
+            observed={"matching_file_ids": [row.get("id") for row in matches]},
+        )
+    if not matches:
+        return False
+    file_id = str(matches[0].get("id") or "")
+    if not file_id:
+        raise RecoveryJournalPublicationError(
+            "Drive retention journal has no stable file ID", phase="journal-restore-file-id",
+            expected={"parent_id": parent_id, "name": path.name}, observed={"metadata": matches[0]},
+        )
+    transaction_document = {
+        "plan_sha256": plan["plan_sha256"], "run_key": record["run_key"],
+        "run_id": _run_id_for(record, synthetic=False), "identity_sha256": _sha256_json(identity),
+    }
+    transaction_key = _journal_transaction_key(transaction_document)
+    last_metadata: dict[str, Any] | None = None
+    last_payload: bytes | None = None
+    for attempt, delay in enumerate(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        try:
+            last_metadata = _get_drive_journal_metadata(service, file_id)
+            _verify_drive_journal_location(last_metadata, file_id=file_id, parent_id=parent_id, name=path.name)
+            last_payload = _get_drive_journal_payload(
+                service, file_id,
+                expected={"file_id": file_id, "parent_id": parent_id, "name": path.name},
+            )
+        except RecoveryJournalPublicationError:
+            raise
+        except Exception as exc:
+            if _journal_retryable_drive_error(exc) and attempt + 1 < len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+                continue
+            raise RecoveryJournalPublicationError(
+                f"could not read the exact Drive finalization journal: {exc}",
+                phase="journal-restore-read", expected={"file_id": file_id, "parent_id": parent_id},
+                observed={"attempt": attempt + 1, "retryable": _journal_retryable_drive_error(exc)},
+            ) from exc
+        marker = (last_metadata.get("appProperties") or {}).get("revision_r1_finalization_key")
+        if not last_payload and marker == transaction_key:
+            return False
+        try:
+            remote = json.loads(last_payload.decode("utf-8"))
+        except (AttributeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _journal_error(
+                "Drive finalization journal is not valid JSON", phase="journal-restore-integrity",
+                expected={"file_id": file_id, "parent_id": parent_id},
+                metadata=last_metadata, payload=last_payload,
+            ) from exc
+        if not isinstance(remote, dict):
+            raise _journal_error(
+                "Drive finalization journal is not a JSON object", phase="journal-restore-integrity",
+                expected={"file_id": file_id, "parent_id": parent_id},
+                metadata=last_metadata, payload=last_payload,
+            )
+        try:
+            actual_size = _optional_nonnegative_int(last_metadata.get("size"), "journal restore size")
+        except StorageCapacityError:
+            actual_size = None
+        metadata_consistent = (
+            actual_size == len(last_payload)
+            and (not last_metadata.get("md5Checksum")
+                 or last_metadata.get("md5Checksum") == hashlib.md5(last_payload, usedforsecurity=False).hexdigest())
+        )
+        if not metadata_consistent:
+            if attempt + 1 < len(RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS):
+                continue
+            raise _journal_error(
+                "Drive journal metadata remained stale or inconsistent while restoring its bytes",
+                phase="journal-restore-readback", expected={"size_bytes": len(last_payload)},
+                metadata=last_metadata, payload=last_payload,
+                observed={"attempt": attempt + 1, "actual_size": actual_size},
+            )
+        if remote.get("journal_sha256") != _finalization_journal_digest(remote):
+            raise _journal_error(
+                "Drive finalization journal checksum is invalid", phase="journal-restore-integrity",
+                expected={"journal_sha256": remote.get("journal_sha256")},
+                metadata=last_metadata, payload=last_payload,
+            )
+        _verify_remote_journal_identity(remote, transaction_document, file_id=file_id, parent_id=parent_id)
+        app_properties = last_metadata.get("appProperties") or {}
+        remote_revision = int(remote.get("journal_revision", 0))
+        if marker not in (None, transaction_key) or (
+            app_properties.get("revision_r1_journal_revision") is not None
+            and str(app_properties["revision_r1_journal_revision"]) != str(remote_revision)
+        ):
+            raise _journal_error(
+                "Drive journal application properties do not match its transaction/revision",
+                phase="journal-restore-identity", expected={"transaction_key": transaction_key,
+                    "journal_revision": remote_revision}, metadata=last_metadata, payload=last_payload,
+            )
+        recovery_folder = remote.get("recovery_folder")
+        if (
+            remote.get("schema_version") != 1
+            or remote.get("status") not in {"PREPARED", "RETENTION_VERIFIED"}
+            or remote.get("identity") != identity
+            or not isinstance(recovery_folder, dict)
+            or str(recovery_folder.get("folder_id")) != str(recovery_folder_id)
+        ):
+            raise _journal_error(
+                "Drive journal is validly serialized but does not match this completed run/recovery folder",
+                phase="journal-restore-run-identity",
+                expected={"run_id": transaction_document["run_id"], "recovery_folder_id": recovery_folder_id},
+                metadata=last_metadata, payload=last_payload,
+            )
+        restored = dict(remote)
+        if restored.get("journal_drive_file_id") not in (None, file_id):
+            raise _journal_error(
+                "Drive journal embeds a different file ID", phase="journal-restore-identity",
+                expected={"file_id": file_id}, metadata=last_metadata, payload=last_payload,
+            )
+        if restored.get("journal_drive_parent_id") not in (None, parent_id):
+            raise _journal_error(
+                "Drive journal embeds a different parent ID", phase="journal-restore-identity",
+                expected={"parent_id": parent_id}, metadata=last_metadata, payload=last_payload,
+            )
+        restored["journal_drive_file_id"] = file_id
+        restored["journal_drive_parent_id"] = parent_id
+        restored.pop("journal_sha256", None)
+        restored["journal_sha256"] = _finalization_journal_digest(restored)
+        try:
+            _atomic_json(path, restored)
+            _validate_recovery_finalization_journal(path, plan, record, identity)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        return True
+    raise RecoveryJournalPublicationError(
+        "Drive finalization journal recovery read-back did not converge",
+        phase="journal-restore-readback", expected={"file_id": file_id, "parent_id": parent_id},
+        observed=_journal_observed_metadata(last_metadata, last_payload),
+    )
 
 
 def _drive_recovery_folder(service, recovery: Path, drive_root: Path) -> dict[str, Any]:
@@ -3183,6 +3984,15 @@ def finalize_completed_production_run(
 
         service = (api_factory or (lambda: _drive_api_service(scopes=(DRIVE_FILE_WRITE_SCOPE,))))()
         folder = _drive_recovery_folder(service, recovery, drive_root_path)
+        restored_remote_journal = _restore_remote_recovery_finalization_journal(
+            journal_path, plan, record, identity, service,
+            drive_root=drive_root_path, recovery_folder_id=folder["folder_id"],
+        )
+        if restored_remote_journal:
+            callback({
+                "stage": "recovery_retention_journal_restored_from_drive",
+                "journal_path": str(journal_path), "recovery_folder_id": folder["folder_id"],
+            })
         if journal_path.is_file():
             # Re-publish/read back through Drive before trusting the retry log;
             # this also completes ID binding if interrupted between initial write

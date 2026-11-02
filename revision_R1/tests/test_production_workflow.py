@@ -1905,45 +1905,107 @@ def _write_completed_checkpoint_trees(checkpoint_namespace: Path, identity: dict
 
 
 class _FinalizationDriveFiles(_FakeFiles):
-    def __init__(self, records, deleted_ids, local_paths, fail_once_name=None, drive_root=None):
+    def __init__(
+        self, records, deleted_ids, local_paths, fail_once_name=None, drive_root=None,
+        stale_metadata_reads_after_update=0, interrupt_after_update_once=False,
+        fail_updates_after_accept=0,
+    ):
         super().__init__(records, deleted_ids)
         self.local_paths = local_paths
         self.drive_root = drive_root
-        self.local_paths = local_paths
         self.fail_once_name = fail_once_name
         self.failed_once = False
         self.fail_media_readback = False
         self.discover_local_folders = True
         self.created_folder_ids = []
+        self.created_file_ids = []
+        self.remote_contents = {}
+        self.update_calls = []
+        self.stale_metadata_reads_after_update = stale_metadata_reads_after_update
+        self.stale_metadata_snapshots = {}
+        self.interrupt_after_update_once = interrupt_after_update_once
+        self.fail_updates_after_accept = fail_updates_after_accept
+        self.generated_ids = 0
+
+    def generateIds(self, *, count=1, **_kwargs):
+        ids = []
+        for _ in range(count):
+            self.generated_ids += 1
+            ids.append(f"generated-journal-{self.generated_ids}")
+        return _FakeRequest({"ids": ids})
 
     def create(self, *, body, fields=None, **_kwargs):
         parent_ids = body.get("parents", [])
-        if len(parent_ids) != 1 or body.get("mimeType") != "application/vnd.google-apps.folder":
-            raise AssertionError("test Drive folder creation must have one exact parent and folder MIME type")
+        if len(parent_ids) != 1:
+            raise AssertionError("test Drive file creation must bind exactly one parent")
         parent_id = str(parent_ids[0])
         if parent_id not in self.records or self.records[parent_id].get("capabilities", {}).get("canAddChildren") is not True:
             raise PermissionError("test Drive parent does not permit adding children")
-        file_id = f"created-folder-{len(self.created_folder_ids) + 1}"
+        is_folder = body.get("mimeType") == "application/vnd.google-apps.folder"
+        file_id = str(body.get("id") or (
+            f"created-folder-{len(self.created_folder_ids) + 1}" if is_folder
+            else f"created-drive-file-{len(self.created_file_ids) + 1}"
+        ))
         record = {
             "id": file_id, "name": body["name"], "mimeType": body["mimeType"],
             "parents": [parent_id], "owners": [{"emailAddress": "current-editor@example.org"}],
             "ownedByMe": True, "capabilities": {"canAddChildren": True},
+            "appProperties": dict(body.get("appProperties", {})),
+            "size": "0", "quotaBytesUsed": "0", "version": "1",
         }
         self.records[file_id] = record
-        self.created_folder_ids.append(file_id)
+        if is_folder:
+            self.created_folder_ids.append(file_id)
+        else:
+            self.created_file_ids.append(file_id)
+            self.remote_contents[file_id] = b""
         parent_components = []
         cursor = self.records[parent_id]
         while cursor.get("id") != "root":
             parent_components.append(cursor["name"])
             ancestors = cursor.get("parents", [])
-            cursor = self.records[ancestors[0]] if ancestors else {"id": "root"}
+            cursor = self.records.get(ancestors[0], {"id": "root"}) if ancestors else {"id": "root"}
         target_dir = self.drive_root.joinpath(*reversed(parent_components), body["name"])
-        target_dir.mkdir(parents=True, exist_ok=True)
-        return _FakeRequest(record)
+        if is_folder:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        return _FakeRequest(dict(record))
+
+    def update(self, *, fileId, media_body=None, body=None, **_kwargs):
+        previous = dict(self.records[fileId])
+        if isinstance(media_body, (bytes, bytearray)):
+            content = bytes(media_body)
+        else:
+            content = media_body.getbytes(0, media_body.size())
+        self.remote_contents[fileId] = content
+        record = self.records[fileId]
+        if body:
+            record.update(body)
+        record["size"] = str(len(content))
+        record["quotaBytesUsed"] = str(len(content))
+        record["md5Checksum"] = hashlib.md5(content, usedforsecurity=False).hexdigest()
+        record["version"] = str(int(record.get("version", "0")) + 1)
+        self.update_calls.append({"file_id": fileId, "bytes": content})
+        if self.stale_metadata_reads_after_update:
+            self.stale_metadata_snapshots[fileId] = [
+                dict(previous) for _ in range(self.stale_metadata_reads_after_update)
+            ]
+        if self.interrupt_after_update_once:
+            self.interrupt_after_update_once = False
+            raise KeyboardInterrupt("injected interruption after Drive accepted journal bytes")
+        if self.fail_updates_after_accept:
+            self.fail_updates_after_accept -= 1
+            raise OSError("injected transport failure after Drive accepted journal bytes")
+        return _FakeRequest(dict(record))
 
     def get(self, *, fileId, alt=None, **kwargs):
         if alt == "media" and self.fail_media_readback:
             raise OSError("injected Drive media read-back failure")
+        if alt == "media" and fileId in self.remote_contents:
+            return _FakeRequest(self.remote_contents[fileId])
+        if alt is None and self.stale_metadata_snapshots.get(fileId):
+            return _FakeRequest(self.stale_metadata_snapshots[fileId].pop(0))
+        if alt is None and fileId in self.remote_contents:
+            return _FakeRequest(dict(self.records[fileId]))
         return super().get(fileId=fileId, alt=alt, **kwargs)
 
     def delete(self, *, fileId, **kwargs):
@@ -1952,7 +2014,10 @@ class _FinalizationDriveFiles(_FakeFiles):
             self.failed_once = True
             raise RuntimeError("injected transient Drive delete failure")
         request = super().delete(fileId=fileId, **kwargs)
-        self.local_paths[fileId].unlink(missing_ok=True)
+        local_path = self.local_paths.get(fileId)
+        if local_path is not None:
+            local_path.unlink(missing_ok=True)
+        self.remote_contents.pop(fileId, None)
         return request
 
     def list(self, *, q, **kwargs):
@@ -1995,13 +2060,19 @@ class _FinalizationDriveFiles(_FakeFiles):
                         "ownedByMe": True, "capabilities": {"canDelete": True},
                     }
                     self.records[file_id] = record
+                if record.get("id") in self.remote_contents:
+                    continue
                 record["size"] = str(path.stat().st_size)
                 record["quotaBytesUsed"] = str(path.stat().st_size)
                 self.local_paths[record["id"]] = path
         return super().list(q=q, **kwargs)
 
 
-def _finalization_drive_service(recovery: Path, drive_root: Path, *, denied_names=(), fail_once_name=None):
+def _finalization_drive_service(
+    recovery: Path, drive_root: Path, *, denied_names=(), fail_once_name=None,
+    stale_metadata_reads_after_update=0, interrupt_after_update_once=False,
+    fail_updates_after_accept=0,
+):
     components = _logical_drive_path_components(recovery, drive_root=drive_root)[1]
     records = {}
     parent = "root"
@@ -2031,6 +2102,9 @@ def _finalization_drive_service(recovery: Path, drive_root: Path, *, denied_name
     service._files = _FinalizationDriveFiles(
         records, service.deleted_ids, local_paths, fail_once_name=fail_once_name,
         drive_root=drive_root,
+        stale_metadata_reads_after_update=stale_metadata_reads_after_update,
+        interrupt_after_update_once=interrupt_after_update_once,
+        fail_updates_after_accept=fail_updates_after_accept,
     )
     return service
 
@@ -2226,6 +2300,179 @@ def test_finalization_creates_and_verifies_missing_drive_journal_folders(tmp_pat
     assert service.files().get(fileId=metadata["id"], alt="media").execute() == journal.read_bytes()
 
 
+def test_finalization_journal_api_publication_handles_shared_shortcut_and_stale_metadata(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_mount = tmp_path / "content" / "drive"
+    drive_root = drive_mount / "MyDrive"
+    drive_root.mkdir(parents=True)
+    shortcut_target = drive_mount / ".shortcut-targets-by-id" / "shared-folder-id" / "ReVision"
+    shortcut_target.mkdir(parents=True)
+    (drive_root / "ReVision").symlink_to(shortcut_target, target_is_directory=True)
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    from revision_r1.validation import file_sha256
+    boundary_hashes = {path.name: file_sha256(path) for path in boundaries.iterdir()}
+    logical_recovery = (
+        checkpoint_root / "revision_R1.0.2" / record["training_source_sha256"][:16]
+        / record["dataset"] / f"seed_{int(record['seed'])}" / record["arm"]
+        / record["config_sha256"][:16] / "recovery"
+    )
+    service = _finalization_drive_service(
+        logical_recovery, drive_root, stale_metadata_reads_after_update=1,
+    )
+    service.files().discover_local_folders = False
+    monkeypatch.setattr(
+        production_workflow, "execute_frozen_plan_record",
+        lambda *_args, **_kwargs: pytest.fail("finalization must never invoke training"),
+    )
+
+    first = production_workflow.finalize_completed_production_run(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+
+    journal_path = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    journal_file_id = journal["journal_drive_file_id"]
+    remote_metadata = service.files().get(fileId=journal_file_id).execute()
+    remote_bytes = service.files().get(fileId=journal_file_id, alt="media").execute()
+    folder_id = journal["journal_drive_parent_id"]
+    assert first["status"] == "FINALIZED_COMPLETED_RUN"
+    assert first["recovery_retention"]["retained_generations"] == [3, 4]
+    assert service.files().update_calls, "journal bytes must be published through Drive API update"
+    assert journal["journal_revision"] >= 2
+    assert len(service.files().update_calls) >= 2
+    assert remote_metadata["id"] == journal_file_id
+    assert remote_metadata["parents"] == [folder_id]
+    assert remote_metadata["owners"][0]["emailAddress"] != "folder-owner@example.org"
+    assert remote_bytes == journal_path.read_bytes()
+    assert hashlib.sha256(remote_bytes).hexdigest() == hashlib.sha256(journal_path.read_bytes()).hexdigest()
+    assert service.files().stale_metadata_snapshots[journal_file_id] == []
+    assert {path.name: file_sha256(path) for path in boundaries.iterdir()} == boundary_hashes
+
+    update_count = len(service.files().update_calls)
+    second = production_workflow.finalize_completed_production_run(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+    assert second["completion_registered"] is False
+    assert len(service.files().update_calls) == update_count
+    assert second["storage_measurement"] == first["storage_measurement"]
+
+
+def test_finalization_recovers_journal_after_interruption_post_drive_publication(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    service = _finalization_drive_service(recovery, drive_root, interrupt_after_update_once=True)
+    service.files().discover_local_folders = False
+
+    with pytest.raises(KeyboardInterrupt, match="after Drive accepted journal bytes"):
+        production_workflow.finalize_completed_production_run(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    journal_path = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    assert not journal_path.exists()
+    assert len(list(recovery.glob("generation-*.manifest.json"))) == 4
+    assert service.deleted_ids == set()
+    assert len(service.files().created_file_ids) == 1
+    remote_file_id = service.files().created_file_ids[0]
+    assert json.loads(service.files().get(fileId=remote_file_id, alt="media").execute())["journal_sha256"]
+
+    resumed = production_workflow.finalize_completed_production_run(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+    persisted = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert resumed["status"] == "FINALIZED_COMPLETED_RUN"
+    assert resumed["recovery_retention"]["retained_generations"] == [3, 4]
+    assert persisted["journal_drive_file_id"] == remote_file_id
+    assert len(service.files().created_file_ids) == 1
+
+
+def test_finalization_accepts_ambiguous_transport_failure_only_after_exact_api_readback(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
+    monkeypatch.setattr(production_workflow, "RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS", (0.0,) * 5)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    service = _finalization_drive_service(recovery, drive_root, fail_updates_after_accept=5)
+
+    result = production_workflow.finalize_completed_production_run(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        api_factory=lambda: service, drive_root=drive_root,
+    )
+
+    journal_path = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    remote_bytes = service.files().get(
+        fileId=journal["journal_drive_file_id"], alt="media",
+    ).execute()
+    assert result["status"] == "FINALIZED_COMPLETED_RUN"
+    assert len(service.files().update_calls) >= 5
+    assert all(
+        item["bytes"] == service.files().update_calls[0]["bytes"]
+        for item in service.files().update_calls[:5]
+    )
+    assert remote_bytes == journal_path.read_bytes()
+    assert service.deleted_ids
+
+
+def test_finalization_rejects_duplicate_journal_names_without_pruning(tmp_path, monkeypatch):
+    from scripts.production_workflow import RecoveryJournalPublicationError
+
+    _allow_test_checkpoint_memory(monkeypatch)
+    plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
+    drive_root = tmp_path / "mount" / "MyDrive"
+    output_root = drive_root / "ReVision" / "revision_R1" / "production" / "results"
+    checkpoint_root = drive_root / "ReVision" / "revision_R1" / "production" / "checkpoints"
+    output = run_output_root(output_root, record)
+    checkpoint_namespace = run_checkpoint_root(checkpoint_root, record)
+    identity = _write_completed_production_fixture(output, plan, record)
+    recovery, _boundaries = _write_completed_checkpoint_trees(checkpoint_namespace, identity)
+    service = _finalization_drive_service(recovery, drive_root)
+    journal_path = checkpoint_root / "_finalization" / plan["plan_sha256"] / f"{record['run_key']}.json"
+    components = production_workflow._logical_drive_path_components(
+        journal_path.parent, drive_root=drive_root,
+    )[1]
+    folder = production_workflow._ensure_drive_folder_path(service, components)
+    for file_id in ("ambiguous-journal-a", "ambiguous-journal-b"):
+        service.records[file_id] = {
+            "id": file_id, "name": journal_path.name, "mimeType": "application/json",
+            "parents": [folder["folder_id"]], "size": "0", "owners": [],
+            "capabilities": {},
+        }
+        service.files().remote_contents[file_id] = b""
+
+    with pytest.raises(RecoveryJournalPublicationError, match="duplicate.*journal"):
+        production_workflow.finalize_completed_production_run(
+            plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+            api_factory=lambda: service, drive_root=drive_root,
+        )
+
+    assert len(list(recovery.glob("generation-*.manifest.json"))) == 4
+    assert service.deleted_ids == set()
+    assert not journal_path.exists()
+
+
 def test_finalization_recovers_preexisting_local_only_retention_journal(tmp_path, monkeypatch):
     _allow_test_checkpoint_memory(monkeypatch)
     plan, record = _finalization_plan(tmp_path / "schedule", monkeypatch)
@@ -2414,7 +2661,8 @@ def test_finalization_requires_drive_journal_payload_readback_before_pruning(tmp
     finalizer = getattr(production_workflow, "finalize_completed_production_run", None)
     assert callable(finalizer)
 
-    with pytest.raises(StorageCapacityError, match="Drive journal publication/read-back failed"):
+    monkeypatch.setattr(production_workflow, "RECOVERY_JOURNAL_READBACK_RETRY_DELAYS_SECONDS", (0.0, 0.0))
+    with pytest.raises(production_workflow.RecoveryJournalPublicationError, match="journal-payload-read"):
         finalizer(
             plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
             api_factory=lambda: service, drive_root=drive_root,
