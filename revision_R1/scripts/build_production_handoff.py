@@ -18,9 +18,9 @@ from scripts.production_workflow import (
 )
 
 
-PRODUCTION_BUILD_ID = "revision_R1_production_v1_4_5_20261101"
-CODE_ZIP_FILENAME = "revision_R1_production_v1_4_5_20261101.zip"
-DISTRIBUTED_NOTEBOOK_FILENAME = "Revision_R1_Production_Colab_v1_4_5_20261101.ipynb"
+PRODUCTION_BUILD_ID = "revision_R1_production_v1_4_7_20261101"
+CODE_ZIP_FILENAME = "revision_R1_production_v1_4_7_20261101.zip"
+DISTRIBUTED_NOTEBOOK_FILENAME = "Revision_R1_Production_Colab_v1_4_7_20261101.ipynb"
 LEGACY_IDENTITY_FILENAME = "legacy_v1_2_first_run_identity.json"
 AUTHENTIC_V1_2_ZIP_SHA256 = "2647c6bb51b3e3c28fd3009008f6f616deac5e73f725fd20e66aebbb23097d9c"
 AUTHENTIC_V1_2_SOURCE_SHA256 = "bd175dcc27492f848459653536c63aa7bed8421bc16c60d7141fa359004e8660"
@@ -33,6 +33,7 @@ RELEASE_TESTS = (
     "test_cli_gates.py",
     "test_config_data_sampling.py",
     "test_coordinates.py",
+    "test_dataset_bootstrap.py",
     "test_live_progress.py",
     "test_package_import.py",
     "test_production_notebook.py",
@@ -75,7 +76,7 @@ def notebook_document(expected_zip_sha256: str) -> dict:
 
 This notebook runs the frozen 100-run revision_R1 experiment only when the corresponding cell switch is explicitly changed to `True`. The first counted run (`ember`, seed 42, `full_hybrid`) and the remaining 99 runs are separate cells. Setup does not train or run pytest. The protocol and effective schedule are fixed; this is a new revision experiment, not a historical V15.5/V16 reproduction.
 
-Run Cells A → B → C, then run Cell D for a read-only RAM/lease/checkpoint diagnosis. The finalization-only Cell H is separate from training: set its explicit switch to `True` only to reconcile the already-completed first run's recovery retention, measure storage, and register completion. It never loads datasets or initializes/trains models. Do not enable production Cell E or matrix Cell F for this task. Cell G remains the compact-results export.
+Run Cells A → B → C, then run Cell D for a read-only RAM/lease/checkpoint diagnosis. Cell B checks the exact prepared NPZ files in Drive first; if any are missing, it downloads only those missing files from the pinned MalCL Zenodo record into an ephemeral, capacity-checked local cache and verifies exact byte count plus preflight MD5/SHA-256. It never writes or replaces Drive datasets. Cell D reports which roots were selected. The finalization-only Cell H is separate from training: set its explicit switch to `True` only to reconcile the already-completed first run's recovery retention, measure storage, and register completion. It never loads datasets or initializes/trains models. Do not enable production Cell E or matrix Cell F for this task. Cell G remains the compact-results export.
 """),
         _cell("code", f'''# Cell A — paths, Drive setup, exact package verification, runtime and source identity.
 from pathlib import Path, PurePosixPath
@@ -86,6 +87,7 @@ DRIVE_PATHS = {{
     "package_zip": "/content/drive/MyDrive/ReVision/{CODE_ZIP_FILENAME}",
     "ember_data_root": "/content/drive/MyDrive/AHR_MalCL/datasets",
     "az_data_root": "/content/drive/MyDrive/AHR_MalCL/datasets",
+    "local_dataset_root": "/content/revision_R1_production/datasets",
     "preflight_path": "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/preflight.json",
     "v62_recovery_report": "/content/drive/MyDrive/ReVision/revision_R1/results/validation/reports/resume_validation_2b4d8f5f1f29a938_20261026T142320Z_946699443.json",
     "output_root": "/content/drive/MyDrive/ReVision/revision_R1/production/results",
@@ -189,21 +191,27 @@ print({{"build": EXPECTED_BUILD_ID, "zip_sha256": ACTUAL_ZIP_SHA256,
        "cuda": torch.version.cuda, "gpu": torch.cuda.get_device_name(0)}})
 '''),
         _cell("code", f'''# Cell B — exact data paths and mounted-Drive preflight/effective-schedule verification.
-from revision_r1.config import DATASETS
 from revision_r1.validation_workflow import resolve_effective_artifacts
-
-for dataset, root_key in (("ember", "ember_data_root"), ("az_class", "az_data_root")):
-    root = Path(DRIVE_PATHS[root_key]).expanduser()
-    missing = [DATASETS[dataset][part]["filename"] for part in ("train", "test")
-               if not (root / DATASETS[dataset][part]["filename"]).is_file()]
-    if missing:
-        raise FileNotFoundError(f"{{dataset}} exact dataset files missing below {{root}}: {{missing}}")
-
 PREFLIGHT_PATH = Path(DRIVE_PATHS["preflight_path"]).expanduser()
 if not PREFLIGHT_PATH.is_file():
     raise FileNotFoundError(f"Reuse the passed Drive preflight; not found: {{PREFLIGHT_PATH}}")
 EFFECTIVE_SCHEDULE_PATH, EFFECTIVE_SCHEDULE_MANIFEST_PATH, PREFLIGHT = resolve_effective_artifacts(
     PREFLIGHT_PATH, expected_sha256=EXPECTED_SCHEDULE_SHA256, discover_manifest=True)
+if PREFLIGHT.get("status") != "PREFLIGHT_VALIDATED_NO_TRAINING" or PREFLIGHT.get("training_reproduction_claimed") is not False:
+    raise ValueError("Drive preflight is not a validated no-training schedule/data record")
+
+from scripts.dataset_bootstrap import prepare_dataset_roots
+def _dataset_download_progress(event):
+    print("DATASET DOWNLOAD:", json.dumps(event, sort_keys=True), flush=True)
+
+DATA_ROOTS, DATASET_SOURCE_REPORT = prepare_dataset_roots(
+    {{
+        "ember": Path(DRIVE_PATHS["ember_data_root"]).expanduser(),
+        "az_class": Path(DRIVE_PATHS["az_data_root"]).expanduser(),
+    }},
+    Path(DRIVE_PATHS["local_dataset_root"]).expanduser(), PREFLIGHT,
+    progress_callback=_dataset_download_progress,
+)
 
 PACKAGED_SCHEDULE_PATH = PROJECT / "configs" / "update_budget.csv"
 PACKAGED_SCHEDULE_MANIFEST_PATH = PROJECT / "configs" / "update_budget_manifest.json"
@@ -211,13 +219,13 @@ PACKAGED_SCHEDULE_SHA256 = hashlib.sha256(PACKAGED_SCHEDULE_PATH.read_bytes()).h
 PACKAGED_SCHEDULE_MANIFEST = json.loads(PACKAGED_SCHEDULE_MANIFEST_PATH.read_text(encoding="utf-8"))
 if PACKAGED_SCHEDULE_SHA256 != PACKAGED_SCHEDULE_MANIFEST.get("source_csv_sha256"):
     raise ValueError("The original packaged schedule/manifest pair has been altered")
-if PREFLIGHT.get("status") != "PREFLIGHT_VALIDATED_NO_TRAINING" or PREFLIGHT.get("training_reproduction_claimed") is not False:
-    raise ValueError("Drive preflight is not a validated no-training schedule/data record")
 print("Effective schedule:", EFFECTIVE_SCHEDULE_PATH)
 print("Effective schedule SHA-256:", EXPECTED_SCHEDULE_SHA256, "| rows:", PREFLIGHT["schedule"]["row_count"])
 print("Matching manifest:", EFFECTIVE_SCHEDULE_MANIFEST_PATH)
 print("Original packaged schedule preserved at SHA-256:", PACKAGED_SCHEDULE_SHA256)
-print("Exact EMBER/AZ-Class NPZ files exist. NPZ payloads were not reread in this preflight reuse cell.")
+print("Dataset source resolution:")
+print(json.dumps(DATASET_SOURCE_REPORT, sort_keys=True, indent=2))
+print("Downloads, when required, are local-only; Drive files remain unchanged.")
 '''),
         _cell("code", '''# Cell C — freeze the 100-run plan and check first-run/full-matrix storage readiness.
 import json
@@ -245,8 +253,8 @@ CHECKPOINT_ROOT = Path(DRIVE_PATHS["checkpoint_root"]).expanduser()
 LOCAL_CHECKPOINT_ROOT = Path(DRIVE_PATHS["local_checkpoint_root"]).expanduser()
 CACHE_ROOT = Path(DRIVE_PATHS["dataset_cache_root"]).expanduser()
 DATA_ROOTS = {
-    "ember": Path(DRIVE_PATHS["ember_data_root"]).expanduser(),
-    "az_class": Path(DRIVE_PATHS["az_data_root"]).expanduser(),
+    "ember": Path(DATA_ROOTS["ember"]).expanduser(),
+    "az_class": Path(DATA_ROOTS["az_class"]).expanduser(),
 }
 FIRST_RUN = RUNTIME_PLAN["runs"][0]
 FIRST_RUN_IDENTITY = _diagnostic_run_identity(FIRST_RUN, PREFLIGHT, runner_version="revision_R1.0.2")
@@ -398,7 +406,7 @@ RUNTIME_FACTS = {
 
 DATASET_LAYOUTS = {}
 for _dataset, _root_key in (("ember", "ember_data_root"), ("az_class", "az_data_root")):
-    _root = Path(DRIVE_PATHS[_root_key]).expanduser()
+    _root = Path(DATA_ROOTS[_dataset]).expanduser()
     _layout = {}
     for _part in ("train", "test"):
         _npz = _root / DATASETS[_dataset][_part]["filename"]
@@ -435,6 +443,8 @@ LEASE_RAM_DIAGNOSTIC.update({
     "production_training_source_sha256": RUNTIME_PLAN["training_source_sha256"],
     "schedule_sha256": RUNTIME_PLAN["schedule_sha256"],
     "plan_sha256": RUNTIME_PLAN["plan_sha256"],
+    "dataset_source_report": DATASET_SOURCE_REPORT,
+    "dataset_roots_used": {name: str(path) for name, path in DATA_ROOTS.items()},
     "dataset_npz_layout_headers_only": DATASET_LAYOUTS,
     "historical_oom_correlation": "UNKNOWN: this runtime snapshot cannot reconstruct the earlier failed process allocation.",
 })
@@ -494,6 +504,9 @@ with LEASE_DIAGNOSTIC_PATH.open("x", encoding="utf-8") as _stream:
     _stream.flush()
     os.fsync(_stream.fileno())
 print("READ-ONLY DIAGNOSTIC SAVED:", LEASE_DIAGNOSTIC_PATH)
+print("DATASET ROOTS AND SOURCES (read-only):")
+print(json.dumps({"roots": {{name: str(path) for name, path in DATA_ROOTS.items()}},
+                  "sources": DATASET_SOURCE_REPORT}, sort_keys=True, indent=2))
 CURRENT_V13_NAMESPACE = next(
     row for row in LEASE_RAM_DIAGNOSTIC["run_namespaces"]
     if row["identity_label"] == "current_package_identity"
@@ -725,6 +738,7 @@ else:
 def _package_source_paths(revision_root: Path) -> list[Path]:
     files = [*sorted((revision_root / "revision_r1").glob("*.py"))]
     files.extend([
+        revision_root / "scripts" / "dataset_bootstrap.py",
         revision_root / "scripts" / "live_progress.py",
         revision_root / "scripts" / "production_workflow.py",
         revision_root / "scripts" / "build_production_handoff.py",

@@ -87,6 +87,27 @@ and last progress record. A PID from a previous VM cannot prove a worker
 is live or dead. Inspect Colab Manage Sessions and all open notebooks, then
 share the diagnostic before enabling Cell E. Drive locking is best-effort and
 remote runtime visibility is not available from this notebook.
+
+## Dataset availability and web fallback
+
+Cell B checks the exact EMBER-Class and AZ-Class `.npz` files in the configured
+Drive data roots. If a dataset pair is complete, it uses those Drive files
+without copying them. If one or more files are missing, only the missing
+prepared files are downloaded from the authors' fixed Zenodo dataset record
+(`https://doi.org/10.5281/zenodo.14537891`) into
+`/content/revision_R1_production/datasets`. The four pinned record files have
+the same MD5 identities and byte sizes as the dataset record and the runner's
+frozen references. Download bytes are checked against exact size, the record
+MD5, and the SHA-256 already recorded by the passed preflight. In a partially
+populated Drive dataset, existing files are exposed to the local staging root
+through symlinks; the Drive originals are never written, replaced, or deleted.
+
+Before any network download, Cell B checks local free space for all missing
+files plus the existing 512 MiB reserve. It fails with a clear storage error
+before downloading if that capacity is unavailable. Downloaded files live on
+the ephemeral Colab runtime and may need to be fetched again after a runtime
+reset. Cell D records the selected dataset roots and source; Cell E/F still
+run the normal full MD5/SHA-256, shape, and array validation before training.
 The checkpoint preflight hashes only the two retained payloads in bounded
 8 MiB blocks and never deserializes them. Its cursor/counters come from the
 last progress snapshot and are labeled informational because that snapshot

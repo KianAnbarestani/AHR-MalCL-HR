@@ -90,6 +90,12 @@ def test_production_notebook_cells_parse_and_are_ordered_with_launches_disabled(
     assert '"pid": 44230' in code_cells[3]
     assert "FIRST-RUN RESUME SUMMARY" in code_cells[3]
     assert "first_run_resume_gate" in code_cells[3]
+    assert "prepare_dataset_roots" in code_cells[1]
+    assert "DATASET_SOURCE_REPORT" in code_cells[1]
+    assert "local_dataset_root" in code_cells[0]
+    assert "DATA_ROOTS[_dataset]" in code_cells[3]
+    assert '"dataset_source_report": DATASET_SOURCE_REPORT' in code_cells[3]
+    assert "DATA_ROOTS = {\n    \"ember\": Path(DRIVE_PATHS[\"ember_data_root\"])" not in code_cells[2]
     assert "BoundedProgressBuffer(max_events=5)" in code_cells[3]
     assert "PROGRESS_HANDLE.update(text)" in code_cells[3]
     assert "historical_oom_correlation" in code_cells[3]
@@ -111,8 +117,8 @@ def test_production_notebook_cells_parse_and_are_ordered_with_launches_disabled(
     assert "from pathlib import Path, PurePosixPath" in code_cells[0]
     assert "PurePosixPath(member.filename)" in code_cells[0]
     assert f'EXPECTED_ZIP_SHA256 = "{pinned_zip_sha256}"' in code_cells[0]
-    assert "revision_R1_production_v1_4_5_20261101" in joined
-    assert "Revision_R1_Production_Colab_v1_4_5_20261101" not in joined
+    assert "revision_R1_production_v1_4_7_20261101" in joined
+    assert "Revision_R1_Production_Colab_v1_4_7_20261101" not in joined
     assert "FINALIZE_COMPLETED_FIRST_RUN = False" in code_cells[7]
     assert "finalize_completed_production_run(" in code_cells[7]
     assert "FINALIZATION_REPORT" in code_cells[7]
