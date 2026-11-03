@@ -36,7 +36,9 @@ def test_github_package_manifest_binds_frozen_core_schedule_and_allowlist(tmp_pa
     assert len(manifest["files"]) > 35
     assert manifest["files"]["revision_r1/runner.py"]["sha256"]
     assert "scripts/dataset_bootstrap.py" in manifest["files"]
+    assert "scripts/storage_auth.py" in manifest["files"]
     assert "tests/test_dataset_bootstrap.py" in manifest["files"]
+    assert "tests/test_storage_auth.py" in manifest["files"]
     assert "requirements-colab.txt" in manifest["files"]
     assert "requirements-test.txt" in manifest["files"]
 
@@ -127,13 +129,20 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
 
     assert [f"Cell {letter}" in cells[index] for index, letter in enumerate("ABCDEFG", start=1)] == [True] * 7
     assert commit in cells[1]
-    assert cells[1].index("auth.authenticate_user()") < cells[1].index('drive.mount("/content/drive", force_remount=True)')
+    assert "auth.authenticate_user()" not in cells[1]
+    assert "google.auth.default(" not in cells[1]
+    assert cells[1].index("build_main_account_storage_api(") < cells[1].index('drive.mount("/content/drive", force_remount=True)')
+    assert cells[1].index("verify_package_integrity(PACKAGE_ROOT)") < cells[1].index("build_main_account_storage_api(")
+    assert cells[1].index('_git(["fetch"') < cells[1].index("build_main_account_storage_api(")
+    assert "credential_source" in cells[1]
+    assert "userdata.get" in cells[1]
     assert "kian.anb777@gmail.com" in cells[1]
     assert "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x" in cells[1]
     assert "verify_canonical_storage_session(" in cells[1]
     assert "STORAGE_API_FACTORY" in cells[1]
     assert "force_remount=True" in cells[1]
     assert "wrong storage account" in cells[1].lower()
+    assert 'STORAGE_AUTH_EVIDENCE["credential_source"]' in cells[1]
     assert '_git(["checkout", "--detach", "FETCH_HEAD"]' in cells[1]
     assert "GITHUB_READ_TOKEN" in cells[1]
     assert "Authorization" in cells[1]
@@ -181,6 +190,10 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "selected_git_commit" in cells[3]
     assert "fine-grained read-only" in cells[0]
     assert "GITHUB_READ_TOKEN" in cells[0]
+    assert "REVISION_R1_STORAGE_REFRESH_TOKEN" in cells[0]
+    assert "REVISION_R1_STORAGE_OAUTH_CLIENT_ID" in cells[0]
+    assert "REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET" in cells[0]
+    assert "dedicated user-OAuth refresh token" in cells[0]
 
 
 def test_production_readme_has_one_github_execution_order_and_no_zip_setup():

@@ -23,6 +23,7 @@ EXTRA_TESTS = (
     "test_checkpoint_compatibility.py",
     "test_github_handoff.py",
     "test_runtime_compatibility.py",
+    "test_storage_auth.py",
 )
 EXTRA_FILES = (
     "CHECKPOINT_COMPATIBILITY.md",
@@ -42,6 +43,7 @@ SCRIPT_FILES = (
     "scripts/dataset_bootstrap.py",
     "scripts/live_progress.py",
     "scripts/production_workflow.py",
+    "scripts/storage_auth.py",
 )
 CONFIG_FILES = (
     "configs/legacy_v1_2_first_run_identity.json",
@@ -234,7 +236,7 @@ def _github_setup_cell(commit_sha: str) -> str:
     template = r'''# Cell A — Drive/GitHub setup, one pinned detached fetch, and package integrity checks.
 from pathlib import Path, PurePosixPath
 import hashlib, json, os, platform, shutil, subprocess, sys, tempfile, urllib.error, urllib.request
-from google.colab import auth, drive
+from google.colab import drive, userdata
 
 GITHUB_REPOSITORY = "KianAnbarestani/AHR-MalCL-HR"
 PINNED_GIT_COMMIT = "__PINNED_COMMIT__"  # Change only this full SHA for a tested code release.
@@ -258,11 +260,6 @@ DRIVE_PATHS = {
     "export_root": "/content/drive/MyDrive/ReVision/revision_R1/production/exports",
     "checkpoint_backup_root": "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoint_backups",
 }
-# The compute account may differ. Select STORAGE_ACCOUNT_EMAIL in both Google prompts.
-# If cached ADC selects another account, stop and restart a fresh runtime.
-print(f"Canonical Drive storage account: {STORAGE_ACCOUNT_EMAIL}; choose it in the Google auth/mount prompts.")
-auth.authenticate_user()
-drive.mount("/content/drive", force_remount=True)
 
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
 def _github_metadata(token=None):
@@ -400,13 +397,18 @@ from scripts.production_workflow import training_source_sha256
 from revision_r1.compatibility import runtime_source_sha256, verify_checkpoint_compatibility
 import revision_r1.runner as runner_module
 import scripts.production_workflow as production_workflow_module
-import google.auth
-from googleapiclient.discovery import build
-STORAGE_CREDENTIALS, STORAGE_GCLOUD_PROJECT = google.auth.default(
-    scopes=["https://www.googleapis.com/auth/drive"]
+# Authenticate storage only after fetching and verifying the pinned package that
+# supplies this helper. It uses explicit OAuth secrets; cached Colab ADC is never read.
+print(f"Canonical Drive storage account: {STORAGE_ACCOUNT_EMAIL}; verifying dedicated OAuth credentials.")
+from scripts.storage_auth import build_main_account_storage_api
+STORAGE_API_SERVICE, STORAGE_CREDENTIALS, STORAGE_AUTH_EVIDENCE = build_main_account_storage_api(
+    secret_getter=userdata.get, expected_account_email=STORAGE_ACCOUNT_EMAIL,
 )
-STORAGE_API_SERVICE = build("drive", "v3", credentials=STORAGE_CREDENTIALS, cache_discovery=False)
 STORAGE_API_FACTORY = lambda: STORAGE_API_SERVICE
+print("Drive API OAuth identity verified:", STORAGE_AUTH_EVIDENCE["authenticated_user"],
+      "credential source:", STORAGE_AUTH_EVIDENCE["credential_source"])
+# Filesystem mounting authenticates separately; choose the same canonical account.
+drive.mount("/content/drive", force_remount=True)
 ACTUAL_TRAINING_SOURCE_SHA256 = training_source_sha256(PROJECT)
 CHECKPOINT_COMPATIBILITY = verify_checkpoint_compatibility(PROJECT)
 ACTUAL_RUNTIME_SOURCE_SHA256 = runtime_source_sha256(PROJECT)
@@ -440,9 +442,9 @@ except Exception as exc:
     raise RuntimeError(
         "Canonical Drive storage verification failed before any run. Both the mounted filesystem and Drive API "
         f"must use {STORAGE_ACCOUNT_EMAIL} and ReVision folder {CANONICAL_REVISION_FOLDER_ID}; wrong storage account "
-        "selection is not recoverable by changing run identities. If cached credentials "
-        "selected another account, restart the runtime and select the canonical account when prompted; do not "
-        f"proceed or change paths. Cause: {type(exc).__name__}: {exc}"
+        "selection is not recoverable by changing run identities. Check the three REVISION_R1_STORAGE_* Colab "
+        "Secrets, select the same account in the Drive mount prompt, then rerun Cell A; do not proceed or change "
+        f"paths. Cause: {type(exc).__name__}: {exc}"
     ) from exc
 print(json.dumps({"repository": GITHUB_REPOSITORY, "repository_private": bool(REPOSITORY_METADATA.get("private")),
                   "selected_git_commit": ACTUAL_GIT_COMMIT, "checkout": str(CHECKOUT_PATH),
@@ -672,7 +674,8 @@ def notebook_document(commit_sha: str) -> dict[str, Any]:
     document["cells"][0]["source"] = (
         "# revision_R1 production — GitHub-pinned runner\n\n"
         "Cells A–G use one explicitly selected full Git commit per Colab session. Cell A fetches it once and checks out detached into a commit-versioned local directory, then verifies both manifests, the compatible training-core hash, and frozen schedule.\n\n"
-        "Storage identity is independent of the Colab compute account: `kian.anb777@gmail.com`, ReVision folder ID `1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x`. Select that account in Cell A's Google authorization prompts. The mounted filesystem and Drive API are checked against the account, exact folder/paths, a tiny write/read/delete probe, new-file ownership, and quota. Wrong cached credentials fail closed; restart the runtime and choose the canonical account.\n\n"
+        "The Drive API uses a dedicated user-OAuth refresh token from Colab Secrets, independent of Colab compute-account ADC. Cell A verifies `about.user.emailAddress` is `kian.anb777@gmail.com` before creating the Drive client; it never uses `google.auth.default()` for storage. Drive mount authentication is separate: choose the same account in its prompt. The mounted filesystem and API are checked against the canonical account, exact folder/paths, a tiny write/read/delete probe, new-file ownership, and quota before production paths are touched.\n\n"
+        "Before Cell A, complete the one-time OAuth setup in `README_GITHUB_COLAB.md` and add `REVISION_R1_STORAGE_OAUTH_CLIENT_ID`, `REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET`, and `REVISION_R1_STORAGE_REFRESH_TOKEN` to Colab Secrets with notebook access enabled. Never put secret values in notebook code or output.\n\n"
         "The repository is currently public, so no GitHub token is required. If private later, use the fine-grained read-only Colab Secret `GITHUB_READ_TOKEN` (Contents: Read-only, restricted to this repo; enable notebook access). Never paste credentials into cells or outputs.\n\n"
         "Run A → B → C → D. D is read-only. B uses Drive datasets or checksum-verified local caches only; external downloads are disabled. Run 1 is already finalized/registered and is reused without remeasurement; E is a no-op. F remains disabled by default."
     ).splitlines(keepends=True)

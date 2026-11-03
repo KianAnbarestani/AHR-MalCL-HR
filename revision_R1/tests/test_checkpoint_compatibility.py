@@ -30,7 +30,9 @@ def test_checkpoint_compatibility_is_anchored_to_authentic_baseline_and_separate
     assert manifest["baseline_commit_sha"] == AUTHENTIC_BASELINE_COMMIT
     assert manifest["baseline_training_source_sha256"] == "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
     assert manifest["runtime_source_sha256"] != manifest["baseline_training_source_sha256"]
-    assert manifest["changed_infrastructure_modules"] == ["checkpointing.py", "resources.py", "runner.py"]
+    assert manifest["changed_infrastructure_modules"] == [
+        "checkpointing.py", "resources.py", "runner.py", "storage.py", "validation_workflow.py",
+    ]
     assert manifest["added_compatibility_modules"] == ["compatibility.py"]
     assert manifest["training_behavior_matches_baseline"] is True
     assert manifest["checkpoint_schema_unchanged"] is True

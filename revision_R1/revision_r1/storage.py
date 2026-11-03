@@ -14,10 +14,66 @@ CHECKPOINT_ESTIMATE_MULTIPLIER = 1.5
 CHECKPOINT_ESTIMATE_FIXED_OVERHEAD_BYTES = 16 * 1024 * 1024
 DRIVE_METADATA_SCOPE = "https://www.googleapis.com/auth/drive.metadata.readonly"
 _CHECKPOINT_TEMP_PATTERN = re.compile(r"\.generation-\d+\.(?:pt|manifest\.json)\..+\.tmp")
+_BOUND_DRIVE_API_SERVICE = None
+_BOUND_DRIVE_API_ACCOUNT = None
 
 
 class StorageCapacityError(RuntimeError):
     """Raised before a write when capacity is insufficient or unverifiable."""
+
+
+def clear_verified_drive_api_service() -> None:
+    """Clear the session-bound Drive client before a new storage-auth attempt."""
+    global _BOUND_DRIVE_API_SERVICE, _BOUND_DRIVE_API_ACCOUNT
+    _BOUND_DRIVE_API_SERVICE = None
+    _BOUND_DRIVE_API_ACCOUNT = None
+
+
+def bind_verified_drive_api_service(service, *, expected_account_email: str) -> str:
+    """Bind a Drive service only after its authenticated user is confirmed."""
+    global _BOUND_DRIVE_API_SERVICE, _BOUND_DRIVE_API_ACCOUNT
+    expected = str(expected_account_email).strip().lower()
+    if not expected:
+        raise ValueError("expected storage account email must be explicit")
+    try:
+        account = service.about().get(fields="user(emailAddress)").execute()
+    except Exception as exc:
+        raise StorageCapacityError(
+            "cannot verify the explicit Drive OAuth identity before binding storage operations"
+        ) from None
+    observed = str((account.get("user") or {}).get("emailAddress") or "").strip().lower()
+    if observed != expected:
+        clear_verified_drive_api_service()
+        raise StorageCapacityError(
+            f"storage account mismatch: expected {expected!r}, observed {observed!r}; "
+            "no Drive capacity or checkpoint operation was allowed"
+        )
+    _BOUND_DRIVE_API_SERVICE = service
+    _BOUND_DRIVE_API_ACCOUNT = expected
+    return expected
+
+
+def verified_drive_api_service(*, expected_account_email: str | None = None):
+    """Return only the service bound by successful canonical-account verification."""
+    if _BOUND_DRIVE_API_SERVICE is None or not _BOUND_DRIVE_API_ACCOUNT:
+        raise StorageCapacityError(
+            "canonical Drive API service has not been bound; run Cell A with the explicit main-account OAuth secrets first"
+        )
+    if expected_account_email is not None:
+        expected = str(expected_account_email).strip().lower()
+        if expected != _BOUND_DRIVE_API_ACCOUNT:
+            raise StorageCapacityError(
+                f"bound Drive service account {_BOUND_DRIVE_API_ACCOUNT!r} does not match required {expected!r}"
+            )
+    return _BOUND_DRIVE_API_SERVICE
+
+
+def verified_drive_api_account_email() -> str:
+    if _BOUND_DRIVE_API_SERVICE is None or not _BOUND_DRIVE_API_ACCOUNT:
+        raise StorageCapacityError(
+            "canonical Drive API account has not been bound; authenticate the explicit main-account OAuth first"
+        )
+    return str(_BOUND_DRIVE_API_ACCOUNT)
 
 
 def effective_generation_limit(identity: dict[str, Any], requested: int | None) -> int | None:
@@ -90,20 +146,29 @@ def drive_available_bytes_from_quota(quota: dict[str, Any]) -> int:
     return limit - usage
 
 
-def query_drive_available_bytes() -> int:
-    """Query authenticated Drive account quota through the Drive v3 API."""
+def query_drive_available_bytes(*, api_service=None, expected_account_email: str | None = None) -> int:
+    """Query quota only through the explicitly bound canonical-user Drive API service."""
     try:
-        import google.auth
-        from googleapiclient.discovery import build
-
-        credentials, _ = google.auth.default(scopes=[DRIVE_METADATA_SCOPE])
-        service = build("drive", "v3", credentials=credentials, cache_discovery=False)
-        quota = service.about().get(fields="storageQuota(limit,usage)").execute().get("storageQuota", {})
+        service = api_service or verified_drive_api_service(expected_account_email=expected_account_email)
+        fields = "user(emailAddress),storageQuota(limit,usage)"
+        account = service.about().get(fields=fields).execute()
+        observed = str((account.get("user") or {}).get("emailAddress") or "").strip().lower()
+        expected = (
+            str(expected_account_email).strip().lower()
+            if expected_account_email is not None else _BOUND_DRIVE_API_ACCOUNT
+        )
+        if not expected or observed != expected:
+            raise StorageCapacityError(
+                f"storage account mismatch during quota query: expected {expected!r}, observed {observed!r}"
+            )
+        quota = account.get("storageQuota", {})
     except Exception as exc:
+        if isinstance(exc, StorageCapacityError):
+            raise
         raise StorageCapacityError(
-            "cannot verify Google Drive free quota before writing; authenticate the Colab account "
-            "and confirm the Drive API metadata scope is available"
-        ) from exc
+            "cannot verify Google Drive free quota through the verified main-account OAuth service; "
+            "no ADC fallback is permitted"
+        ) from None
     return drive_available_bytes_from_quota(quota)
 
 

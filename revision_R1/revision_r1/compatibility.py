@@ -11,7 +11,9 @@ from typing import Any
 
 CHECKPOINT_IDENTITY_SHA256 = "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
 COMPATIBILITY_MANIFEST_NAME = "checkpoint_compatibility.json"
-INFRASTRUCTURE_ONLY_CHANGES = {"checkpointing.py", "resources.py", "runner.py"}
+INFRASTRUCTURE_ONLY_CHANGES = {
+    "checkpointing.py", "resources.py", "runner.py", "storage.py", "validation_workflow.py",
+}
 
 
 def _stable_ast_dump(node: ast.AST) -> str:

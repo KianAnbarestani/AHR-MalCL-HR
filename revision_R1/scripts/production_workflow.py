@@ -27,7 +27,10 @@ from revision_r1.schedule import PoolCounts, load_update_schedule
 from revision_r1.storage import (
     DEFAULT_STORAGE_RESERVE_BYTES,
     StorageCapacityError,
+    bind_verified_drive_api_service,
+    clear_verified_drive_api_service,
     require_available_bytes,
+    verified_drive_api_service,
 )
 from revision_r1.task_stream import class_order, order_sha256, split_order
 
@@ -715,15 +718,12 @@ def _drive_api_service(*, scopes: tuple[str, ...] = (DRIVE_METADATA_SCOPE,)):
     if _BOUND_DRIVE_API_SERVICE is not None:
         return _BOUND_DRIVE_API_SERVICE
     try:
-        import google.auth
-        from googleapiclient.discovery import build
-
-        credentials, _ = google.auth.default(scopes=list(scopes))
-        return build("drive", "v3", credentials=credentials, cache_discovery=False)
-    except Exception as exc:
+        return verified_drive_api_service(expected_account_email=CANONICAL_STORAGE_ACCOUNT_EMAIL)
+    except Exception:
         raise StorageCapacityError(
-            "cannot authenticate read-only Google Drive metadata access; mount Drive and authenticate the intended owner account"
-        ) from exc
+            "canonical Drive API is not bound to the verified main-account OAuth credentials; "
+            "ADC fallback is disabled, run Cell A before any Drive operation"
+        ) from None
 
 
 def permanently_delete_recovery_checkpoint(
@@ -828,6 +828,7 @@ def verify_canonical_storage_session(
     global _BOUND_DRIVE_API_SERVICE, _BOUND_STORAGE_SESSION
     _BOUND_DRIVE_API_SERVICE = None
     _BOUND_STORAGE_SESSION = None
+    clear_verified_drive_api_service()
     _DRIVE_WRITE_PROBE_CACHE.clear()
     expected_account = str(expected_account_email).strip().lower()
     if not expected_account or not expected_revision_folder_id:
@@ -922,6 +923,7 @@ def verify_canonical_storage_session(
         "probe": probe,
         "path_bindings": bindings,
     }
+    bind_verified_drive_api_service(service, expected_account_email=expected_account)
     _BOUND_DRIVE_API_SERVICE = service
     _BOUND_STORAGE_SESSION = evidence
     return evidence

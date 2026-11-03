@@ -30,6 +30,8 @@ from .storage import (
     available_bytes,
     require_available_bytes,
     require_path_capacity,
+    verified_drive_api_account_email,
+    verified_drive_api_service,
 )
 
 
@@ -140,19 +142,22 @@ def inventory_validation_files(validation_root: str | Path, *, largest_count: in
     }
 
 
-def query_drive_validation_inventory(validation_root: str | Path) -> dict[str, Any]:
+def query_drive_validation_inventory(
+    validation_root: str | Path, *, api_service=None,
+) -> dict[str, Any]:
     """Read quota and trashed-generation metadata via Drive API; no mutations are issued."""
     try:
-        import google.auth
-        from googleapiclient.discovery import build
-
-        from .storage import DRIVE_METADATA_SCOPE
-
-        credentials, _ = google.auth.default(scopes=[DRIVE_METADATA_SCOPE])
-        service = build("drive", "v3", credentials=credentials, cache_discovery=False)
-        quota = service.about().get(
-            fields="storageQuota(limit,usage,usageInDrive,usageInDriveTrash)",
-        ).execute().get("storageQuota", {})
+        service = api_service or verified_drive_api_service()
+        account = service.about().get(
+            fields="user(emailAddress),storageQuota(limit,usage,usageInDrive,usageInDriveTrash)",
+        ).execute()
+        observed_user = str((account.get("user") or {}).get("emailAddress") or "").strip().lower()
+        if observed_user != verified_drive_api_account_email():
+            raise StorageCapacityError(
+                f"Drive inventory account changed: expected {verified_drive_api_account_email()!r}, "
+                f"observed {observed_user!r}"
+            )
+        quota = account.get("storageQuota", {})
         trashed_files: list[dict[str, Any]] = []
         page_token = None
         while True:
@@ -167,8 +172,9 @@ def query_drive_validation_inventory(validation_root: str | Path) -> dict[str, A
                 break
     except Exception as exc:
         raise RuntimeError(
-            "read-only Drive quota/Trash inventory failed; no GPU worker was started"
-        ) from exc
+            "read-only Drive quota/Trash inventory failed through the verified main-account service; "
+            "ADC fallback is disabled and no GPU worker was started"
+        ) from None
     return {
         "drive": summarize_drive_storage_inventory(quota, trashed_files),
         "visible_validation_files": inventory_validation_files(validation_root),

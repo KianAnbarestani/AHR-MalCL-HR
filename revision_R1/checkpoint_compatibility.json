@@ -37,7 +37,9 @@
   "changed_infrastructure_modules": [
     "checkpointing.py",
     "resources.py",
-    "runner.py"
+    "runner.py",
+    "storage.py",
+    "validation_workflow.py"
   ],
   "checkpoint_cadence_policy": {
     "drive_publication_seconds": 900,
@@ -52,7 +54,7 @@
     "archives.py": "5d159fa12989587ed5620a2234a84c979ec903cce35879de11ba4eea7a9db161",
     "checkpointing.py": "1ff5e319d55616f6264bf8ec7c2ef698d73973e62c1b12ac3341bcc4ca8f1683",
     "cli.py": "c3da1546f47964b6b6ccd929a687430e47bbc567aed35b8050e82409692e5fe7",
-    "compatibility.py": "f82962114a058721951dd42cb374d66250b9b01a808c194cab41f1cf2aeaa2b0",
+    "compatibility.py": "a5c7e2b0a113e47397c154c17a5b07df6957b6cad59127f3d39a1af63293bd61",
     "config.py": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608",
     "data.py": "3acecda586b9c2a97a5d39888ffc8b0e54af3295e16f0d034a77122454e20ac5",
     "engine.py": "ccd55f5cf3726d18604c547a123537b498cb4ba438cef8e68475321156df1d68",
@@ -71,13 +73,13 @@
     "sampling.py": "f9ee9357b9646b820324340bf9ae17af99a666896c582d7d5d0f61185ad91497",
     "schedule.py": "7662a431186141a250e07419df06c3353c73df680bb667b07ae6d7adbe87cb73",
     "state.py": "d06f304f43ae12f22a35893e674b2803ea5886b1b610f05cf6bbb68ccb9b18e5",
-    "storage.py": "738546b6328f47a1e2cbd66a48e7af4e61ab3d3ef5874250bd60c54eabc891f3",
+    "storage.py": "5b582f140c0909e9359e6704622ba4b19a2fc92fd0bcd13d559780344356ef07",
     "task_stream.py": "2e31c460fd4b8d14e94b2d782ca01d18bb962dcd6c1b8b0ba2cff26542d83f24",
     "validation.py": "9ffc65ddf62a254c3bc45365bc57107504ea1ede566eadb2356c7d015728d97f",
     "validation_worker.py": "2ce2c13435f97a036a4d6a1ab233c2eef020be989788fe873da9e83ac8f9d095",
-    "validation_workflow.py": "1caddd38f54e6557604f25abc14ba0cafbdb20011d562989b041eb0be8421753"
+    "validation_workflow.py": "c0de3f421ad27224ebfecf411898eb1b4c472709d45bc67c760af834eefdc34d"
   },
-  "runtime_source_sha256": "2d0fde8a0ece583474fa9fe298c20c2a030a1764c2182f9597c2a32f59991da1",
+  "runtime_source_sha256": "b86298741d6f5b9e278c0d30200aa8a6ef1948d99e1f10a5ab8ce4b09e5c52f8",
   "schema_version": 1,
   "training_behavior_fingerprint_sha256": "63b1d7656cd1c2474920d79c8c569b29c8724b56d2f8d1223290d00a1c1dbacb",
   "training_behavior_matches_baseline": true

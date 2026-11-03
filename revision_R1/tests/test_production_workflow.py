@@ -900,6 +900,8 @@ def test_canonical_storage_session_binds_main_account_exact_folder_and_mount_pro
     assert evidence["probe"]["new_file_owner"] == "kian.anb777@gmail.com"
     assert evidence["probe"]["permanent_recovery_delete_verified"] is True
     assert production_workflow._BOUND_DRIVE_API_SERVICE is service
+    from revision_r1.storage import verified_drive_api_service
+    assert verified_drive_api_service(expected_account_email="kian.anb777@gmail.com") is service
     assert list(revision_path.iterdir()) == []
 
 
@@ -1201,6 +1203,9 @@ def test_canonical_storage_session_rejects_wrong_account_or_folder_before_probe(
 
     assert list((drive_root / "ReVision").iterdir()) == []
     assert production_workflow._BOUND_DRIVE_API_SERVICE is None
+    from revision_r1 import storage
+    with pytest.raises(StorageCapacityError, match="has not been bound"):
+        storage.verified_drive_api_service(expected_account_email="kian.anb777@gmail.com")
 
 
 def test_matrix_capacity_gate_requires_only_next_run_incremental_storage_and_reserve():

@@ -4,9 +4,27 @@ The single stable production notebook is `My Drive/ReVision/Revision_R1_Producti
 
 ## Canonical storage account and authentication
 
-The Colab compute account may change. The storage account is always `kian.anb777@gmail.com`, and the canonical folder is ReVision ID `1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x`. Cell A calls supported Colab user authentication, then force-mounts Drive. Select the canonical storage account in the Google authorization prompts. The authenticated Drive API identity and the mounted filesystem are independently checked: exact folder ID and descendant paths, a tiny write/read/delete probe in ReVision, probe owner, quota identity, and available quota must agree before any run proceeds. If cached credentials select another account, Cell A fails closed; restart the runtime and select the canonical storage account. Do not change paths, share settings, or ownership to work around the check.
+The Colab compute account may differ from the durable storage account. Storage is always `kian.anb777@gmail.com`, and the canonical folder is ReVision ID `1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x`.
 
-The notebook uses the Drive API scope `https://www.googleapis.com/auth/drive`, because the workflow reads pre-existing datasets/checkpoints, inspects quota/ownership, writes files, and may delete only exact verified recovery files owned by the canonical account. A `drive.file` scope would not cover the historical files it must inspect. No service account is used. Tokens are session-only and never placed in the notebook, output, Git, Drive, or reports. This authentication does not change the Colab compute/billing account; it only chooses the durable storage identity.
+The former `auth.authenticate_user()` + `google.auth.default()` path was not account-selective: Colab can return immediately when any valid user ADC is already cached. Cell A now creates the Drive API service from a separate user-OAuth refresh token stored in Colab Secrets; no Drive API code falls back to ADC. The OAuth token is checked with Drive `about.user.emailAddress` before any production path is used. The Drive mount authenticates separately; choose the same canonical account in its prompt. The exact ReVision folder, path bindings, tiny write/read/delete probe, probe owner, quota identity, and available quota must all agree before a run proceeds. If the mount probe does not prove that same identity, stop; do not change paths or run identities.
+
+### One-time OAuth and Colab Secret setup
+
+1. In the Google Cloud Console, select or create a project and enable the Google Drive API. Configure the OAuth consent screen for the canonical account. If the app is in `Testing`, add `kian.anb777@gmail.com` as a test user.
+2. Create an OAuth client of type **Web application** and add this exact authorized redirect URI: `https://developers.google.com/oauthplayground`.
+3. Open [Google OAuth 2.0 Playground](https://developers.google.com/oauthplayground). In its settings, select **Use your own OAuth credentials**, set **Access type** to **Offline**, and set the force prompt to **Select Account Screen**. Enter the OAuth client ID and secret.
+4. In Step 1, authorize the exact scope `https://www.googleapis.com/auth/drive`. Select `kian.anb777@gmail.com` and verify the account shown before granting access. In Step 2, exchange the authorization code and copy the resulting refresh token.
+5. In Colab’s Secrets pane, create these three secrets and enable notebook access for each:
+
+   - `REVISION_R1_STORAGE_OAUTH_CLIENT_ID`
+   - `REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET`
+   - `REVISION_R1_STORAGE_REFRESH_TOKEN`
+
+   Do not paste secret values into notebook cells, outputs, Git, Drive files, or reports. Cell A reads them in memory and never prints them. The OAuth Playground uses your own OAuth client; its refresh token does not use the Playground’s default-client 24-hour revocation behavior.
+
+Google documents that an External consent screen left in `Testing` expires non-basic-scope authorizations after seven days, including refresh tokens. For persistent use, move the consent screen to production and complete Google’s verification requirements for the requested Drive scope; otherwise renew the refresh-token secret when it expires, then rerun Cell A. A refresh-token renewal does not change training identity or checkpoint state. See [OAuth Playground](https://developers.google.com/oauthplayground), [Google OAuth refresh-token expiry](https://developers.google.com/identity/protocols/oauth2#expiration), and [Drive API scopes](https://developers.google.com/identity/protocols/oauth2/scopes).
+
+The workflow requests the full Drive scope because it must inspect and resume pre-existing datasets, checkpoints, registries, and outputs. `drive.file` does not automatically grant access to all those historical files. No service account is used. The compute/billing account remains unchanged.
 
 The GitHub repository is public, so no token is currently needed. If the owner later makes it private, add a fine-grained GitHub token as the Colab Secret `GITHUB_READ_TOKEN`, restricted to this repository with Contents: Read-only, and enable notebook access. Never paste the token into a cell or URL.
 
