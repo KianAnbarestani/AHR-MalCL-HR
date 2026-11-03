@@ -1,6 +1,7 @@
 {
   "added_compatibility_modules": [
-    "compatibility.py"
+    "compatibility.py",
+    "drive_storage.py"
   ],
   "baseline_commit_sha": "e7bea685827137a1ea48c5886db22518d68a6b06",
   "baseline_module_sha256": {
@@ -54,9 +55,10 @@
     "archives.py": "5d159fa12989587ed5620a2234a84c979ec903cce35879de11ba4eea7a9db161",
     "checkpointing.py": "1ff5e319d55616f6264bf8ec7c2ef698d73973e62c1b12ac3341bcc4ca8f1683",
     "cli.py": "c3da1546f47964b6b6ccd929a687430e47bbc567aed35b8050e82409692e5fe7",
-    "compatibility.py": "a5c7e2b0a113e47397c154c17a5b07df6957b6cad59127f3d39a1af63293bd61",
+    "compatibility.py": "3a390423c36f273e8870bf6fa4bc9a5979d01c21122cb28c9152b95b2ba69e65",
     "config.py": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608",
     "data.py": "3acecda586b9c2a97a5d39888ffc8b0e54af3295e16f0d034a77122454e20ac5",
+    "drive_storage.py": "2c28acaf0272b268682ef0caac45398fc58024876705c4ad96224f328dcc701f",
     "engine.py": "ccd55f5cf3726d18604c547a123537b498cb4ba438cef8e68475321156df1d68",
     "exports.py": "8825439a6372b2b7167aa31a6509cf9a9fc1e2b42ff7c346c9aefec414f94816",
     "generative.py": "6ccbbb7a19e3d536b01417f80e6bbfe6bbfb0e874fdf41c923f235208c30e78e",
@@ -79,7 +81,7 @@
     "validation_worker.py": "2ce2c13435f97a036a4d6a1ab233c2eef020be989788fe873da9e83ac8f9d095",
     "validation_workflow.py": "c0de3f421ad27224ebfecf411898eb1b4c472709d45bc67c760af834eefdc34d"
   },
-  "runtime_source_sha256": "b86298741d6f5b9e278c0d30200aa8a6ef1948d99e1f10a5ab8ce4b09e5c52f8",
+  "runtime_source_sha256": "fc65f730764a09292e1017ec0abf3dcf3a0afcc0a9066bcd00df09940cfc7c3b",
   "schema_version": 1,
   "training_behavior_fingerprint_sha256": "63b1d7656cd1c2474920d79c8c569b29c8724b56d2f8d1223290d00a1c1dbacb",
   "training_behavior_matches_baseline": true

@@ -33,7 +33,7 @@ def test_checkpoint_compatibility_is_anchored_to_authentic_baseline_and_separate
     assert manifest["changed_infrastructure_modules"] == [
         "checkpointing.py", "resources.py", "runner.py", "storage.py", "validation_workflow.py",
     ]
-    assert manifest["added_compatibility_modules"] == ["compatibility.py"]
+    assert manifest["added_compatibility_modules"] == ["compatibility.py", "drive_storage.py"]
     assert manifest["training_behavior_matches_baseline"] is True
     assert manifest["checkpoint_schema_unchanged"] is True
 

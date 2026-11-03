@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from scripts.storage_auth import (
@@ -179,6 +182,8 @@ def test_canonical_storage_verifier_rejects_wrong_oauth_service_before_probe(tmp
     monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", None)
     monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", None)
     monkeypatch.setattr(production_workflow, "_DRIVE_WRITE_PROBE_CACHE", {})
+    monkeypatch.setattr(production_workflow, "_drive_api_create_binary_file", lambda _svc, _parent, _name, _payload: {"id": "probe-file-id"})
+    monkeypatch.setattr(production_workflow, "_drive_api_read_bytes", lambda _svc, _file_id: production_workflow.DRIVE_WRITE_PROBE_BYTES)
 
     with pytest.raises(storage.StorageCapacityError, match="storage account mismatch"):
         production_workflow.verify_canonical_storage_session(
@@ -226,16 +231,47 @@ def test_canonical_storage_verifier_binds_oauth_service_for_all_following_drive_
 
     service = _MainService()
     drive_root = tmp_path / "MyDrive"
-    (drive_root / "ReVision").mkdir(parents=True)
+    revision_path = drive_root / "ReVision"
+    revision_path.mkdir(parents=True)
+
+    class _ProbeAdapter:
+        def __init__(self):
+            self.service = service
+            self.expected_account_email = MAIN_ACCOUNT
+            self.revision_folder_id = "canonical-revision-id"
+            self.logical_revision_root = revision_path
+
+        def probe_write(self, logical_file, payload, *, expected_parent_id):
+            assert Path(logical_file).parent == revision_path
+            assert expected_parent_id == self.revision_folder_id
+            assert payload == production_workflow.DRIVE_WRITE_PROBE_BYTES
+            self.service.deleted = True
+            observed = {
+                "file_id": "probe-file-id", "parent_id": expected_parent_id,
+                "owner": MAIN_ACCOUNT, "ownedByMe": True, "size": len(payload),
+                "quotaBytesUsed": len(payload), "api_visible": True,
+            }
+            return {
+                "status": "PASS", "file_id": "probe-file-id", "parent_id": expected_parent_id,
+                "owner": MAIN_ACCOUNT, "ownedByMe": True, "size": len(payload),
+                "quotaBytesUsed": len(payload), "delete_verified": True,
+                "quota_usage_before_bytes": 125, "quota_usage_during_bytes": 125 + len(payload),
+                "quota_limit_during_bytes": 1000,
+                "diagnostics": {"classification": "VERIFIED", "expected": observed, "observed": observed},
+            }
     storage.clear_verified_drive_api_service()
     monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", None)
     monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", None)
     monkeypatch.setattr(production_workflow, "_DRIVE_WRITE_PROBE_CACHE", {})
+    monkeypatch.setattr(production_workflow, "_drive_api_create_binary_file", lambda _svc, _parent, _name, _payload: {"id": "probe-file-id"})
+    monkeypatch.setattr(production_workflow, "_drive_api_read_bytes", lambda _svc, _file_id: production_workflow.DRIVE_WRITE_PROBE_BYTES)
     monkeypatch.setattr(production_workflow, "_lookup_drive_child", lambda _service, _parent, name: (
         None if service.deleted else {
             "id": "probe-file-id", "name": name, "mimeType": "application/octet-stream",
             "parents": ["canonical-revision-id"], "owners": [{"emailAddress": MAIN_ACCOUNT}],
-            "ownedByMe": True, "quotaBytesUsed": "64", "size": "64",
+            "ownedByMe": True,
+            "quotaBytesUsed": str(len(production_workflow.DRIVE_WRITE_PROBE_BYTES)),
+            "size": str(len(production_workflow.DRIVE_WRITE_PROBE_BYTES)),
         }
     ))
     monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, _components: {
@@ -248,6 +284,8 @@ def test_canonical_storage_verifier_binds_oauth_service_for_all_following_drive_
         drive_mount_root=drive_root,
         expected_account_email=MAIN_ACCOUNT,
         expected_revision_folder_id="canonical-revision-id",
+        storage_adapter=_ProbeAdapter(),
+        conditional_update_probe=lambda *_args, **_kwargs: {"status": "PASS", "contract": "test_fake_cas"},
     )
 
     assert evidence["status"] == "PASS"
@@ -256,6 +294,65 @@ def test_canonical_storage_verifier_binds_oauth_service_for_all_following_drive_
     assert storage.verified_drive_api_service(expected_account_email=MAIN_ACCOUNT) is service
     assert storage.query_drive_available_bytes() == 875
     assert list((drive_root / "ReVision").iterdir()) == []
+
+
+def test_api_write_probe_reports_missing_or_stale_metadata_field_by_field(monkeypatch):
+    from scripts import production_workflow
+    from revision_r1.storage import StorageCapacityError
+
+    monkeypatch.setattr(production_workflow, "DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS", ())
+    payload = production_workflow.DRIVE_WRITE_PROBE_BYTES
+    with pytest.raises(StorageCapacityError, match="metadata remained missing/stale") as caught:
+        production_workflow._write_capability_probe(
+            "/content/drive/MyDrive/ReVision",
+            {"path_exists": True, "folder_id": "revision-folder-id"},
+            MAIN_ACCOUNT, object(), drive_root="/content/drive/MyDrive",
+            metadata_lookup=lambda *_args: None,
+            api_create=lambda *_args: {"id": "probe-file-id"},
+            api_read=lambda *_args: payload,
+        )
+
+    diagnostic = json.loads(str(caught.value).split(": ", 1)[1])
+    assert diagnostic["classification"] == "MISSING_OR_STALE_METADATA"
+    assert diagnostic["expected"]["parent_id"] == "revision-folder-id"
+    assert diagnostic["observed"] == {
+        "file_id": "probe-file-id", "parent_id": None, "owner": None,
+        "ownedByMe": None, "size": None, "quotaBytesUsed": None,
+        "api_visible": False,
+    }
+    assert set(diagnostic["conditions"]) == {
+        "file_id", "parent_id", "owner", "ownedByMe", "size", "quotaBytesUsed", "api_visible",
+    }
+    assert diagnostic["conditions"]["parent_id"]["status"] == "MISSING_OR_STALE"
+    assert diagnostic["conditions"]["api_visible"]["status"] == "MISMATCH"
+
+
+def test_api_write_probe_distinguishes_confirmed_new_file_owner_mismatch(monkeypatch):
+    from scripts import production_workflow
+    from revision_r1.storage import StorageCapacityError
+
+    payload = production_workflow.DRIVE_WRITE_PROBE_BYTES
+    metadata = {
+        "id": "probe-file-id", "name": "probe.bin", "mimeType": "application/octet-stream",
+        "parents": ["revision-folder-id"], "owners": [{"emailAddress": "compute@example.org"}],
+        "ownedByMe": False, "size": str(len(payload)), "quotaBytesUsed": str(len(payload)),
+    }
+    with pytest.raises(StorageCapacityError, match="confirmed ownership mismatch") as caught:
+        production_workflow._write_capability_probe(
+            "/content/drive/MyDrive/ReVision",
+            {"path_exists": True, "folder_id": "revision-folder-id"},
+            MAIN_ACCOUNT, object(), drive_root="/content/drive/MyDrive",
+            metadata_lookup=lambda *_args: metadata,
+            api_create=lambda *_args: {"id": "probe-file-id"},
+            api_read=lambda *_args: payload,
+        )
+
+    diagnostic = json.loads(str(caught.value).split(": ", 1)[1])
+    assert diagnostic["classification"] == "CONFIRMED_OWNERSHIP_MISMATCH"
+    assert diagnostic["expected"]["owner"] == MAIN_ACCOUNT
+    assert diagnostic["observed"]["owner"] == "compute@example.org"
+    assert diagnostic["conditions"]["owner"]["status"] == "MISMATCH"
+    assert diagnostic["conditions"]["ownedByMe"]["status"] == "MISMATCH"
 
 
 def test_validation_inventory_has_no_adc_fallback(tmp_path):

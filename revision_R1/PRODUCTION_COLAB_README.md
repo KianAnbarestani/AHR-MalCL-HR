@@ -27,14 +27,18 @@ Cell A expects Python 3.12.13, NumPy 2.0.2, PyTorch 2.11.0+cu128, PyTorch CUDA b
 
 ## Storage and identity
 
-Compute-account changes do not change storage: use `kian.anb777@gmail.com`
-and ReVision folder ID `1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x`. Select that
-account in Cell A's Google prompts. The code binds the Drive API and mounted
-filesystem to that identity using an exact folder/path check and tiny
-write/read/delete probe. Wrong cached credentials, unknown quota, Viewer
-access, or an unverified destination stop before runs. No sharing changes,
-ownership transfers, or service accounts are used. There is no editor allowlist:
-durable storage always uses the one canonical account.
+Compute-account changes do not change storage: durable storage uses the
+explicit OAuth account `kian.anb777@gmail.com` and ReVision folder ID
+`1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x`. Cell A verifies the OAuth identity with
+Drive `about`; the DriveFS mount may be authenticated as a different compute
+account and is read-only for datasets/preflight. All durable writes use local
+staging plus the verified OAuth Drive API: checkpoints, outputs, progress,
+manifests, registries, leases, journals, and exports. Cell A verifies the exact
+folder/path, API write/read-back probe, new-file owner/quota metadata, cleanup
+capability, and current-session stale-ETag rejection. Wrong OAuth credentials,
+unknown quota, Viewer access, ambiguous paths, or an unverified conditional
+lease update stop before workers. No sharing changes, ownership transfers, or
+service accounts are used; no compute-account email allowlist is required.
 
 The Drive API uses `https://www.googleapis.com/auth/drive` because it must
 inspect existing user-owned datasets/checkpoints and write/delete verified

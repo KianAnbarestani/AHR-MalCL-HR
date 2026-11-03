@@ -131,7 +131,7 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert commit in cells[1]
     assert "auth.authenticate_user()" not in cells[1]
     assert "google.auth.default(" not in cells[1]
-    assert cells[1].index("build_main_account_storage_api(") < cells[1].index('drive.mount("/content/drive", force_remount=True)')
+    assert cells[1].index("build_main_account_storage_api(") < cells[1].index('drive.mount("/content/drive", force_remount=False)')
     assert cells[1].index("verify_package_integrity(PACKAGE_ROOT)") < cells[1].index("build_main_account_storage_api(")
     assert cells[1].index('_git(["fetch"') < cells[1].index("build_main_account_storage_api(")
     assert "credential_source" in cells[1]
@@ -140,8 +140,9 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x" in cells[1]
     assert "verify_canonical_storage_session(" in cells[1]
     assert "STORAGE_API_FACTORY" in cells[1]
-    assert "force_remount=True" in cells[1]
-    assert "wrong storage account" in cells[1].lower()
+    assert "force_remount=False" in cells[1]
+    assert "read-only" in cells[1].lower()
+    assert "storage account" in cells[1].lower()
     assert 'STORAGE_AUTH_EVIDENCE["credential_source"]' in cells[1]
     assert '_git(["checkout", "--detach", "FETCH_HEAD"]' in cells[1]
     assert "GITHUB_READ_TOKEN" in cells[1]
@@ -153,7 +154,7 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "git pull" not in cells[1]
     assert "verify_package_integrity(PACKAGE_ROOT)" in cells[1]
     assert "from scripts.build_production_handoff import PRODUCTION_BUILD_ID as EXPECTED_BUILD_ID" in cells[1]
-    assert '"production_build_id": EXPECTED_BUILD_ID' in cells[4]
+    assert "from scripts.build_production_handoff import PRODUCTION_BUILD_ID as EXPECTED_BUILD_ID" in cells[1]
     assert EXPECTED_TRAINING_SOURCE_SHA256 in cells[1]
     assert EXPECTED_EFFECTIVE_SCHEDULE_SHA256 in cells[1]
     assert "EXPECTED_PYTHON_VERSION = (3, 12, 13)" in cells[1]

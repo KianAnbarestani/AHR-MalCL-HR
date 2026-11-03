@@ -1,6 +1,6 @@
 {
   "checkpoint_compatibility_baseline_commit": "e7bea685827137a1ea48c5886db22518d68a6b06",
-  "checkpoint_compatibility_manifest_sha256": "12a3a408951aab2610d6ccc22fed15c03165e59e32e00f83f826cba3007eb26e",
+  "checkpoint_compatibility_manifest_sha256": "183306802ae567901a9ad1b4e118f9ae56b7288dd86230230a55fc8f46caa0e6",
   "credential_policy": "no credential for public repository; private read-only token only via Colab Secrets",
   "expected_effective_schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
   "files": {
@@ -17,16 +17,16 @@
       "sha256": "c6118ca7e356726f0646259da9f3bd49d2922f908dcdea2e7dc3ae08a93e5263"
     },
     "PRODUCTION_COLAB_README.md": {
-      "bytes": 3145,
-      "sha256": "e49f278fd94a379f5400698bdedb37924f0c4dc0c8a900a7db2303987f5f415e"
+      "bytes": 3483,
+      "sha256": "280c3815e659660702b5b45ae23695de079bebcaaf0c020737e8aba5ad0612c3"
     },
     "README_GITHUB_COLAB.md": {
-      "bytes": 8683,
-      "sha256": "d82d4c6acadc4f2472c8402f61122932310f12d5fd86228d3a67dbbede5d3ed4"
+      "bytes": 8957,
+      "sha256": "3cf97db2e27e71e4b27654250e9f1a6bb7f4369186403fc8984830e837c256e5"
     },
     "checkpoint_compatibility.json": {
-      "bytes": 6088,
-      "sha256": "12a3a408951aab2610d6ccc22fed15c03165e59e32e00f83f826cba3007eb26e"
+      "bytes": 6204,
+      "sha256": "183306802ae567901a9ad1b4e118f9ae56b7288dd86230230a55fc8f46caa0e6"
     },
     "configs/legacy_v1_2_first_run_identity.json": {
       "bytes": 7695,
@@ -73,8 +73,8 @@
       "sha256": "c3da1546f47964b6b6ccd929a687430e47bbc567aed35b8050e82409692e5fe7"
     },
     "revision_r1/compatibility.py": {
-      "bytes": 7094,
-      "sha256": "a5c7e2b0a113e47397c154c17a5b07df6957b6cad59127f3d39a1af63293bd61"
+      "bytes": 7174,
+      "sha256": "3a390423c36f273e8870bf6fa4bc9a5979d01c21122cb28c9152b95b2ba69e65"
     },
     "revision_r1/config.py": {
       "bytes": 5116,
@@ -83,6 +83,10 @@
     "revision_r1/data.py": {
       "bytes": 20986,
       "sha256": "3acecda586b9c2a97a5d39888ffc8b0e54af3295e16f0d034a77122454e20ac5"
+    },
+    "revision_r1/drive_storage.py": {
+      "bytes": 69206,
+      "sha256": "2c28acaf0272b268682ef0caac45398fc58024876705c4ad96224f328dcc701f"
     },
     "revision_r1/engine.py": {
       "bytes": 2748,
@@ -169,12 +173,12 @@
       "sha256": "c0de3f421ad27224ebfecf411898eb1b4c472709d45bc67c760af834eefdc34d"
     },
     "scripts/build_checkpoint_compatibility.py": {
-      "bytes": 5920,
-      "sha256": "84a2ed79dd962450d6ec1925fc440c349f12e35b042b754128669d9772195f97"
+      "bytes": 5962,
+      "sha256": "9cdae14f1571b6339e06224fcb05ed6b38650d2c76c354c2974128922ab369a2"
     },
     "scripts/build_github_handoff.py": {
-      "bytes": 42830,
-      "sha256": "272b13760098b51eb92177daa1c309eaa69618e4becaf94d4a379c7ab0a8642e"
+      "bytes": 59225,
+      "sha256": "17b4f0f885f135fc7520b753590297af4c48696e4cd3b6564eb58817fec644db"
     },
     "scripts/build_production_handoff.py": {
       "bytes": 65900,
@@ -189,8 +193,8 @@
       "sha256": "1cb4e713e38096b17c215be584a871defd3edaf611290b74dcff7ddba48defba"
     },
     "scripts/production_workflow.py": {
-      "bytes": 343868,
-      "sha256": "aa62255794c7f27c9e8ca998fc39e60bbb895e2d7b3fb09c6d27c3c371cce79e"
+      "bytes": 374815,
+      "sha256": "73a49c56f341f84b0c503ef51e6635173f04bf0581063bf80335663f41088ee2"
     },
     "scripts/storage_auth.py": {
       "bytes": 4262,
@@ -205,8 +209,8 @@
       "sha256": "b070d994aa826a9cfbea7896cc21b5acde41c1da85dd30711209a6bca35a65bd"
     },
     "tests/test_checkpoint_compatibility.py": {
-      "bytes": 2652,
-      "sha256": "36a2cbcd6bcfa16caf22135142942766b18514fbfa7e4b8155ffe4615ab50232"
+      "bytes": 2672,
+      "sha256": "27eea6c444d6c9e9289ac3a4a4ea35c08c12832a0c1a77572a74960f58f54dac"
     },
     "tests/test_checkpoint_storage_policy.py": {
       "bytes": 9491,
@@ -228,9 +232,13 @@
       "bytes": 8522,
       "sha256": "43ecc53d4d8a6f0782e44495322bdf00a474c9d3b56c1ab05cdab00771e2b483"
     },
+    "tests/test_drive_api_storage.py": {
+      "bytes": 34177,
+      "sha256": "565e1025fecdb3195021560d9264cecc566a6022d864c8b25c14ef92a618d6a9"
+    },
     "tests/test_github_handoff.py": {
-      "bytes": 10017,
-      "sha256": "4c0f2eebf50090217f5728eadb659258b2dd13c75540ea9642331079d883b5f4"
+      "bytes": 10101,
+      "sha256": "3078303e67c8f73ad8d935bc02cf8742cec33d839a0f5b9969b557b598208600"
     },
     "tests/test_live_progress.py": {
       "bytes": 9566,
@@ -249,8 +257,8 @@
       "sha256": "c94afd2629970445f0e1964cccad5045b9202e15d40669331fd5ee3154a5f9d0"
     },
     "tests/test_production_workflow.py": {
-      "bytes": 176445,
-      "sha256": "f0a57b2f6b9031360aad0f594c238ce0ee32ad11ce32157ce8e5f6482f2895df"
+      "bytes": 185106,
+      "sha256": "ebfffc502e784f2fda3c7eada388a8a8f59d47924ce3ab535dde397c66d89e96"
     },
     "tests/test_protocol_math.py": {
       "bytes": 7882,
@@ -273,8 +281,8 @@
       "sha256": "178c55b29a2b874addde8b69b41696ee6a6ccfb85294dd146c448613aa82a908"
     },
     "tests/test_runner_synthetic.py": {
-      "bytes": 13084,
-      "sha256": "139bb42784f6806d91ead07922f691fe86423f06eaac3b44843f92ce9bfa31de"
+      "bytes": 13830,
+      "sha256": "69833675f78efa51725f89b63d7b23055803ab8d3a80794e58f39e53ab9b7bbd"
     },
     "tests/test_runtime_compatibility.py": {
       "bytes": 1323,
@@ -285,8 +293,8 @@
       "sha256": "646c070099a4623f801fc806c5fd2ff5741083a228880c8f22f3e9224941a1e0"
     },
     "tests/test_storage_auth.py": {
-      "bytes": 10423,
-      "sha256": "5706dc2820cba9649b943cd1e59544c72a99e000ccecdff5f34b6ac856af318b"
+      "bytes": 15749,
+      "sha256": "6365e106068a1466bd9a2e88b89fb6142edc74f71c74a1344b21b5f9c2c034a3"
     },
     "tests/test_task_stream_config.py": {
       "bytes": 3454,
@@ -343,7 +351,7 @@
   "release_kind": "GITHUB_PINNED_COLAB_RUNNER",
   "repository": "KianAnbarestani/AHR-MalCL-HR",
   "run_count": 100,
-  "runtime_source_sha256": "b86298741d6f5b9e278c0d30200aa8a6ef1948d99e1f10a5ab8ce4b09e5c52f8",
+  "runtime_source_sha256": "fc65f730764a09292e1017ec0abf3dcf3a0afcc0a9066bcd00df09940cfc7c3b",
   "schema_version": 1,
   "training_source_sha256": "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
 }

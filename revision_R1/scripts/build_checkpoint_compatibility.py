@@ -13,6 +13,7 @@ from typing import Any
 
 from revision_r1.compatibility import (
     CHECKPOINT_IDENTITY_SHA256,
+    ADDED_INFRASTRUCTURE_MODULES,
     INFRASTRUCTURE_ONLY_CHANGES,
     runtime_module_hashes,
     runtime_source_sha256,
@@ -65,7 +66,7 @@ def build_manifest(package_root: str | Path, *, baseline_commit: str = AUTHENTIC
         if current_hashes.get(name) != baseline_hash
     }
     added = set(current_hashes) - set(baseline_hashes)
-    if changed != INFRASTRUCTURE_ONLY_CHANGES or added != {"compatibility.py"}:
+    if changed != INFRASTRUCTURE_ONLY_CHANGES or added != ADDED_INFRASTRUCTURE_MODULES:
         raise ValueError(
             "working tree contains changes outside the reviewed checkpoint-only scope: "
             f"changed={sorted(changed)}, added={sorted(added)}"

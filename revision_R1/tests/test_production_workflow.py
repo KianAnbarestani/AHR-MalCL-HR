@@ -42,6 +42,18 @@ from scripts.production_workflow import (
 import scripts.production_workflow as production_workflow
 
 
+@pytest.fixture(autouse=True)
+def _fake_api_probe_transport(monkeypatch):
+    """Use deterministic API transport fixtures; production still uses explicit Drive API helpers."""
+    monkeypatch.setattr(production_workflow, "_drive_api_create_binary_file", lambda _svc, _parent, name, _payload: {
+        "id": f"probe-file:{name}",
+    })
+    monkeypatch.setattr(
+        production_workflow, "_drive_api_read_bytes",
+        lambda _svc, _file_id: production_workflow.DRIVE_WRITE_PROBE_BYTES,
+    )
+
+
 SCHEDULE_SHA = "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212"
 DATASET_REFERENCES = {
     "ember": {
@@ -439,6 +451,8 @@ def test_matrix_completion_registries_are_plan_scoped_and_legacy_path_is_preserv
 
 
 def test_first_run_holds_matrix_lease_before_and_during_dataset_load(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from revision_r1 import resources
     from revision_r1.data import DatasetBundle
     from revision_r1.checkpointing import save_generation
     from revision_r1.state import PhaseCursor, RunState
@@ -462,6 +476,33 @@ def test_first_run_holds_matrix_lease_before_and_during_dataset_load(tmp_path, m
     )
     monkeypatch.setattr(production_workflow, "validate_runtime_bound_plan", lambda observed, *_a, **_k: observed)
     monkeypatch.setattr(production_workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
+    storage_service = object()
+    lease_events = []
+    storage_adapter = SimpleNamespace(
+        service=storage_service,
+        logical_path_for_local=lambda path: Path("/content/drive/MyDrive/ReVision/revision_R1/production/results") / Path(path).name,
+        ensure_lease_record=lambda logical: lease_events.append(("ensure", str(logical))),
+    )
+    monkeypatch.setattr(production_workflow, "_hydrate_api_matrix_registry", lambda *_a, **_k: None)
+    monkeypatch.setattr(production_workflow, "_hydrate_api_run_state", lambda *_a, **_k: None)
+    monkeypatch.setattr(production_workflow, "_api_publish_file", lambda *_a, **_k: {"status": "fixture"})
+
+    class FakeApiMatrixLease:
+        def __init__(self, *_args, **_kwargs):
+            self.lease = self
+            self._held = False
+            self.lost = __import__("threading").Event()
+
+        def __enter__(self):
+            self._held = True
+            lease_events.append(("acquire", "api"))
+            return self
+
+        def __exit__(self, *_args):
+            self._held = False
+            lease_events.append(("release", "api"))
+
+    monkeypatch.setattr(production_workflow, "_MatrixLeaseHeartbeat", FakeApiMatrixLease)
     v62 = _write_v62_producer_report_fixture(tmp_path)
     monkeypatch.setattr(production_workflow, "load_v62_recovery_checkpoint_bound", lambda _path: {
         "max_checkpoint_payload_bytes": 180_000_000,
@@ -500,10 +541,12 @@ def test_first_run_holds_matrix_lease_before_and_during_dataset_load(tmp_path, m
     monkeypatch.setattr(production_workflow, "_bundle_cache_bytes", lambda *_a, **_k: 0)
     monkeypatch.setattr(production_workflow, "require_run_capacity", lambda *_a, **_k: None)
     monkeypatch.setattr(production_workflow, "require_available_bytes", lambda *_a, **_k: None)
+    monkeypatch.setattr(resources, "require_host_memory", lambda *_a, **_k: None)
     events = []
 
     def load_bundle(*_args, **kwargs):
-        assert (output_root / ".matrix_execution.lease.json").is_file()
+        assert ("acquire", "api") in lease_events
+        assert not (output_root / ".matrix_execution.lease.json").exists()
         assert (output_root / "preparation_progress" / plan["plan_sha256"] / f"{plan['runs'][0]['run_key']}_{plan['runs'][0]['config_sha256'][:12]}.json").is_file()
         kwargs["progress_callback"]({"stage": "fixture_loaded", "rows": 10})
         return bundle
@@ -511,7 +554,6 @@ def test_first_run_holds_matrix_lease_before_and_during_dataset_load(tmp_path, m
     monkeypatch.setattr(production_workflow, "load_validated_dataset_bundle", load_bundle)
 
     def stop_before_runner(*_args, **kwargs):
-        assert (output_root / ".matrix_execution.lease.json").is_file()
         assert kwargs["matrix_lease"].lease._held is True
         return {"status": "SYNTHETIC_TEST_STOP_BEFORE_RUNNER"}
 
@@ -523,9 +565,12 @@ def test_first_run_holds_matrix_lease_before_and_during_dataset_load(tmp_path, m
         output_root=output_root, checkpoint_root=checkpoint_root,
         local_checkpoint_root=local_root, launch_enabled=True,
         progress_callback=events.append,
+        api_factory=lambda: storage_service, storage_adapter=storage_adapter,
+        logical_output_root="/content/drive/MyDrive/ReVision/revision_R1/production/results",
+        logical_checkpoint_root="/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints",
     )
     assert result["status"] == "SYNTHETIC_TEST_STOP_BEFORE_RUNNER"
-    assert not (output_root / ".matrix_execution.lease.json").exists()
+    assert ("release", "api") in lease_events
     prep = json.loads((output_root / "preparation_progress" / plan["plan_sha256"] / f"{plan['runs'][0]['run_key']}_{plan['runs'][0]['config_sha256'][:12]}.json").read_text())
     assert prep["stage"] == "dataset_load_complete"
     assert any(event["stage"] == "dataset_fixture_loaded" for event in events)
@@ -825,7 +870,7 @@ def _drive_service(
 
 
 def _verified_probe_metadata(service, parent_id, name):
-    """Mock only Drive's remote metadata response; probe file I/O stays real."""
+    """Return deterministic Drive metadata for the API-backed temporary probe."""
     probe_id = f"probe-file:{name}"
     if probe_id in service.deleted_ids:
         return None
@@ -833,8 +878,106 @@ def _verified_probe_metadata(service, parent_id, name):
     return {
         "id": probe_id, "name": name, "mimeType": "application/octet-stream",
         "parents": [parent_id], "owners": [{"emailAddress": authenticated_user}],
-        "ownedByMe": True, "quotaBytesUsed": "64", "size": "64",
+        "ownedByMe": True,
+        "quotaBytesUsed": str(len(production_workflow.DRIVE_WRITE_PROBE_BYTES)),
+        "size": str(len(production_workflow.DRIVE_WRITE_PROBE_BYTES)),
     }
+
+
+def _install_api_probe_io(monkeypatch):
+    from scripts import production_workflow
+
+    monkeypatch.setattr(production_workflow, "_drive_api_create_binary_file", lambda _svc, _parent, name, _payload: {
+        "id": f"probe-file:{name}",
+    })
+    monkeypatch.setattr(production_workflow, "_drive_api_read_bytes", lambda _svc, _file_id: production_workflow.DRIVE_WRITE_PROBE_BYTES)
+
+
+class _SessionProbeAdapter:
+    """Small session-verifier seam; adapter behavior is exercised in test_drive_api_storage."""
+
+    def __init__(self, service, revision_id, logical_root):
+        self.service = service
+        self.expected_account_email = "kian.anb777@gmail.com"
+        self.revision_folder_id = revision_id
+        self.logical_revision_root = Path(logical_root)
+
+    def probe_write(self, logical_file, payload, *, expected_parent_id):
+        assert Path(logical_file).parent == self.logical_revision_root
+        assert expected_parent_id == self.revision_folder_id
+        assert payload == production_workflow.DRIVE_WRITE_PROBE_BYTES
+        if hasattr(self.service, "deleted_ids"):
+            self.service.deleted_ids.add(f"probe-file:{Path(logical_file).name}")
+        if hasattr(self.service, "deleted"):
+            self.service.deleted = True
+        observed = {
+            "file_id": "probe-file-id", "parent_id": expected_parent_id,
+            "owner": self.expected_account_email, "ownedByMe": True,
+            "size": len(payload), "quotaBytesUsed": len(payload),
+            "api_visible": True,
+        }
+        return {
+            "status": "PASS", "file_id": observed["file_id"],
+            "parent_id": observed["parent_id"], "owner": observed["owner"],
+            "ownedByMe": observed["ownedByMe"], "size": observed["size"],
+            "quotaBytesUsed": observed["quotaBytesUsed"],
+            "quota_usage_before_bytes": 1000, "quota_usage_during_bytes": 1000 + len(payload),
+            "quota_limit_during_bytes": 10000, "delete_verified": True,
+            "diagnostics": {"classification": "VERIFIED", "expected": observed, "observed": observed},
+        }
+
+
+def test_api_probe_reports_sanitized_condition_diagnostics_for_confirmed_owner_mismatch(tmp_path):
+    """The probe evidence must identify the failed field, not collapse it to capacity."""
+    from scripts.production_workflow import StorageCapacityError, _write_capability_probe
+
+    created = {}
+    deleted = set()
+
+    def create(_service, parent_id, name, payload):
+        created.update(parent_id=parent_id, name=name, payload=payload)
+        return {"id": "probe-123"}
+
+    def read(_service, file_id):
+        assert file_id == "probe-123"
+        return created["payload"]
+
+    def lookup(_service, parent_id, name):
+        if "probe-123" in deleted:
+            return None
+        return {
+            "id": "probe-123", "name": name, "mimeType": "application/octet-stream",
+            "parents": [parent_id], "owners": [{"emailAddress": "compute@example.org"}],
+            "ownedByMe": False, "size": "44", "quotaBytesUsed": "44",
+        }
+
+    class _Delete:
+        def files(self):
+            return self
+
+        def delete(self, *, fileId, supportsAllDrives):
+            assert fileId == "probe-123" and supportsAllDrives is True
+            deleted.add(fileId)
+            return _FakeRequest({})
+
+    with pytest.raises(StorageCapacityError, match="confirmed ownership mismatch") as exc:
+        _write_capability_probe(
+            tmp_path / "logical" / "ReVision", {"path_exists": True, "folder_id": "revision-id"},
+            "kian.anb777@gmail.com", object(), drive_root=tmp_path,
+            metadata_lookup=lookup, delete_service=_Delete(),
+            api_create=create, api_read=read,
+        )
+
+    message = str(exc.value)
+    assert '"file_id": "probe-123"' in message
+    assert '"parent_id": "revision-id"' in message
+    assert '"expected_owner": "kian.anb777@gmail.com"' in message
+    assert '"observed_owner": "compute@example.org"' in message
+    assert '"ownedByMe": false' in message
+    assert '"size": 44' in message
+    assert '"quotaBytesUsed": 44' in message
+    assert '"api_visible": true' in message
+    assert "refresh" not in message.lower()
 
 
 def _bind_main_storage_for_delete_test(monkeypatch, service):
@@ -877,6 +1020,7 @@ def test_canonical_storage_session_binds_main_account_exact_folder_and_mount_pro
     revision_path.mkdir(parents=True)
     monkeypatch.setattr(production_workflow, "_DRIVE_WRITE_PROBE_CACHE", {})
     monkeypatch.setattr(production_workflow, "_lookup_drive_child", _verified_probe_metadata)
+    _install_api_probe_io(monkeypatch)
     monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", None, raising=False)
     monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", None, raising=False)
     monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, components: {
@@ -891,6 +1035,8 @@ def test_canonical_storage_session_binds_main_account_exact_folder_and_mount_pro
         drive_mount_root=drive_root,
         expected_account_email="kian.anb777@gmail.com",
         expected_revision_folder_id="revision-folder",
+        storage_adapter=_SessionProbeAdapter(service, "revision-folder", revision_path),
+        conditional_update_probe=lambda *_args, **_kwargs: {"status": "PASS", "contract": "test_fake_cas"},
     )
 
     assert evidence["status"] == "PASS"
@@ -917,6 +1063,7 @@ def test_canonical_storage_account_survives_compute_account_switch_with_same_res
     drive_root = tmp_path / "MyDrive"
     (drive_root / "ReVision").mkdir(parents=True)
     monkeypatch.setattr(production_workflow, "_lookup_drive_child", _verified_probe_metadata)
+    _install_api_probe_io(monkeypatch)
     monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", None, raising=False)
     monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", None, raising=False)
     monkeypatch.setattr(production_workflow, "resolve_drive_folder", lambda _service, _components: {
@@ -940,6 +1087,11 @@ def test_canonical_storage_account_survives_compute_account_switch_with_same_res
             drive_mount_root=drive_root,
             expected_account_email="kian.anb777@gmail.com",
             expected_revision_folder_id=production_workflow.CANONICAL_REVISION_FOLDER_ID,
+            storage_adapter=_SessionProbeAdapter(
+                storage_service, production_workflow.CANONICAL_REVISION_FOLDER_ID,
+                drive_root / "ReVision",
+            ),
+            conditional_update_probe=lambda *_args, **_kwargs: {"status": "PASS", "contract": "test_fake_cas"},
         )
         production_workflow._require_canonical_storage_api_factory(lambda: storage_service)
         loaded = load_latest_valid(local_recovery, identity)
@@ -1350,6 +1502,8 @@ def test_completed_first_run_is_validated_and_reused_without_remeasurement_or_re
 
 
 def test_execute_first_run_skips_registered_finalized_run_before_reference_or_runner(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     plan = _production_source_plan()
     first = plan["runs"][0]
     measurement = {
@@ -1357,8 +1511,15 @@ def test_execute_first_run_skips_registered_finalized_run_before_reference_or_ru
         "run_id": "existing-run-id", "max_checkpoint_payload_bytes": 1_000,
         "run_output_bytes": 2_000,
     }
+    storage_service = object()
+    adapter = SimpleNamespace(
+        service=storage_service,
+        logical_path_for_local=lambda path: Path("/content/drive/MyDrive/ReVision/revision_R1/production/results") / Path(path).name,
+    )
     monkeypatch.setattr(production_workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
     monkeypatch.setattr(production_workflow, "validate_runtime_bound_plan", lambda value, *_a, **_k: value)
+    monkeypatch.setattr(production_workflow, "_hydrate_api_matrix_registry", lambda *_a, **_k: None)
+    monkeypatch.setattr(production_workflow, "_hydrate_api_run_state", lambda *_a, **_k: None)
     monkeypatch.setattr(
         production_workflow, "_read_matrix_registry",
         lambda *_args: {"completed_runs": {first["run_key"]: {"already": "registered"}}},
@@ -1382,6 +1543,9 @@ def test_execute_first_run_skips_registered_finalized_run_before_reference_or_ru
         v62_recovery_report_path="unused", data_roots={}, cache_root=tmp_path / "cache",
         output_root=tmp_path / "results", checkpoint_root=tmp_path / "checkpoints",
         local_checkpoint_root=tmp_path / "local", launch_enabled=True,
+        api_factory=lambda: storage_service, storage_adapter=adapter,
+        logical_output_root="/content/drive/MyDrive/ReVision/revision_R1/production/results",
+        logical_checkpoint_root="/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints",
     )
 
     assert result["status"] == "ALREADY_FINALIZED_COMPLETED_RUN"
@@ -1694,7 +1858,7 @@ def test_drive_probe_visibility_timeout_reports_target_and_cleans_only_probe(tmp
         attempts.append((parent_id, name))
         return None
 
-    with pytest.raises(StorageCapacityError, match=r"6 attempts.*results-folder") as error:
+    with pytest.raises(StorageCapacityError, match=r"6 bounded visibility attempts.*results-folder") as error:
         inspect_drive_destination(
             destination_path,
             drive_root=drive_root,
@@ -1704,7 +1868,9 @@ def test_drive_probe_visibility_timeout_reports_target_and_cleans_only_probe(tmp
             probe_metadata_lookup=invisible_metadata,
         )
 
-    assert len(attempts) == 6
+    # Six bounded visibility lookups plus one final read-back proving that
+    # only the exact temporary probe was removed.
+    assert len(attempts) == 7
     assert len({name for _parent, name in attempts}) == 1
     assert sleeps == [1.0, 2.0, 4.0, 8.0, 15.0]
     assert attempts[0][1] in str(error.value)
@@ -1778,7 +1944,7 @@ def test_drive_destination_reports_authenticated_quota_account_and_storage_usage
     assert destination["authenticated_user"] == "researcher@example.org"
     assert destination["destination_owner"] == "researcher@example.org"
     assert destination["quota_account_email"] == "researcher@example.org"
-    assert destination["new_file_quota_bytes"] == 64
+    assert destination["new_file_quota_bytes"] == len(production_workflow.DRIVE_WRITE_PROBE_BYTES)
     assert destination["quota_status"] == "FINITE_VERIFIED"
     assert destination["available_bytes"] == 9_000_000_000
     assert destination["folder_id"] == "results-folder"
@@ -2186,6 +2352,7 @@ def test_matrix_executor_refuses_an_existing_live_matrix_lease(tmp_path):
 
 
 def test_production_capacity_failure_precedes_run_executor_and_writes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
     from revision_r1 import runner as runner_module
 
     preflight = _preflight()
@@ -2205,12 +2372,22 @@ def test_production_capacity_failure_precedes_run_executor_and_writes(tmp_path, 
     output_root = tmp_path / "drive-output"
     checkpoint_root = tmp_path / "drive-checkpoints"
     projection = project_storage(plan, observed_checkpoint_bytes=1000)
+    storage_service = object()
+    output_logical = "/content/drive/MyDrive/ReVision/revision_R1/production/results"
+    checkpoint_logical = "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints"
+    adapter = SimpleNamespace(
+        service=storage_service,
+        logical_path_for_local=lambda path: Path(output_logical) / Path(path).name,
+    )
     snapshot = {
         "canonical_storage_identity_verified": True,
         "destination_owner_verified": True, "write_capability_verified": True,
         "permanent_recovery_delete_verified": True,
         "new_file_owner_verified": True, "quota_metadata_verified": True,
         "output_path": str(output_root.resolve()), "checkpoint_path": str(checkpoint_root.resolve()),
+        "output_destination": {"configured_path": output_logical},
+        "checkpoint_destination": {"configured_path": checkpoint_logical},
+        "quota_status": "FINITE_VERIFIED",
         "drive_available_bytes": 0, "local_available_bytes": 0,
     }
     monkeypatch.setattr(runner_module, "run_one", lambda *args, **kwargs: pytest.fail("runner must not start when capacity gate fails"))
@@ -2223,6 +2400,8 @@ def test_production_capacity_failure_precedes_run_executor_and_writes(tmp_path, 
             local_checkpoint_root=tmp_path / "local-stage", schedule_path=schedule_path,
             production_authorized=True, device="cuda", storage_snapshot=snapshot,
             storage_projection=projection, capacity_scope="first_run",
+            api_factory=lambda: storage_service, storage_adapter=adapter,
+            logical_output_root=output_logical, logical_checkpoint_root=checkpoint_logical,
         )
 
     assert not output_root.exists()

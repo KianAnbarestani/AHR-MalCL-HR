@@ -14,6 +14,7 @@ COMPATIBILITY_MANIFEST_NAME = "checkpoint_compatibility.json"
 INFRASTRUCTURE_ONLY_CHANGES = {
     "checkpointing.py", "resources.py", "runner.py", "storage.py", "validation_workflow.py",
 }
+ADDED_INFRASTRUCTURE_MODULES = {"compatibility.py", "drive_storage.py"}
 
 
 def _stable_ast_dump(node: ast.AST) -> str:
@@ -142,7 +143,7 @@ def verify_checkpoint_compatibility(package_root: str | Path | None = None) -> d
         if name not in observed_modules or observed_modules[name] != baseline_hash
     }
     added = set(observed_modules) - set(baseline_modules)
-    if changed != INFRASTRUCTURE_ONLY_CHANGES or added != {"compatibility.py"}:
+    if changed != INFRASTRUCTURE_ONLY_CHANGES or added != ADDED_INFRASTRUCTURE_MODULES:
         raise RuntimeError(
             "runtime source changes exceed the verified checkpoint-only compatibility scope: "
             f"changed={sorted(changed)}, added={sorted(added)}"

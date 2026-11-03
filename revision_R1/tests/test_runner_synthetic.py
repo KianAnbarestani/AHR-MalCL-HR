@@ -35,6 +35,27 @@ def _config(arm):
     )
 
 
+@pytest.fixture(autouse=True)
+def _synthetic_cpu_fixture_has_planned_memory_headroom(monkeypatch):
+    """Keep CPU algorithm fixtures independent of the host's transient cgroup pressure.
+
+    Dedicated resource tests verify the real RAM gate; these tiny synthetic
+    runner fixtures exercise training/resume behavior, not machine capacity.
+    """
+    from revision_r1 import resources
+
+    actual_snapshot = resources.read_host_memory_snapshot
+
+    def fixture_snapshot():
+        facts = actual_snapshot()
+        facts["effective_available_bytes"] = max(
+            int(facts.get("effective_available_bytes") or 0), 8 << 30,
+        )
+        return facts
+
+    monkeypatch.setattr(resources, "read_host_memory_snapshot", fixture_snapshot)
+
+
 def _run_all(tmp_path):
     results = {}
     for arm in ("current_only", "anchor_only", "generated_only", "full_hybrid", "derpp_matched"):

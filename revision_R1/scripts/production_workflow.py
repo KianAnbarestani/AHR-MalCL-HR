@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -62,6 +63,7 @@ CHECKPOINT_PUBLICATION_RETRY_DELAYS_SECONDS = (1.0, 3.0)
 _DRIVE_WRITE_PROBE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 _BOUND_DRIVE_API_SERVICE = None
 _BOUND_STORAGE_SESSION: dict[str, Any] | None = None
+_BOUND_STORAGE_ADAPTER = None
 V62_RECOVERY_BUILD_ID = "revision_R1_colab_validation_v6_2_final_gan_recovery_qa"
 V62_RECOVERY_WORKFLOW_ID = "2b4d8f5f1f29a938"
 V62_RECOVERY_REPORT_NAME = "resume_validation_2b4d8f5f1f29a938_20261026T142320Z_946699443.json"
@@ -816,18 +818,20 @@ def verify_canonical_storage_session(
     expected_revision_folder_id: str = CANONICAL_REVISION_FOLDER_ID,
     path_bindings: dict[str, str | Path] | None = None,
     required_path_keys: tuple[str, ...] = (),
+    conditional_update_probe=None,
+    storage_adapter=None,
 ) -> dict[str, Any]:
-    """Bind mounted filesystem storage and Drive API to the canonical owner account.
+    """Bind canonical API storage independently of the Colab DriveFS account.
 
-    The mount itself is probed by creating, reading, and deleting one unique
-    tiny file in the exact ReVision folder. Drive API metadata must show that
-    same file under the canonical folder ID and owned by the same account as
-    the API quota snapshot. The bound API client is then reused by production
-    helpers so they cannot silently fall back to credentials for another user.
+    The write probe is uploaded, read back, inspected, and deleted using the
+    exact explicit-OAuth API service that production storage uses. The mounted
+    filesystem is deliberately not used to create, read, or remove this probe;
+    it may be authenticated as a different compute account.
     """
-    global _BOUND_DRIVE_API_SERVICE, _BOUND_STORAGE_SESSION
+    global _BOUND_DRIVE_API_SERVICE, _BOUND_STORAGE_SESSION, _BOUND_STORAGE_ADAPTER
     _BOUND_DRIVE_API_SERVICE = None
     _BOUND_STORAGE_SESSION = None
+    _BOUND_STORAGE_ADAPTER = None
     clear_verified_drive_api_service()
     _DRIVE_WRITE_PROBE_CACHE.clear()
     expected_account = str(expected_account_email).strip().lower()
@@ -862,10 +866,19 @@ def verify_canonical_storage_session(
         raise StorageCapacityError("main storage account lacks verified canAddChildren permission on canonical ReVision")
 
     mount_root = Path(drive_mount_root).expanduser()
-    revision_mount_path = mount_root / "ReVision"
-    if not revision_mount_path.is_dir():
+    if storage_adapter is None:
         raise StorageCapacityError(
-            f"canonical ReVision is not visible as a directory in the selected Drive mount: {revision_mount_path}"
+            "canonical storage verification requires the DriveApiStorage adapter; "
+            "the DriveFS mount or legacy direct probe cannot authorize durable writes"
+        )
+    if (
+        storage_adapter.service is not service
+        or storage_adapter.expected_account_email != expected_account
+        or storage_adapter.revision_folder_id != str(expected_revision_folder_id)
+        or Path(storage_adapter.logical_revision_root).absolute() != (mount_root / "ReVision").absolute()
+    ):
+        raise StorageCapacityError(
+            "canonical storage adapter is not bound to this verified OAuth service/account/ReVision folder"
         )
     bindings: dict[str, Any] = {}
     for key, raw_path in (path_bindings or {}).items():
@@ -875,11 +888,6 @@ def verify_canonical_storage_session(
         if key in required_path_keys and not exists:
             raise StorageCapacityError(
                 f"required storage folder {key!r} is not visible under the authenticated main account: {configured}"
-            )
-        if exists and not Path(configured).is_dir():
-            raise StorageCapacityError(
-                f"Drive API resolves {key!r} to folder {location.get('folder_id')!r}, "
-                f"but that exact logical folder is not visible in the mounted filesystem: {configured}"
             )
         bindings[key] = {
             "configured_path": configured,
@@ -891,8 +899,10 @@ def verify_canonical_storage_session(
         }
 
     probe = _write_capability_probe(
-        revision_mount_path, revision, authenticated_user, service,
+        mount_root / "ReVision",
+        revision, authenticated_user, service,
         drive_root=mount_root, delete_service=service,
+        storage_adapter=storage_adapter,
     )
     if (
         probe.get("new_file_owner") != expected_account
@@ -901,7 +911,20 @@ def verify_canonical_storage_session(
         or probe.get("permanent_recovery_delete_verified") is not True
     ):
         raise StorageCapacityError(
-            "canonical mount probe did not verify main-account ownership, exact ReVision parent, and cleanup capability"
+            "canonical OAuth API probe did not verify main-account ownership, exact ReVision parent, and cleanup capability"
+        )
+    lock_parent_id = str(
+        (bindings.get("output_root") or {}).get("folder_id")
+        or revision.get("folder_id")
+    )
+    from revision_r1.drive_storage import verify_conditional_update_support
+    conditional_update = (conditional_update_probe or verify_conditional_update_support)(
+        service, parent_id=lock_parent_id, expected_account_email=expected_account,
+    )
+    if not isinstance(conditional_update, dict) or conditional_update.get("status") != "PASS":
+        raise StorageCapacityError(
+            "canonical Drive storage cannot prove stale lease updates are rejected; "
+            "production worker launch remains disabled"
         )
     account_after = _drive_account_snapshot(service)
     if account_after["authenticated_user"] != expected_account:
@@ -920,12 +943,16 @@ def verify_canonical_storage_session(
         "canonical_revision_folder_id": str(expected_revision_folder_id),
         "canonical_revision_owner": revision.get("owner_email"),
         "canonical_revision_traversed_shortcut": revision.get("traversed_shortcut") is True,
+        "durable_storage_backend": "explicit_main_account_drive_api_with_local_staging",
+        "drivefs_mount_identity_used_for_durable_writes": False,
+        "lease_compare_and_swap": conditional_update,
         "probe": probe,
         "path_bindings": bindings,
     }
     bind_verified_drive_api_service(service, expected_account_email=expected_account)
     _BOUND_DRIVE_API_SERVICE = service
     _BOUND_STORAGE_SESSION = evidence
+    _BOUND_STORAGE_ADAPTER = storage_adapter
     return evidence
 
 
@@ -1352,42 +1379,119 @@ def publish_verified_drive_checkpoint_generation(
 def _write_capability_probe(
     path: str | Path, location: dict[str, Any], authenticated_user: str, service,
     *, drive_root: str | Path, metadata_lookup=None, delete_service=None,
+    api_create=None, api_read=None, storage_adapter=None,
 ) -> dict[str, Any]:
-    """Create/read/remove one tiny destination file and verify ownership/deletion capability."""
+    """Probe the same main-account API path used for durable Drive writes.
+
+    ``path`` is retained as a logical destination for diagnostics only. Local
+    staging is under the host temporary directory, never under DriveFS.
+    """
     configured = Path(path).expanduser()
-    target = configured.resolve()
-    if target.exists():
-        if not target.is_dir() or location.get("path_exists") is not True or not location.get("folder_id"):
-            raise StorageCapacityError("write-capability probe cannot bind the mounted path to the resolved Drive folder")
-        probe_directory = target
+    if location.get("path_exists") is True:
+        if not location.get("folder_id"):
+            raise StorageCapacityError("API write-capability probe has no exact existing destination folder ID")
         parent_id = str(location["folder_id"])
         probe_scope = "exact_existing_destination"
     else:
-        if location.get("path_exists") is True:
-            raise StorageCapacityError("write-capability probe cannot find the API-resolved folder in the mounted Drive path")
-        probe_directory = _nearest_existing_directory(configured)
         parent_id = str(location.get("parent_id") or "")
         if not parent_id:
-            raise StorageCapacityError("write-capability probe has no resolved existing Drive parent")
-        try:
-            probe_directory.relative_to(Path(drive_root).expanduser().resolve())
-        except ValueError as exc:
-            raise StorageCapacityError("write-capability probe's existing parent is outside the mounted My Drive") from exc
+            raise StorageCapacityError("API write-capability probe has no exact resolved Drive parent ID")
         probe_scope = "nearest_existing_parent_for_not_yet_created_destination"
 
     name = f".revision-r1-capacity-probe-{uuid.uuid4().hex}.bin"
-    probe_path = probe_directory / name
+    if storage_adapter is not None:
+        configured_path, components = _logical_drive_path_components(path, drive_root=drive_root)
+        if location.get("path_exists") is True:
+            logical_parent = Path(configured_path)
+        else:
+            unresolved = location.get("unresolved_components")
+            if not isinstance(unresolved, list) or len(unresolved) > len(components):
+                raise StorageCapacityError("API probe cannot derive the verified nearest existing logical folder")
+            resolved_count = len(components) - len(unresolved)
+            logical_parent = Path(drive_root).expanduser().absolute().joinpath(*components[:resolved_count])
+        logical_probe = logical_parent / name
+        try:
+            adapter_result = storage_adapter.probe_write(
+                logical_probe, DRIVE_WRITE_PROBE_BYTES, expected_parent_id=parent_id,
+            )
+        except Exception as exc:
+            raise StorageCapacityError(
+                f"main-account API adapter probe failed at {logical_probe}: {type(exc).__name__}: {exc}"
+            ) from exc
+        diagnostics = adapter_result.get("diagnostics")
+        observed = diagnostics.get("observed", {}) if isinstance(diagnostics, dict) else {}
+        if (
+            adapter_result.get("status") != "PASS"
+            or adapter_result.get("parent_id") != parent_id
+            or adapter_result.get("owner") != authenticated_user
+            or adapter_result.get("ownedByMe") is not True
+            or adapter_result.get("size") != len(DRIVE_WRITE_PROBE_BYTES)
+            or not isinstance(adapter_result.get("quotaBytesUsed"), int)
+            or adapter_result.get("quotaBytesUsed", 0) <= 0
+            or adapter_result.get("delete_verified") is not True
+        ):
+            raise StorageCapacityError(
+                "main-account API adapter probe did not verify exact owner/parent/quota/read-back/cleanup: "
+                + json.dumps(diagnostics or {"observed": observed}, sort_keys=True, default=str)
+            )
+        return {
+            "status": "PASS", "probe_name": name,
+            "probe_parent_id": parent_id, "new_file_owner": adapter_result["owner"],
+            "new_file_owned_by_authenticated_user": adapter_result["ownedByMe"],
+            "new_file_quota_bytes": adapter_result["quotaBytesUsed"],
+            "new_file_size_bytes": adapter_result["size"],
+            "quota_usage_before_probe_bytes": adapter_result.get("quota_usage_before_bytes"),
+            "quota_usage_during_probe_bytes": adapter_result.get("quota_usage_during_bytes"),
+            "quota_limit_during_probe_bytes": adapter_result.get("quota_limit_during_bytes"),
+            "probe_scope": probe_scope, "probe_completed_unix": time.time(),
+            "permanent_recovery_delete_verified": adapter_result["delete_verified"],
+            "permanent_delete_probe_file_id": adapter_result["file_id"],
+            "permanent_delete_probe_error": None,
+            "diagnostics": diagnostics,
+            "write_path": "DriveApiStorage.publish_file_download_file_delete_exact",
+        }
     lookup = metadata_lookup or _lookup_drive_child
+    create = api_create or _drive_api_create_binary_file
+    read = api_read or _drive_api_read_bytes
     probe_deleted_by_api = False
     permanent_delete_verified = False
     permanent_delete_error = None
+    probe_id = None
+    expected = {
+        "file_id": "non-empty API-created file ID",
+        "parent_id": parent_id,
+        "owner": authenticated_user,
+        "ownedByMe": True,
+        "size": len(DRIVE_WRITE_PROBE_BYTES),
+        "quotaBytesUsed": "positive integer",
+        "api_visible": True,
+    }
     try:
-        with probe_path.open("xb") as stream:
-            stream.write(DRIVE_WRITE_PROBE_BYTES)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if probe_path.read_bytes() != DRIVE_WRITE_PROBE_BYTES:
-            raise StorageCapacityError("mounted Drive write-capability probe failed byte-for-byte read-back")
+        fd, scratch_name = tempfile.mkstemp(prefix="revision-r1-api-write-probe-", suffix=".bin")
+        probe_path = Path(scratch_name)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(DRIVE_WRITE_PROBE_BYTES)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if probe_path.read_bytes() != DRIVE_WRITE_PROBE_BYTES:
+                raise StorageCapacityError("local staging probe failed byte-for-byte verification")
+        finally:
+            probe_path.unlink(missing_ok=True)
+
+        created = create(service, parent_id, name, DRIVE_WRITE_PROBE_BYTES)
+        if not isinstance(created, dict):
+            raise StorageCapacityError("main-account Drive API probe create returned no file metadata")
+        raw_probe_id = created.get("id")
+        if isinstance(raw_probe_id, str) and raw_probe_id:
+            probe_id = raw_probe_id
+
+        if probe_id is None:
+            raise StorageCapacityError("main-account Drive API probe create returned no exact file ID")
+        readback = read(service, probe_id)
+        if not isinstance(readback, (bytes, bytearray)) or bytes(readback) != DRIVE_WRITE_PROBE_BYTES:
+            raise StorageCapacityError("main-account Drive API probe failed byte-for-byte media read-back")
+
         metadata = None
         lookup_attempts = 0
         for retry_delay in (0.0, *DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS):
@@ -1398,52 +1502,105 @@ def _write_capability_probe(
             if metadata is not None:
                 break
         if not isinstance(metadata, dict):
+            observed = {
+                "file_id": probe_id, "parent_id": None, "owner": None,
+                "ownedByMe": None, "size": None, "quotaBytesUsed": None,
+                "api_visible": False,
+            }
+            diagnostics = _write_probe_diagnostics(expected, observed, metadata_status="MISSING_OR_STALE_METADATA")
             raise StorageCapacityError(
-                "Drive API could not verify the mounted write-capability probe in its exact parent "
-                f"after {lookup_attempts} attempts; probe_name={name!r}, parent_id={parent_id!r}, "
-                f"mounted_path={str(probe_path)!r}. Mounted write/read-back succeeded, but API visibility, "
-                "new-file ownership, and quota attribution remain unverified."
+                "main-account API probe payload was created and read back, but metadata remained missing/stale "
+                f"after {lookup_attempts} bounded visibility attempts: {json.dumps(diagnostics, sort_keys=True)}"
             )
         file_owner = _owner_email(metadata)
         parents = [str(value) for value in metadata.get("parents", [])]
-        quota_bytes = _optional_nonnegative_int(metadata.get("quotaBytesUsed"), "probe file quotaBytesUsed")
-        if (
-            metadata.get("name") != name
-            or parent_id not in parents
-            or metadata.get("mimeType") == DRIVE_FOLDER_MIME
-            or file_owner != authenticated_user
-            or metadata.get("ownedByMe") is not True
-            or quota_bytes is None
-            or quota_bytes <= 0
-        ):
+        def probe_integer(value):
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return max(0, int(value))
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+        quota_bytes = probe_integer(metadata.get("quotaBytesUsed"))
+        size = probe_integer(metadata.get("size"))
+        observed = {
+            "file_id": metadata.get("id"),
+            "parent_id": parents[0] if len(parents) == 1 else parents,
+            "owner": file_owner,
+            "ownedByMe": metadata.get("ownedByMe"),
+            "size": size,
+            "quotaBytesUsed": quota_bytes,
+            "api_visible": True,
+        }
+        mismatch_fields = []
+        if metadata.get("id") and metadata.get("id") != probe_id:
+            mismatch_fields.append("file_id")
+        if metadata.get("name") and metadata.get("name") != name:
+            mismatch_fields.append("name")
+        if parents and parent_id not in parents:
+            mismatch_fields.append("parent_id")
+        if metadata.get("mimeType") == DRIVE_FOLDER_MIME:
+            mismatch_fields.append("mimeType")
+        if (file_owner is not None and file_owner != authenticated_user) or metadata.get("ownedByMe") is False:
+            mismatch_fields.append("owner")
+        if size is None or size != len(DRIVE_WRITE_PROBE_BYTES):
+            mismatch_fields.append("size")
+        if quota_bytes is None or quota_bytes <= 0:
+            mismatch_fields.append("quotaBytesUsed")
+        diagnostics = _write_probe_diagnostics(expected, observed, metadata_status="VISIBLE")
+        missing_fields = [
+            field for field, condition in diagnostics["conditions"].items()
+            if condition["status"] == "MISSING_OR_STALE"
+        ]
+        if (file_owner is not None and file_owner != authenticated_user) or metadata.get("ownedByMe") is False:
+            diagnostics["classification"] = "CONFIRMED_OWNERSHIP_MISMATCH"
             raise StorageCapacityError(
-                "Drive write-capability probe could not verify exact parent, creator ownership, and positive quotaBytesUsed"
+                "confirmed ownership mismatch for main-account API probe: "
+                + json.dumps(diagnostics, sort_keys=True)
             )
-        probe_id = metadata.get("id")
-        if not isinstance(probe_id, str) or not probe_id:
-            permanent_delete_error = "Drive API did not return the exact probe file ID"
-        elif delete_service is None:
+        if parents and parent_id not in parents:
+            diagnostics["classification"] = "CONFIRMED_PARENT_MISMATCH"
+            raise StorageCapacityError(
+                "confirmed parent mismatch for main-account API probe: "
+                + json.dumps(diagnostics, sort_keys=True)
+            )
+        if mismatch_fields or missing_fields:
+            diagnostics["classification"] = "MISSING_OR_STALE_METADATA"
+            diagnostics["mismatched_fields"] = mismatch_fields
+            diagnostics["missing_or_stale_fields"] = missing_fields
+            raise StorageCapacityError(
+                "main-account API probe metadata is incomplete or stale: "
+                + json.dumps(diagnostics, sort_keys=True)
+            )
+
+        account_during_probe = _drive_account_snapshot(service)
+        if account_during_probe["authenticated_user"] != authenticated_user:
+            raise StorageCapacityError("authenticated storage account changed during the API write-capability probe")
+        if delete_service is None:
             permanent_delete_error = "Drive files.delete capability could not be authorized"
         else:
             try:
                 delete_service.files().delete(fileId=probe_id, supportsAllDrives=True).execute()
-                probe_deleted_by_api = lookup(service, parent_id, name) is None
-                permanent_delete_verified = probe_deleted_by_api
+                for retry_delay in (0.0, *DRIVE_PROBE_VISIBILITY_RETRY_DELAYS_SECONDS):
+                    if retry_delay:
+                        time.sleep(retry_delay)
+                    if lookup(service, parent_id, name) is None:
+                        probe_deleted_by_api = True
+                        permanent_delete_verified = True
+                        break
                 if not permanent_delete_verified:
                     permanent_delete_error = "Drive API still listed the exact probe after files.delete"
             except Exception as exc:
-                # Resolve ambiguous API errors before falling back to removing
-                # only this probe through the mounted path.
-                try:
-                    probe_deleted_by_api = lookup(service, parent_id, name) is None
-                    permanent_delete_verified = probe_deleted_by_api
-                except Exception:
-                    probe_deleted_by_api = False
-                permanent_delete_error = None if permanent_delete_verified else f"Drive files.delete probe failed: {exc}"
-        size = _optional_nonnegative_int(metadata.get("size"), "probe file size")
-        account_during_probe = _drive_account_snapshot(service)
-        if account_during_probe["authenticated_user"] != authenticated_user:
-            raise StorageCapacityError("authenticated Google account changed during the write-capability probe")
+                permanent_delete_error = f"Drive API probe cleanup failed: {type(exc).__name__}"
+        if not permanent_delete_verified:
+            raise StorageCapacityError(
+                "main-account API probe passed write/read-back but exact-ID cleanup was not verified: "
+                + json.dumps({
+                    "file_id": probe_id, "parent_id": parent_id, "name": name,
+                    "api_deleted": probe_deleted_by_api, "error": permanent_delete_error,
+                }, sort_keys=True)
+            )
         return {
             "status": "PASS",
             "probe_name": name,
@@ -1457,26 +1614,95 @@ def _write_capability_probe(
             "probe_scope": probe_scope,
             "probe_completed_unix": time.time(),
             "permanent_recovery_delete_verified": permanent_delete_verified,
-            "permanent_delete_probe_file_id": probe_id if isinstance(probe_id, str) else None,
+            "permanent_delete_probe_file_id": probe_id,
             "permanent_delete_probe_error": permanent_delete_error,
+            "diagnostics": diagnostics,
+            "write_path": "explicit_main_account_drive_api_with_local_staging",
         }
     except FileExistsError as exc:
-        raise StorageCapacityError("unique write-capability probe name unexpectedly already exists; no existing file was modified") from exc
+        raise StorageCapacityError("unique API write-capability probe name unexpectedly already exists; no existing file was modified") from exc
     except OSError as exc:
-        raise StorageCapacityError(f"mounted Drive write-capability probe failed at {probe_path}: {exc}") from exc
+        raise StorageCapacityError(f"local staging for the API write-capability probe failed: {exc}") from exc
     finally:
-        if probe_path.exists():
+        if probe_id is not None and delete_service is not None and not probe_deleted_by_api:
             try:
-                probe_path.unlink()
-            except OSError as exc:
+                delete_service.files().delete(fileId=probe_id, supportsAllDrives=True).execute()
+                probe_deleted_by_api = lookup(service, parent_id, name) is None
+                permanent_delete_verified = probe_deleted_by_api
+                if not permanent_delete_verified:
+                    permanent_delete_error = "Drive API still listed the exact probe after files.delete"
+            except Exception as exc:
+                try:
+                    probe_deleted_by_api = lookup(service, parent_id, name) is None
+                    permanent_delete_verified = probe_deleted_by_api
+                except Exception:
+                    probe_deleted_by_api = False
+                permanent_delete_error = None if permanent_delete_verified else f"Drive API probe cleanup failed: {type(exc).__name__}"
+        if probe_id is not None and not probe_deleted_by_api:
+            # Cleanup failures must be surfaced with the exact disposable ID;
+            # never fall back to deleting by a broad filename or through DriveFS.
+            cleanup = {
+                "file_id": probe_id, "parent_id": parent_id, "name": name,
+                "api_deleted": False, "error": permanent_delete_error,
+            }
+            if not sys.exc_info()[0]:
                 raise StorageCapacityError(
-                    f"could not remove the exact temporary Drive capacity probe {probe_path}; no other file was touched: {exc}"
-                ) from exc
+                    "could not verify cleanup of the exact temporary API probe: "
+                    + json.dumps(cleanup, sort_keys=True)
+                )
 
 
+def _write_probe_diagnostics(expected: dict[str, Any], observed: dict[str, Any], *, metadata_status: str) -> dict[str, Any]:
+    """Return field-by-field sanitized expectations without credentials/tokens."""
+    conditions = {}
+    for key in ("file_id", "parent_id", "owner", "ownedByMe", "size", "quotaBytesUsed", "api_visible"):
+        value = observed.get(key)
+        target = expected.get(key)
+        if key == "file_id":
+            passed = isinstance(value, str) and bool(value)
+        elif key == "quotaBytesUsed":
+            passed = type(value) is int and value > 0
+        elif key == "api_visible":
+            passed = value is True
+        elif key == "parent_id" and isinstance(value, list):
+            passed = target in value
+        elif key == "size":
+            passed = type(value) is int and value == target
+        else:
+            passed = value == target
+        conditions[key] = {
+            "status": "PASS" if passed else "MISMATCH" if value is not None else "MISSING_OR_STALE",
+            "expected": target, "observed": value,
+        }
+    return {
+        "classification": "VERIFIED" if all(item["status"] == "PASS" for item in conditions.values()) else metadata_status,
+        "expected_owner": expected.get("owner"),
+        "observed_owner": observed.get("owner"),
+        "conditions": conditions,
+        "expected": dict(expected), "observed": dict(observed),
+    }
+
+
+def _drive_api_create_binary_file(service, parent_id: str, name: str, payload: bytes) -> dict[str, Any]:
+    from googleapiclient.http import MediaIoBaseUpload
+
+    media = MediaIoBaseUpload(io.BytesIO(payload), mimetype="application/octet-stream", resumable=False)
+    return service.files().create(
+        body={"name": name, "mimeType": "application/octet-stream", "parents": [parent_id]},
+        media_body=media, fields="id,name,mimeType,parents,owners(emailAddress),ownedByMe,size,quotaBytesUsed",
+        supportsAllDrives=True,
+    ).execute()
+
+
+def _drive_api_read_bytes(service, file_id: str) -> bytes:
+    payload = service.files().get(fileId=file_id, alt="media", supportsAllDrives=True).execute()
+    if not isinstance(payload, (bytes, bytearray)):
+        raise StorageCapacityError(f"Drive API returned non-byte media for exact file ID {file_id!r}")
+    return bytes(payload)
 def _verified_write_capability(
     path: str | Path, location: dict[str, Any], authenticated_user: str, service,
     *, drive_root: str | Path, metadata_lookup=None, delete_api_factory=None,
+    storage_adapter=None,
 ) -> dict[str, Any]:
     folder_binding = str(location.get("folder_id") or f"{location.get('parent_id')}:{'/'.join(location.get('unresolved_components', []))}")
     cache_key = (authenticated_user, folder_binding)
@@ -1499,6 +1725,7 @@ def _verified_write_capability(
     result = _write_capability_probe(
         path, location, authenticated_user, service,
         drive_root=drive_root, metadata_lookup=metadata_lookup, delete_service=delete_service,
+        storage_adapter=storage_adapter,
     )
     if delete_service_error and not result.get("permanent_recovery_delete_verified"):
         result["permanent_delete_probe_error"] = delete_service_error
@@ -1509,7 +1736,7 @@ def _verified_write_capability(
 
 def inspect_drive_destination(
     path: str | Path, *, api_factory=None, drive_root: str | Path = "/content/drive/MyDrive",
-    probe_metadata_lookup=None, delete_api_factory=None,
+    probe_metadata_lookup=None, delete_api_factory=None, storage_adapter=None,
 ) -> dict[str, Any]:
     """Verify exact My Drive path, Editor write access, creator quota attribution, and capacity."""
     configured, components = _logical_drive_path_components(path, drive_root=drive_root)
@@ -1520,6 +1747,22 @@ def inspect_drive_destination(
     service = (api_factory or _drive_api_service)()
     if _BOUND_STORAGE_SESSION is not None and service is not _BOUND_DRIVE_API_SERVICE:
         raise StorageCapacityError("Drive operation attempted with a client outside the verified canonical storage session")
+    if storage_adapter is None and _BOUND_STORAGE_SESSION is not None:
+        storage_adapter = _BOUND_STORAGE_ADAPTER
+    if _BOUND_STORAGE_SESSION is not None and storage_adapter is None:
+        raise StorageCapacityError(
+            "canonical Drive capacity probes require the verified API storage adapter; direct API/DriveFS probe rejected"
+        )
+    if storage_adapter is not None and (
+        storage_adapter.service is not service
+        or storage_adapter.expected_account_email != _drive_account_snapshot(service)["authenticated_user"]
+        or storage_adapter.revision_folder_id != str(CANONICAL_REVISION_FOLDER_ID)
+        or Path(storage_adapter.logical_revision_root).absolute()
+        != (Path(drive_root).expanduser().absolute() / "ReVision")
+    ):
+        raise StorageCapacityError(
+            "write-capability probe adapter differs from the verified Drive account/service/ReVision folder"
+        )
     account_before = _drive_account_snapshot(service)
     authenticated_user = account_before["authenticated_user"]
     location = resolve_drive_folder(service, components)
@@ -1536,6 +1779,7 @@ def inspect_drive_destination(
             delete_api_factory
             or ((lambda: service) if api_factory is not None else None)
         ),
+        storage_adapter=storage_adapter,
     )
     account_after = _drive_account_snapshot(service)
     if account_after["authenticated_user"] != authenticated_user:
@@ -2675,6 +2919,7 @@ def _preflight_addressed_cache_bytes(
 def inspect_production_capacity(
     output_path: str | Path, checkpoint_path: str | Path, local_path: str | Path,
     cache_root: str | Path, *, api_factory=None,
+    storage_adapter=None,
     current_run_output_path: str | Path | None = None,
     current_run_checkpoint_path: str | Path | None = None,
     current_run_local_checkpoint_path: str | Path | None = None,
@@ -2685,8 +2930,12 @@ def inspect_production_capacity(
     if _BOUND_STORAGE_SESSION is not None and api_factory is not None:
         if api_factory() is not _BOUND_DRIVE_API_SERVICE:
             raise StorageCapacityError("capacity check attempted with a Drive client outside the verified storage session")
-    output_destination = inspect_drive_destination(output_path, api_factory=api_factory)
-    checkpoint_destination = inspect_drive_destination(checkpoint_path, api_factory=api_factory)
+    output_destination = inspect_drive_destination(
+        output_path, api_factory=api_factory, storage_adapter=storage_adapter,
+    )
+    checkpoint_destination = inspect_drive_destination(
+        checkpoint_path, api_factory=api_factory, storage_adapter=storage_adapter,
+    )
     same_account = output_destination["quota_account_email"] == checkpoint_destination["quota_account_email"]
     if not same_account:
         raise StorageCapacityError("output and checkpoint roots were inspected under different authenticated quota accounts")
@@ -2694,9 +2943,16 @@ def inspect_production_capacity(
     local_usage = shutil.disk_usage(local_directory)
     current_drive_bytes = 0
     if current_run_output_path is not None:
-        current_drive_bytes += _tree_file_bytes(current_run_output_path)
+        current_drive_bytes += (
+            storage_adapter.tree_bytes(storage_adapter.logical_path_for_local(current_run_output_path))
+            if storage_adapter is not None else _tree_file_bytes(current_run_output_path)
+        )
     if current_run_checkpoint_path is not None:
-        current_drive_bytes += _tree_file_bytes(current_run_checkpoint_path, expected_identity=expected_run_identity)
+        current_drive_bytes += (
+            storage_adapter.tree_bytes(storage_adapter.logical_path_for_local(current_run_checkpoint_path))
+            if storage_adapter is not None else
+            _tree_file_bytes(current_run_checkpoint_path, expected_identity=expected_run_identity)
+        )
     current_local_bytes = (
         _tree_file_bytes(current_run_local_checkpoint_path, expected_identity=expected_run_identity)
         if current_run_local_checkpoint_path is not None else 0
@@ -5130,10 +5386,17 @@ def reuse_validated_first_run_measurement(
 
 
 class _MatrixLeaseHeartbeat:
-    def __init__(self, path: Path, *, interval_seconds: float = 60.0, ttl_seconds: float = 300.0):
-        from revision_r1.locking import RunLease
-
-        self.lease = RunLease(path, ttl_seconds=ttl_seconds)
+    def __init__(self, path: Path, *, interval_seconds: float = 60.0, ttl_seconds: float = 300.0,
+                 storage_adapter=None):
+        if storage_adapter is None:
+            from revision_r1.locking import RunLease
+            self.lease = RunLease(path, ttl_seconds=ttl_seconds)
+        else:
+            from revision_r1.drive_storage import DriveApiLease
+            logical_path = storage_adapter.logical_path_for_local(path)
+            self.lease = DriveApiLease(
+                storage_adapter, logical_path, ttl_seconds=ttl_seconds,
+            )
         self.interval_seconds = float(interval_seconds)
         self.lost = threading.Event()
         self._stop = threading.Event()
@@ -5158,6 +5421,168 @@ class _MatrixLeaseHeartbeat:
         if self._thread is not None:
             self._thread.join(timeout=max(1.0, self.interval_seconds + 1.0))
         self.lease.release()
+
+
+def _api_storage_include_nonlease(logical_path: Path, metadata: dict[str, Any]) -> bool:
+    del metadata
+    return logical_path.name not in {
+        ".run.lease.json", ".matrix_execution.lease.json", ".recovering",
+    } and not logical_path.name.endswith(".tmp")
+
+
+def _hydrate_api_folder(storage_adapter, logical_folder: Path, local_folder: Path) -> list[dict[str, Any]]:
+    if storage_adapter is None:
+        raise StorageCapacityError("production storage adapter is missing; DriveFS fallback is disabled")
+    try:
+        return storage_adapter.download_tree(
+            logical_folder, local_folder, include=_api_storage_include_nonlease,
+        )
+    except FileNotFoundError:
+        return []
+
+
+def _hydrate_api_run_state(storage_adapter, root: Path, plan: dict[str, Any], record: dict[str, Any],
+                           output: Path, checkpoints: Path, *, include_recovery: bool = True) -> None:
+    if storage_adapter is None:
+        raise StorageCapacityError("production requires explicit OAuth API storage with local staging")
+    logical_output = storage_adapter.logical_path_for_local(output)
+    _hydrate_api_folder(storage_adapter, logical_output, output)
+    # Recovery generations are sufficient to resume. Task-boundary artifacts
+    # remain durable on Drive and are not downloaded into local staging for a
+    # pending run (they can exceed 13 GB for the already-finalized first run).
+    if include_recovery:
+        logical_recovery = storage_adapter.logical_path_for_local(checkpoints / "recovery")
+        _hydrate_api_folder(storage_adapter, logical_recovery, checkpoints / "recovery")
+    _rebind_staged_completion_paths(output)
+
+
+def _hydrate_api_matrix_registry(storage_adapter, root: Path, plan: dict[str, Any]) -> None:
+    if storage_adapter is None:
+        raise StorageCapacityError("production matrix registry requires explicit OAuth API storage")
+    registry_path = _matrix_registry_path(root, plan)
+    try:
+        storage_adapter.download_file(storage_adapter.logical_path_for_local(registry_path), registry_path)
+    except FileNotFoundError:
+        # A missing registry is acceptable only as the first new run; the
+        # caller still checks the identity-bound Run 1 completion requirement.
+        return
+
+
+def _rebind_staged_completion_paths(run_output: Path) -> None:
+    """Rebind historical COMPLETE marker paths only in local staging.
+
+    The marker's artifact bytes/hashes and run identity are preserved. This is
+    needed because older releases recorded DriveFS absolute paths, whereas the
+    API-backed runtime validates their downloaded copies under local staging.
+    These rewritten staging records are never uploaded for an already-complete
+    historical run.
+    """
+    registry_root = run_output / "registry" / "runs"
+    if not registry_root.is_dir():
+        return
+    for marker_path in registry_root.glob("*/COMPLETE.json"):
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            registry_path = marker_path.parent / "registry.json"
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        artifacts = marker.get("artifacts")
+        if not isinstance(artifacts, dict) or registry.get("completion_artifacts") != artifacts:
+            continue
+        rebound = {}
+        valid = True
+        for label, item in artifacts.items():
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                valid = False
+                break
+            local_file = run_output / Path(item["path"]).name
+            if (
+                not local_file.is_file() or local_file.is_symlink()
+                or local_file.stat().st_size != item.get("bytes")
+                or _file_sha256_path(local_file) != item.get("sha256")
+            ):
+                valid = False
+                break
+            rebound[label] = {**item, "path": str(local_file.resolve())}
+        if not valid:
+            continue
+        marker["artifacts"] = rebound
+        registry["completion_artifacts"] = rebound
+        _atomic_json(marker_path, marker)
+        _atomic_json(registry_path, registry)
+
+
+def _file_sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _api_publish_file(storage_adapter, local_path: str | Path) -> dict[str, Any]:
+    local = Path(local_path).expanduser().resolve()
+    if not local.is_file() or local.is_symlink():
+        raise StorageCapacityError(f"refusing to publish a missing/symlinked local staging artifact: {local}")
+    logical = storage_adapter.logical_path_for_local(local)
+    return storage_adapter.publish_file(
+        local, logical,
+        allow_foreign_owner_update=storage_adapter.is_mutable_control_path(logical),
+    )
+
+
+def _api_publish_checkpoint_generation(storage_adapter, local_directory: Path, identity: dict[str, Any],
+                                       generation: int) -> list[dict[str, Any]]:
+    manifest_path = local_directory / f"generation-{int(generation):06d}.manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StorageCapacityError(f"checkpoint generation manifest is unreadable before API publication: {manifest_path}") from exc
+    payload_name = manifest.get("payload_file") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(manifest, dict) or manifest.get("generation") != int(generation)
+        or manifest.get("identity") != identity
+        or manifest.get("identity_sha256") != _sha256_json(identity)
+        or payload_name != f"generation-{int(generation):06d}.pt"
+    ):
+        raise StorageCapacityError(f"checkpoint generation {generation} failed identity/manifest validation before upload")
+    payload_path = local_directory / payload_name
+    if (
+        not payload_path.is_file() or payload_path.is_symlink()
+        or payload_path.stat().st_size != manifest.get("payload_bytes")
+        or _file_sha256_path(payload_path) != manifest.get("payload_sha256")
+    ):
+        raise StorageCapacityError(f"checkpoint generation {generation} payload failed local integrity validation")
+    # Publish payload first and manifest last. The manifest is the commit record
+    # and cannot become visible before its exact payload is verified by Drive.
+    payload_result = _api_publish_file(storage_adapter, payload_path)
+    manifest_result = _api_publish_file(storage_adapter, manifest_path)
+    return [payload_result, manifest_result]
+
+
+def _api_delete_checkpoint_file(storage_adapter, local_path: str | Path) -> bool:
+    local = Path(local_path).expanduser().resolve()
+    logical = storage_adapter.logical_path_for_local(local)
+    metadata = storage_adapter.exact_file(logical)
+    if metadata is None:
+        return False
+    try:
+        storage_adapter.delete_exact(logical, expected_file_id=str(metadata["id"]))
+    except Exception as exc:
+        raise StorageCapacityError(
+            f"API checkpoint retention could not delete the exact verified old file {metadata.get('id')}; local/remote copy preserved"
+        ) from exc
+    return True
+
+
+def _publish_api_tree(storage_adapter, local_root: Path) -> list[dict[str, Any]]:
+    if storage_adapter is None:
+        raise StorageCapacityError("durable publication requires the explicit OAuth API adapter")
+    logical_root = storage_adapter.logical_path_for_local(local_root)
+    return storage_adapter.publish_tree(
+        local_root, logical_root, include=lambda logical, _local: _api_storage_include_nonlease(logical, {}),
+    )
 
 
 def _require_canonical_storage_api_factory(api_factory) -> None:
@@ -5189,6 +5614,9 @@ def execute_frozen_plan_record(
     completed_runs: int = 0,
     matrix_lease: _MatrixLeaseHeartbeat | None = None,
     api_factory=None,
+    storage_adapter=None,
+    logical_output_root: str | Path | None = None,
+    logical_checkpoint_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Execute exactly one plan record through the unmodified runner.
 
@@ -5207,6 +5635,14 @@ def execute_frozen_plan_record(
         raise RuntimeError("production run launch switch is disabled; no run started")
     if not synthetic:
         _require_canonical_storage_api_factory(api_factory)
+        if storage_adapter is None:
+            raise StorageCapacityError("production requires main-account API storage plus local staging; DriveFS writes are disabled")
+        if storage_adapter.service is not api_factory():
+            raise StorageCapacityError("storage adapter is not bound to the exact verified canonical OAuth API service")
+        if logical_output_root is None or logical_checkpoint_root is None:
+            raise StorageCapacityError("production must bind local staging to explicit logical Drive roots")
+    elif storage_adapter is not None and (api_factory is None or storage_adapter.service is not api_factory()):
+        raise StorageCapacityError("synthetic API-storage validation is bound to a different Drive API service")
     validate_frozen_plan(plan, expected_source_sha256=training_source_sha256(Path(__file__).resolve().parents[1]))
     plan_row = next((row for row in plan["runs"] if row.get("run_index") == record.get("run_index")), None)
     if plan_row is None:
@@ -5250,11 +5686,15 @@ def execute_frozen_plan_record(
                 + str(storage_snapshot.get("quota_capacity_note") or "no numeric available-space value was returned")
                 + "; no run started"
             )
+        if storage_adapter is None:
+            raise StorageCapacityError("production capacity evidence has no API storage adapter")
+        output_binding = (storage_snapshot.get("output_destination") or {}).get("configured_path")
+        checkpoint_binding = (storage_snapshot.get("checkpoint_destination") or {}).get("configured_path")
         if (
-            storage_snapshot.get("output_path") != str(Path(output_root).expanduser().resolve())
-            or storage_snapshot.get("checkpoint_path") != str(Path(checkpoint_root).expanduser().resolve())
+            output_binding != str(Path(logical_output_root).expanduser().absolute())
+            or checkpoint_binding != str(Path(logical_checkpoint_root).expanduser().absolute())
         ):
-            raise StorageCapacityError("capacity evidence is bound to different Drive output/checkpoint roots; no run started")
+            raise StorageCapacityError("capacity evidence is bound to different logical Drive roots; no run started")
         require_run_capacity(
             storage_snapshot, storage_projection, scope=capacity_scope,
             completed_runs=completed_runs,
@@ -5272,8 +5712,15 @@ def execute_frozen_plan_record(
         checkpoints = root / "checkpoints" / record["run_key"] / record["config_sha256"][:16]
         local_namespace = Path(local_checkpoint_root).expanduser().resolve() / record["run_key"] / record["config_sha256"][:16]
 
+    if storage_adapter is not None:
+        _hydrate_api_run_state(storage_adapter, root, plan, record, output, checkpoints)
+        # The matrix registry is the authoritative cross-session completion
+        # index. Refresh it before counting or registering this run so a fresh
+        # local staging directory cannot report an existing completion as new.
+        _hydrate_api_matrix_registry(storage_adapter, root, plan)
+
     schedule_for_runner = None if synthetic else schedule_path
-    remote_checkpoint = None if synthetic else checkpoints
+    remote_checkpoint = checkpoints if storage_adapter is not None else None
     if required_resume_manifest is not None:
         if synthetic or remote_checkpoint is None:
             raise ValueError("required Drive resume manifest is only supported for the production runner")
@@ -5348,61 +5795,107 @@ def execute_frozen_plan_record(
             }
         return None
 
-    lease_context = _MatrixLeaseHeartbeat(matrix_lock_path) if matrix_lease is None else contextlib.nullcontext(matrix_lease)
+    if matrix_lease is None and storage_adapter is not None:
+        storage_adapter.ensure_lease_record(storage_adapter.logical_path_for_local(matrix_lock_path))
+    lease_context = (
+        _MatrixLeaseHeartbeat(matrix_lock_path, storage_adapter=storage_adapter)
+        if matrix_lease is None else contextlib.nullcontext(matrix_lease)
+    )
     with lease_context as lease:
         previous_mirror = runner_module.mirror_checkpoint_generations
+        previous_run_registry = runner_module.RunRegistry
+        previous_run_lease = runner_module.RunLease
+
+        if storage_adapter is not None:
+            from revision_r1.drive_storage import DriveApiLease
+
+            class ApiRunRegistry(previous_run_registry):
+                def begin_attempt(self, run_id, *, identity):
+                    result = super().begin_attempt(run_id, identity=identity)
+                    _publish_api_tree(storage_adapter, self.root)
+                    return result
+
+                def fail_attempt(self, run_id, reason):
+                    result = super().fail_attempt(run_id, reason)
+                    _publish_api_tree(storage_adapter, self.root)
+                    return result
+
+                def complete(self, run_id, artifacts):
+                    _publish_api_tree(storage_adapter, self.root.parent)
+                    result = super().complete(run_id, artifacts)
+                    _publish_api_tree(storage_adapter, self.root)
+                    return result
+
+            def api_run_lease(path, *, ttl_seconds=900):
+                logical = storage_adapter.logical_path_for_local(path)
+                storage_adapter.ensure_lease_record(logical)
+                return DriveApiLease(storage_adapter, logical, ttl_seconds=ttl_seconds)
+
+            runner_module.RunRegistry = ApiRunRegistry
+            runner_module.RunLease = api_run_lease
 
         def instrumented_mirror(local_path, drive_path, identity, **kwargs):
             nonlocal latest_drive, drive_write_bytes, drive_write_seconds
             started = time.perf_counter()
             destination = Path(drive_path).resolve()
-            if not synthetic and destination.is_relative_to(checkpoints.resolve()):
+            if storage_adapter is not None and destination.is_relative_to(checkpoints.resolve()):
                 generation = kwargs.get("generation")
-                copied = publish_verified_drive_checkpoint_generation(
-                    previous_mirror, local_path, drive_path, identity,
-                    drive_checkpoint_root=checkpoints,
-                    drive_mount_root="/content/drive/MyDrive",
-                    api_factory=api_factory,
-                    generation=generation,
-                    **kwargs,
-                )
+                published = False
+                publication_results = []
+
+                def publish_before_prune(old_path=None):
+                    nonlocal published, publication_results
+                    if generation is not None and not published:
+                        publication_results = _api_publish_checkpoint_generation(
+                            storage_adapter, destination, identity, int(generation),
+                        )
+                        published = True
+                    if old_path is None:
+                        return True
+                    return _api_delete_checkpoint_file(storage_adapter, old_path)
+
+                call_kwargs = dict(kwargs)
+                if call_kwargs.get("prune_destination", True) and call_kwargs.get("keep", 2) is not None:
+                    call_kwargs["delete_callback"] = publish_before_prune
+                copied = previous_mirror(local_path, drive_path, identity, **call_kwargs)
+                if generation is not None and not published:
+                    publication_results = _api_publish_checkpoint_generation(
+                        storage_adapter, destination, identity, int(generation),
+                    )
             else:
                 copied = previous_mirror(local_path, drive_path, identity, **kwargs)
             elapsed = time.perf_counter() - started
-            if not synthetic and destination.is_relative_to(checkpoints.resolve()):
-                timing = getattr(copied, "timings", {})
-                for name in drive_write_timings:
-                    drive_write_timings[name] += float(timing.get(name, 0.0))
-                for item in copied:
-                    manifest_path = destination / f"generation-{int(item['generation']):06d}.manifest.json"
-                    payload_path = destination / str(item["payload_file"])
-                    try:
-                        readback_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError) as exc:
-                        raise RuntimeError("Drive checkpoint manifest read-back failed after mirror returned") from exc
-                    if (
-                        not manifest_path.is_file() or not payload_path.is_file()
-                        or readback_manifest != item
-                        or payload_path.stat().st_size != int(item["payload_bytes"])
-                    ):
-                        raise RuntimeError("Drive checkpoint manifest/read-back metadata failed after mirror returned")
+            if storage_adapter is not None and destination.is_relative_to(checkpoints.resolve()):
+                logical_directory = storage_adapter.logical_path_for_local(destination)
+                generation = kwargs.get("generation")
+                if generation is not None:
+                    manifest_path = destination / f"generation-{int(generation):06d}.manifest.json"
+                    payload_path = destination / f"generation-{int(generation):06d}.pt"
+                    readback_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    if len(publication_results) == 2:
+                        payload_result, manifest_result = publication_results
+                    else:
+                        payload_result = storage_adapter.publish_file(payload_path, logical_directory / payload_path.name)
+                        manifest_result = storage_adapter.publish_file(manifest_path, logical_directory / manifest_path.name)
+                    if readback_manifest.get("identity") != identity:
+                        raise StorageCapacityError("local mirrored checkpoint identity changed before API publication")
                     latest_drive = {
                         "relative_root": str(destination.relative_to(checkpoints.resolve())),
-                        "generation": int(item["generation"]), "kind": item["kind"],
+                        "generation": int(readback_manifest["generation"]), "kind": readback_manifest["kind"],
                         "manifest_sha256": file_sha256(manifest_path),
-                        "payload_sha256": item["payload_sha256"],
-                        "payload_bytes": int(item["payload_bytes"]),
+                        "payload_sha256": readback_manifest["payload_sha256"],
+                        "payload_bytes": int(readback_manifest["payload_bytes"]),
                         "verified_at_unix": time.time(),
                         "write_seconds": elapsed,
-                        "upload_seconds": float(timing.get("upload_seconds", 0.0)),
-                        "verification_seconds": float(timing.get("verification_seconds", 0.0)),
-                        "pruning_seconds": float(timing.get("pruning_seconds", 0.0)),
-                        "pruning_deferred_files": timing.get("pruning_deferred_files", []),
-                        "pruning_status": timing.get("pruning_skipped"),
+                        "upload_seconds": elapsed,
+                        "verification_seconds": 0.0,
+                        "pruning_seconds": 0.0,
+                        "api_publication": [payload_result, manifest_result],
                         "retained_bytes_after_pruning": int(getattr(copied, "retained_bytes", 0) or 0),
                     }
-                    drive_write_bytes += int(getattr(copied, "bytes_written", 0))
+                    drive_write_bytes += int(payload_result.get("write_bytes", 0)) + int(manifest_result.get("write_bytes", 0))
                 drive_write_seconds += elapsed
+                drive_write_timings["upload_seconds"] += elapsed
             return copied
 
         runner_module.mirror_checkpoint_generations = instrumented_mirror
@@ -5488,10 +5981,17 @@ def execute_frozen_plan_record(
                     "training_source_sha256": plan["training_source_sha256"],
                     "event_log_path": str(event_log_path),
                     "live_progress": formatted,
-                    "matrix_lock_is_best_effort": True,
+                    "matrix_lock_is_best_effort": storage_adapter is None,
+                    "matrix_lock_backend": (
+                        "canonical_drive_api_etag_if_match" if storage_adapter is not None
+                        else "local_filesystem_lock"
+                    ),
                 }
                 _append_progress_jsonl(event_log_path, update)
                 _atomic_json(progress_file, update)
+                if storage_adapter is not None:
+                    _api_publish_file(storage_adapter, event_log_path)
+                    _api_publish_file(storage_adapter, progress_file)
                 callback(update)
                 progress_observer_overhead_seconds += time.perf_counter() - observer_started
                 last_progress_record = update
@@ -5505,9 +6005,9 @@ def execute_frozen_plan_record(
                 drive_checkpoint_root=remote_checkpoint,
                 local_checkpoint_root=local_namespace,
                 drive_delete_callback=(
-                    None if synthetic else
-                    lambda path, **kwargs: permanently_delete_recovery_checkpoint(
-                        path, api_factory=api_factory, **kwargs,
+                    (
+                        (lambda path, **kwargs: _api_delete_checkpoint_file(storage_adapter, path))
+                        if storage_adapter is not None else None
                     )
                 ),
             )
@@ -5530,10 +6030,16 @@ def execute_frozen_plan_record(
             }
             _append_progress_jsonl(event_log_path, failed_event)
             _atomic_json(progress_file, failed_event)
+            if storage_adapter is not None:
+                _api_publish_file(storage_adapter, event_log_path)
+                _api_publish_file(storage_adapter, progress_file)
             callback(failed_event)
             raise
         finally:
             runner_module.mirror_checkpoint_generations = previous_mirror
+            if storage_adapter is not None:
+                runner_module.RunRegistry = previous_run_registry
+                runner_module.RunLease = previous_run_lease
         if lease.lost.is_set():
             raise RuntimeError("matrix lease heartbeat was lost; this run was stopped at a safe checkpoint boundary")
         if result.get("status") == "INTERRUPTED_RESUMABLE":
@@ -5552,6 +6058,9 @@ def execute_frozen_plan_record(
             }
             _append_progress_jsonl(event_log_path, interrupted_event)
             _atomic_json(progress_file, interrupted_event)
+            if storage_adapter is not None:
+                _api_publish_file(storage_adapter, event_log_path)
+                _api_publish_file(storage_adapter, progress_file)
             callback(interrupted_event)
             return {
                 **result, "output_path": str(output), "local_checkpoint_root": str(local_namespace),
@@ -5570,6 +6079,8 @@ def execute_frozen_plan_record(
         matrix_registry, added = _record_completed_run(
             root, plan, record, validated, storage_measurement=storage_measurement,
         )
+        if storage_adapter is not None:
+            _api_publish_file(storage_adapter, _matrix_registry_path(root, plan))
         final_progress = {
             "status": "SYNTHETIC_VALIDATED_NON_REPORTABLE" if synthetic else "COMPLETED_VALIDATED",
             **_run_progress_identity(plan, record),
@@ -5592,6 +6103,13 @@ def execute_frozen_plan_record(
         }
         _append_progress_jsonl(event_log_path, final_progress)
         _atomic_json(progress_file, final_progress)
+        if storage_adapter is not None:
+            _api_publish_file(storage_adapter, event_log_path)
+            _api_publish_file(storage_adapter, progress_file)
+            # ApiRunRegistry publishes the immutable run artifacts before
+            # writing COMPLETE.json, then publishes COMPLETE.json/registry.json
+            # by exact API path. Do not re-upload a hydrated, locally rebound
+            # completion marker here: its staging paths are session-specific.
         callback(final_progress)
         return {
             **result, "status": "ALREADY_VALIDATED" if result.get("status") == "ALREADY_VALIDATED" else result.get("status"),
@@ -5638,20 +6156,30 @@ def execute_first_production_run(
     data_roots: dict[str, str | Path], cache_root: str | Path,
     output_root: str | Path, checkpoint_root: str | Path, local_checkpoint_root: str | Path,
     launch_enabled: bool = False, progress_callback=None, api_factory=None,
+    storage_adapter=None, logical_output_root: str | Path | None = None,
+    logical_checkpoint_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run the first counted production run only after explicit enable + gates."""
     if launch_enabled is not True:
         raise RuntimeError("LAUNCH_FIRST_PRODUCTION_RUN is False; no production run started")
     _require_canonical_storage_api_factory(api_factory)
+    if storage_adapter is None or storage_adapter.service is not api_factory():
+        raise StorageCapacityError("first-run workflow requires the exact verified main-account API storage adapter")
+    if logical_output_root is None or logical_checkpoint_root is None:
+        raise StorageCapacityError("first-run workflow requires logical Drive roots separate from local staging")
     validate_runtime_bound_plan(plan, schedule_path, schedule_manifest_path, preflight)
     first = plan["runs"][0]
     if (first["dataset"], int(first["seed"]), first["arm"]) != FIRST_RUN:
         raise ValueError("frozen first run is not EMBER / seed 42 / Full Hybrid")
-    output_run = run_output_root(output_root, first)
+    local_output_root = Path(output_root).expanduser().resolve()
+    _hydrate_api_matrix_registry(storage_adapter, local_output_root, plan)
+    output_run = run_output_root(local_output_root, first)
     drive_checkpoint_run = run_checkpoint_root(checkpoint_root, first)
-    matrix_registry = _read_matrix_registry(Path(output_root).expanduser().resolve(), plan)
+    _hydrate_api_run_state(storage_adapter, local_output_root, plan, first,
+                           drive_checkpoint_run, include_recovery=False)
+    matrix_registry = _read_matrix_registry(local_output_root, plan)
     if first["run_key"] in matrix_registry.get("completed_runs", {}):
-        measurement = reuse_validated_first_run_measurement(plan, first, output_run)
+        measurement = reuse_validated_first_run_measurement(plan, first, local_output_root)
         return {
             "status": "ALREADY_FINALIZED_COMPLETED_RUN",
             "run_key": first["run_key"],
@@ -5666,6 +6194,8 @@ def execute_first_production_run(
             "finalizer_rerun": False,
             "measurement_reused_without_recomputation": True,
         }
+    _hydrate_api_run_state(storage_adapter, local_output_root, plan, first,
+                           output_run, drive_checkpoint_run, include_recovery=True)
     run_status_path = (
         output_run / "registry" / "runs" / _run_id_for(first, synthetic=False) / "registry.json"
     )
@@ -5700,6 +6230,7 @@ def execute_first_production_run(
             Path(output_root).expanduser().resolve(), plan, first,
             validated_existing, storage_measurement=measurement,
         )
+        _api_publish_file(storage_adapter, _matrix_registry_path(local_output_root, plan))
         return {
             "status": "ALREADY_VALIDATED", "run_key": first["run_key"], "run_index": 1,
             "output_path": str(output_run), "drive_checkpoint_root": str(drive_checkpoint_run),
@@ -5746,7 +6277,8 @@ def execute_first_production_run(
         observed_output_bytes=observed_output_bytes,
     )
     snapshot = inspect_production_capacity(
-        output_root, checkpoint_root, local_checkpoint_root, cache_root, api_factory=api_factory,
+        logical_output_root, logical_checkpoint_root, local_checkpoint_root, cache_root,
+        api_factory=api_factory, storage_adapter=storage_adapter,
         current_run_output_path=output_run,
         current_run_checkpoint_path=drive_checkpoint_run,
         current_run_local_checkpoint_path=run_checkpoint_root(local_checkpoint_root, first),
@@ -5785,12 +6317,15 @@ def execute_first_production_run(
             "preparation_elapsed_seconds": max(0.0, time.monotonic() - preparation_started),
         }
         _atomic_json(preparation_progress_path, event)
+        _api_publish_file(storage_adapter, preparation_progress_path)
         if progress_callback is not None:
             progress_callback(event)
 
     # Acquire before hashing/reading data so a second Colab cell cannot consume
     # a second dataset-sized RAM working set before discovering the matrix lock.
-    matrix_lease = _MatrixLeaseHeartbeat(output_root_path / ".matrix_execution.lease.json")
+    matrix_lock_path = output_root_path / ".matrix_execution.lease.json"
+    storage_adapter.ensure_lease_record(storage_adapter.logical_path_for_local(matrix_lock_path))
+    matrix_lease = _MatrixLeaseHeartbeat(matrix_lock_path, storage_adapter=storage_adapter)
     with matrix_lease:
         emit_preparation("dataset_load_begin", dataset=first["dataset"], cache_root=str(cache_root))
         try:
@@ -5824,7 +6359,8 @@ def execute_first_production_run(
         current_local_checkpoint = run_checkpoint_root(local_checkpoint_root, first)
         expected_identity = _expected_runner_identity(plan, first, bundle)
         snapshot = inspect_production_capacity(
-            output_root, checkpoint_root, local_checkpoint_root, cache_root, api_factory=api_factory,
+            logical_output_root, logical_checkpoint_root, local_checkpoint_root, cache_root,
+            api_factory=api_factory, storage_adapter=storage_adapter,
             current_run_output_path=current_output,
             current_run_checkpoint_path=current_drive_checkpoint,
             current_run_local_checkpoint_path=current_local_checkpoint,
@@ -5843,6 +6379,8 @@ def execute_first_production_run(
             completed_runs=0, matrix_lease=matrix_lease,
             required_resume_manifest=resume_gate["selected_integrity_verified_candidate"],
             api_factory=api_factory,
+            storage_adapter=storage_adapter, logical_output_root=logical_output_root,
+            logical_checkpoint_root=logical_checkpoint_root,
         )
         if result.get("status") not in {"COMPLETED_VALIDATED", "ALREADY_VALIDATED"}:
             return {**result, "first_run_storage_projection_before_run": projection, "v62_reference": reference}
@@ -5871,6 +6409,7 @@ def execute_first_production_run(
             f"first_run_storage_{plan['plan_sha256'][:12]}_{int(report['created_unix'])}.json"
         )
         _atomic_json(report_path, report)
+        _api_publish_file(storage_adapter, report_path)
         return {**result, "first_run_storage_report": str(report_path), "post_run_storage_projection": post_run_projection}
 
 
@@ -5880,20 +6419,33 @@ def continue_production_matrix(
     cache_root: str | Path, output_root: str | Path,
     checkpoint_root: str | Path, local_checkpoint_root: str | Path,
     launch_enabled: bool = False, progress_callback=None, api_factory=None,
+    storage_adapter=None, logical_output_root: str | Path | None = None,
+    logical_checkpoint_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Continue/resume records 2–100 sequentially, skipping only validated completions."""
     if launch_enabled is not True:
         raise RuntimeError("LAUNCH_REMAINING_MATRIX is False; no matrix run started")
     _require_canonical_storage_api_factory(api_factory)
+    if storage_adapter is None or storage_adapter.service is not api_factory():
+        raise StorageCapacityError("matrix workflow requires the exact verified main-account API storage adapter")
+    if logical_output_root is None or logical_checkpoint_root is None:
+        raise StorageCapacityError("matrix workflow requires logical Drive roots separate from local staging")
     validate_runtime_bound_plan(plan, schedule_path, schedule_manifest_path, preflight)
     root = Path(output_root).expanduser().resolve()
-    lease = _MatrixLeaseHeartbeat(root / ".matrix_execution.lease.json")
+    _hydrate_api_matrix_registry(storage_adapter, root, plan)
+    first = plan["runs"][0]
+    _hydrate_api_run_state(
+        storage_adapter, root, plan, first, run_output_root(root, first),
+        run_checkpoint_root(checkpoint_root, first), include_recovery=False,
+    )
+    matrix_lock_path = root / ".matrix_execution.lease.json"
+    storage_adapter.ensure_lease_record(storage_adapter.logical_path_for_local(matrix_lock_path))
+    lease = _MatrixLeaseHeartbeat(matrix_lock_path, storage_adapter=storage_adapter)
     skipped = 0
     launched_or_resumed = 0
     latest_projection: dict[str, Any] | None = None
     latest_capacity: dict[str, Any] | None = None
     with lease:
-        first = plan["runs"][0]
         first_output = run_output_root(root, first)
         first_measurement = reuse_validated_first_run_measurement(plan, first, first_output)
         observed_measurements = [first_measurement]
@@ -5907,6 +6459,10 @@ def continue_production_matrix(
                 raise RuntimeError("matrix ownership heartbeat was lost; no new run was started")
             output = run_output_root(root, record)
             checkpoints = run_checkpoint_root(checkpoint_root, record)
+            _hydrate_api_run_state(
+                storage_adapter, root, plan, record, output, checkpoints,
+                include_recovery=True,
+            )
             try:
                 validated = _validate_completed_run(plan, record, None, output, synthetic=False)
             except FileNotFoundError:
@@ -5922,10 +6478,19 @@ def continue_production_matrix(
                         raise ValueError(f"refusing to skip corrupt or identity-mismatched completion {record['run_key']}: {exc}") from exc
                 validated = None
             if validated is not None:
-                measurement = measure_completed_production_run(plan, record, None, output, checkpoints)
-                matrix_registry, _ = _record_completed_run(
-                    root, plan, record, validated, storage_measurement=measurement,
-                )
+                existing_registry = _read_matrix_registry(root, plan)
+                existing_entry = existing_registry["completed_runs"].get(record["run_key"])
+                if (
+                    not isinstance(existing_entry, dict)
+                    or existing_entry.get("artifact_manifest_sha256") != validated["artifact_manifest_sha256"]
+                    or not isinstance(existing_entry.get("storage_measurement"), dict)
+                ):
+                    raise ValueError(
+                        f"completed run {record['run_key']} lacks its exact API-published completion measurement; "
+                        "refusing to infer checkpoint integrity/size from incomplete local staging"
+                    )
+                measurement = existing_entry["storage_measurement"]
+                matrix_registry = existing_registry
                 observed_measurements.append(measurement)
                 skipped += 1
                 if progress_callback is not None:
@@ -5943,7 +6508,8 @@ def continue_production_matrix(
                 checkpoint_reference_provenance="largest observed validated production run so far; applies conservative growth envelope",
             )
             latest_capacity = inspect_production_capacity(
-                output_root, checkpoint_root, local_checkpoint_root, cache_root, api_factory=api_factory,
+                logical_output_root, logical_checkpoint_root, local_checkpoint_root, cache_root,
+                api_factory=api_factory, storage_adapter=storage_adapter,
                 current_run_output_path=output,
                 current_run_checkpoint_path=checkpoints,
                 current_run_local_checkpoint_path=run_checkpoint_root(local_checkpoint_root, record),
@@ -5958,7 +6524,8 @@ def continue_production_matrix(
             )
             bundle = bundle_cache.get(record["dataset"])
             latest_capacity = inspect_production_capacity(
-                output_root, checkpoint_root, local_checkpoint_root, cache_root, api_factory=api_factory,
+                logical_output_root, logical_checkpoint_root, local_checkpoint_root, cache_root,
+                api_factory=api_factory, storage_adapter=storage_adapter,
                 current_run_output_path=output,
                 current_run_checkpoint_path=checkpoints,
                 current_run_local_checkpoint_path=run_checkpoint_root(local_checkpoint_root, record),
@@ -5979,6 +6546,8 @@ def continue_production_matrix(
                 storage_snapshot=latest_capacity, storage_projection=latest_projection,
                 capacity_scope="matrix", completed_runs=completed_count, matrix_lease=lease,
                 api_factory=api_factory,
+                storage_adapter=storage_adapter, logical_output_root=logical_output_root,
+                logical_checkpoint_root=logical_checkpoint_root,
             )
             if result.get("status") == "INTERRUPTED_RESUMABLE":
                 return {
@@ -6056,13 +6625,23 @@ def export_production_progress(plan: dict[str, Any], output_root: str | Path) ->
 def _validated_export_target(
     output_path: str | Path, storage_snapshot: dict[str, Any], *,
     required_payload_bytes: int, label: str,
+    storage_adapter=None, logical_output_path: str | Path | None = None,
 ) -> Path:
     target = Path(output_path).expanduser().resolve()
     parent = target.parent
     if target.exists() or Path(str(target) + ".manifest.json").exists() or Path(str(target) + ".sha256").exists():
         raise FileExistsError(f"refusing to overwrite an existing {label} or sidecar: {target}")
+    expected_destination = (
+        str(Path(logical_output_path).expanduser().absolute())
+        if storage_adapter is not None and logical_output_path is not None
+        else str(parent)
+    )
+    observed_destination = (
+        storage_snapshot.get("configured_path")
+        if storage_adapter is not None else storage_snapshot.get("path")
+    )
     if (
-        storage_snapshot.get("path") != str(parent)
+        observed_destination != expected_destination
         or storage_snapshot.get("write_capability_verified") is not True
         or storage_snapshot.get("new_file_owner_verified") is not True
         or storage_snapshot.get("quota_metadata_verified") is not True
@@ -6162,7 +6741,8 @@ def _validate_registered_completion_for_export(
 
 def export_lightweight_results(
     plan: dict[str, Any], output_root: str | Path, output_zip: str | Path, *,
-    storage_snapshot: dict[str, Any],
+    storage_snapshot: dict[str, Any], storage_adapter=None,
+    logical_output_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Export registered, revalidated production results without checkpoint payloads."""
     from revision_r1.archives import build_lightweight_results_archive
@@ -6195,7 +6775,8 @@ def export_lightweight_results(
     archive_upper_bound = _zip_archive_size_upper_bound(raw_bytes)
     target = _validated_export_target(
         output_zip, storage_snapshot, required_payload_bytes=archive_upper_bound,
-        label="lightweight results",
+        label="lightweight results", storage_adapter=storage_adapter,
+        logical_output_path=logical_output_path,
     )
     archive = build_lightweight_results_archive(run_roots, target)
     _write_export_sidecar(target, archive["sha256"])
@@ -6211,7 +6792,8 @@ def export_lightweight_results(
 
 def export_checkpoint_backup(
     plan: dict[str, Any], checkpoint_root: str | Path, output_zip: str | Path, *,
-    storage_snapshot: dict[str, Any],
+    storage_snapshot: dict[str, Any], storage_adapter=None,
+    logical_output_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Explicitly archive every identity-verified checkpoint after a capacity gate."""
     from revision_r1.archives import build_checkpoint_archive
@@ -6267,7 +6849,8 @@ def export_checkpoint_backup(
     archive_upper_bound = _zip_archive_size_upper_bound(total_bytes)
     target = _validated_export_target(
         output_zip, storage_snapshot, required_payload_bytes=archive_upper_bound,
-        label="checkpoint backup",
+        label="checkpoint backup", storage_adapter=storage_adapter,
+        logical_output_path=logical_output_path,
     )
     archive = build_checkpoint_archive(root, target)
     _write_export_sidecar(target, archive["sha256"])
