@@ -94,6 +94,90 @@ def _is_strong_etag(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip()) and not value.lstrip().casefold().startswith("w/")
 
 
+def _classify_drive_api_lease_record(document: Any, *, now: float) -> dict[str, Any]:
+    """Validate a v1 Drive CAS lease record and classify its safe state.
+
+    The only ownerless inactive value is the exact pre-provisioned sentinel
+    written by ``DriveApiStorage.ensure_lease_record``. Released records must
+    carry the complete owner/timestamp fields written by ``DriveApiLease``.
+    Unknown, partial, or inconsistent records are never treated as available.
+    """
+    malformed = {"status": "malformed", "error": "Drive lease record is not a supported v1 object"}
+    if not isinstance(document, dict) or type(document.get("schema_version")) is not int or document.get("schema_version") != 1:
+        return malformed
+    if type(document.get("active")) is not bool:
+        return {"status": "malformed", "error": "Drive lease active flag must be a boolean"}
+
+    placeholder_fields = {"schema_version", "active", "expires_at"}
+    if document["active"] is False and set(document) == placeholder_fields:
+        expiry = document.get("expires_at")
+        try:
+            placeholder_expiry = float(expiry) if type(expiry) in (int, float) else None
+        except (OverflowError, ValueError):
+            placeholder_expiry = None
+        if placeholder_expiry is not None and math.isfinite(placeholder_expiry) and placeholder_expiry == 0:
+            return {
+                "status": "inactive", "record_kind": "provisioned_placeholder",
+                "owner_host": None, "owner_pid": None, "heartbeat_at": None, "expires_at": 0.0,
+            }
+        return {"status": "malformed", "error": "inactive placeholder must have zero expiry"}
+
+    active_fields = {
+        "schema_version", "active", "owner_token", "host", "pid",
+        "created_at", "heartbeat_at", "expires_at",
+    }
+    released_fields = active_fields | {"released_at"}
+    if document["active"] is True:
+        if set(document) != active_fields:
+            return {"status": "malformed", "error": "active Drive lease has missing or unexpected fields"}
+    elif set(document) != released_fields:
+        return {"status": "malformed", "error": "inactive Drive lease is neither the exact placeholder nor a complete release"}
+
+    owner_token = document.get("owner_token")
+    host = document.get("host")
+    pid = document.get("pid")
+    if not isinstance(owner_token, str) or not owner_token.strip():
+        return {"status": "malformed", "error": "Drive lease owner token is missing or invalid"}
+    if not isinstance(host, str) or not host.strip():
+        return {"status": "malformed", "error": "Drive lease host is missing or invalid"}
+    if type(pid) is not int or pid <= 0:
+        return {"status": "malformed", "error": "Drive lease PID must be a positive integer"}
+
+    timestamps: dict[str, float] = {}
+    timestamp_fields = ("created_at", "heartbeat_at", "expires_at")
+    if document["active"] is False:
+        timestamp_fields = (*timestamp_fields, "released_at")
+    for field in timestamp_fields:
+        value = document.get(field)
+        if type(value) not in (int, float):
+            return {"status": "malformed", "error": f"Drive lease {field} must be a finite number"}
+        try:
+            value_float = float(value)
+        except (OverflowError, ValueError):
+            return {"status": "malformed", "error": f"Drive lease {field} must be a finite number"}
+        if not math.isfinite(value_float):
+            return {"status": "malformed", "error": f"Drive lease {field} must be a finite number"}
+        timestamps[field] = value_float
+
+    if document["active"] is False:
+        if timestamps["expires_at"] != 0:
+            return {"status": "malformed", "error": "released Drive lease must have zero expiry"}
+        if not timestamps["created_at"] <= timestamps["heartbeat_at"] <= timestamps["released_at"]:
+            return {"status": "malformed", "error": "released Drive lease timestamps are inconsistent"}
+        status = "inactive"
+        record_kind = "released"
+    else:
+        if not timestamps["created_at"] <= timestamps["heartbeat_at"] < timestamps["expires_at"]:
+            return {"status": "malformed", "error": "active Drive lease timestamps are inconsistent"}
+        status = "live" if timestamps["expires_at"] > float(now) else "expired"
+        record_kind = "active"
+
+    return {
+        "status": status, "record_kind": record_kind, "owner_host": host,
+        "owner_pid": pid, **timestamps,
+    }
+
+
 def _retryable(error: Exception) -> bool:
     if isinstance(error, (TimeoutError, ConnectionError)):
         return True
@@ -1299,16 +1383,12 @@ class DriveApiLease:
         if metadata.get("mimeType") == "application/vnd.google-apps.folder":
             raise DriveLeaseError("lease ID resolves to a folder")
         now = time.time()
-        if type(document.get("active")) is not bool:
-            raise DriveLeaseError("canonical API lease active field is malformed; preserved")
-        try:
-            expires_at = float(document.get("expires_at"))
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise DriveLeaseError("canonical API lease expiry is malformed; preserved") from exc
-        if not math.isfinite(expires_at):
-            raise DriveLeaseError("canonical API lease expiry is non-finite; preserved")
-        active = document["active"] is True and expires_at > now
-        if active:
+        state = _classify_drive_api_lease_record(document, now=now)
+        if state["status"] == "malformed":
+            raise DriveLeaseError(
+                "canonical Drive API lease record is malformed; preserved: " + state["error"]
+            )
+        if state["status"] == "live":
             raise DriveLeaseError("canonical Drive API lease is held by an unexpired owner")
         self._file_id = str(metadata["id"])
         claimed = {

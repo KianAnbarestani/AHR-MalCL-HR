@@ -256,6 +256,55 @@ def test_readonly_lease_inspector_reports_live_expired_malformed_and_missing(tmp
     assert missing["raw_text"] is None
 
 
+def test_readonly_lease_inspector_accepts_only_valid_inactive_drive_lease_documents(tmp_path):
+    from scripts.production_workflow import inspect_lease_readonly
+
+    now = 2_000_000_000.0
+    provisioned_path = tmp_path / "provisioned.lease.json"
+    provisioned = {"schema_version": 1, "active": False, "expires_at": 0}
+    provisioned_path.write_text(json.dumps(provisioned), encoding="utf-8")
+    provisioned_report = inspect_lease_readonly(
+        provisioned_path, now_unix=now, current_host="this-runtime", current_pid=10,
+    )
+    assert provisioned_report["status"] == "inactive"
+    assert provisioned_report["owner_process_visibility"] == "no_active_owner"
+    assert provisioned_report["lease_acquisition_allowed"] is True
+    assert provisioned_report["recovery_may_be_attempted_by_existing_lease_logic"] is False
+
+    released_path = tmp_path / "released.lease.json"
+    released = {
+        "schema_version": 1, "active": False, "owner_token": "previous-owner",
+        "host": "previous-runtime", "pid": 77, "created_at": now - 300,
+        "heartbeat_at": now - 30, "expires_at": 0, "released_at": now - 20,
+    }
+    released_path.write_text(json.dumps(released), encoding="utf-8")
+    released_report = inspect_lease_readonly(
+        released_path, now_unix=now, current_host="this-runtime", current_pid=10,
+    )
+    assert released_report["status"] == "inactive"
+    assert released_report["owner_process_visibility"] == "released_owner_not_active"
+    assert released_report["lease_acquisition_allowed"] is True
+
+    corrupted_path = tmp_path / "corrupted-inactive.lease.json"
+    corrupted = {**provisioned, "heartbeat_at": now - 5}
+    corrupted_path.write_text(json.dumps(corrupted), encoding="utf-8")
+    corrupted_report = inspect_lease_readonly(
+        corrupted_path, now_unix=now, current_host="this-runtime", current_pid=10,
+    )
+    assert corrupted_report["status"] == "malformed"
+    assert corrupted_report["lease_acquisition_allowed"] is False
+
+    incomplete_active_path = tmp_path / "incomplete-active.lease.json"
+    incomplete_active_path.write_text(json.dumps({
+        "schema_version": 1, "active": True, "expires_at": now + 60,
+    }), encoding="utf-8")
+    incomplete_active = inspect_lease_readonly(
+        incomplete_active_path, now_unix=now, current_host="this-runtime", current_pid=10,
+    )
+    assert incomplete_active["status"] == "malformed"
+    assert incomplete_active["lease_acquisition_allowed"] is False
+
+
 def test_first_run_lease_diagnostic_preserves_lock_and_verifies_recent_checkpoint(tmp_path):
     from scripts.production_workflow import inspect_first_run_lease_and_progress, run_checkpoint_root, run_output_root
     from revision_r1.checkpointing import save_generation

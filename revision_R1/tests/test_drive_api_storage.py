@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -466,23 +467,54 @@ def test_api_storage_rejects_duplicate_names_and_preserves_existing_file_on_fail
 
 
 def test_drive_api_lease_enforces_active_owner_heartbeat_release_and_stale_etag(tmp_path, monkeypatch):
+    from scripts.production_workflow import inspect_lease_readonly
+
     service = _FakeService()
     lease_service = _FakeV2Service(service)
     storage = _storage(service, tmp_path / "local", monkeypatch, lease_service=lease_service)
     local_lock = tmp_path / "local/lease.json"
     local_lock.parent.mkdir(parents=True, exist_ok=True)
     local_lock.write_text(json.dumps({"schema_version": 1, "active": False, "expires_at": 0}) + "\n")
-    storage.publish_file(local_lock, "/drive/MyDrive/ReVision/results/matrix.lease.json")
+    logical_path = "/drive/MyDrive/ReVision/results/matrix.lease.json"
+    storage.publish_file(local_lock, logical_path)
 
-    lease1 = DriveApiLease(storage, "/drive/MyDrive/ReVision/results/matrix.lease.json", owner_token="worker-1")
-    lease2 = DriveApiLease(storage, "/drive/MyDrive/ReVision/results/matrix.lease.json", owner_token="worker-2")
+    def inspect_drive_record():
+        observed_path = tmp_path / "observed-lease.json"
+        observed_path.unlink(missing_ok=True)
+        storage.download_file(logical_path, observed_path)
+        return inspect_lease_readonly(
+            observed_path, now_unix=time.time(), current_host="diagnostic-runtime", current_pid=1,
+        )
+
+    assert inspect_drive_record()["status"] == "inactive"
+
+    lease1 = DriveApiLease(storage, logical_path, owner_token="worker-1")
+    lease2 = DriveApiLease(storage, logical_path, owner_token="worker-2")
     lease1.acquire()
+    assert inspect_drive_record()["status"] == "live"
     with pytest.raises(DriveLeaseError, match="held"):
         lease2.acquire()
     lease1.heartbeat()
+    assert inspect_drive_record()["status"] == "live"
     lease1.release()
+    released = inspect_drive_record()
+    assert released["status"] == "inactive"
+    assert released["owner_process_visibility"] == "released_owner_not_active"
     lease2.acquire()
     lease2.release()
+
+    stale_owner = DriveApiLease(storage, logical_path, ttl_seconds=0.02, owner_token="stale-owner")
+    replacement_owner = DriveApiLease(storage, logical_path, owner_token="replacement-owner")
+    stale_owner.acquire()
+    time.sleep(0.04)
+    assert inspect_drive_record()["status"] == "expired"
+    replacement_owner.acquire()
+    with pytest.raises(DriveLeaseError, match="owner/token or ETag changed"):
+        stale_owner.heartbeat()
+    assert json.loads(service.records[stale_owner._file_id]["content"])["owner_token"] == "replacement-owner"
+    replacement_owner.release()
+    assert inspect_drive_record()["status"] == "inactive"
+
     assert lease_service.files().update_calls >= 5
     assert service.files().update_calls == 0, "lease CAS updates must not use the Drive v3 data client"
 
@@ -492,6 +524,40 @@ def test_drive_api_lease_enforces_active_owner_heartbeat_release_and_stale_etag(
     assert cas["status"] == "PASS"
     assert cas["contract"] == "stale_if_match_rejected_http_412"
     assert not any("cas-probe" in row["name"] for row in service.records.values())
+
+
+@pytest.mark.parametrize("document", [
+    {"schema_version": 1, "active": False, "expires_at": 10},
+    {"schema_version": 1, "active": False, "expires_at": -1},
+    {"schema_version": 1, "active": False, "expires_at": 10 ** 400},
+    {"schema_version": 1, "active": False, "expires_at": 0, "owner_token": "partial"},
+    {"schema_version": 2, "active": False, "expires_at": 0},
+    {"schema_version": 1, "active": True, "expires_at": 2_000_000_000},
+])
+def test_drive_api_lease_acquisition_rejects_corrupted_or_ambiguous_records(
+    tmp_path, monkeypatch, document,
+):
+    from scripts.production_workflow import inspect_lease_readonly
+
+    service = _FakeService()
+    lease_service = _FakeV2Service(service)
+    storage = _storage(service, tmp_path / "local", monkeypatch, lease_service=lease_service)
+    local_lock = tmp_path / "local/lease.json"
+    local_lock.parent.mkdir(parents=True, exist_ok=True)
+    local_lock.write_text(json.dumps(document) + "\n", encoding="utf-8")
+    storage.publish_file(local_lock, "/drive/MyDrive/ReVision/results/matrix.lease.json")
+
+    diagnostic = inspect_lease_readonly(local_lock)
+    assert diagnostic["status"] == "malformed"
+    assert diagnostic["lease_acquisition_allowed"] is False
+
+    lease = DriveApiLease(storage, "/drive/MyDrive/ReVision/results/matrix.lease.json", owner_token="new-worker")
+    with pytest.raises(DriveLeaseError, match="malformed.*preserved"):
+        lease.acquire()
+
+    assert lease_service.files().update_calls == 0
+    stored = json.loads(next(row["content"] for row in service.records.values() if row["name"] == "matrix.lease.json"))
+    assert stored == document
 
 
 def test_conditional_update_probe_uses_drive_v2_etag_from_response_callback(monkeypatch):

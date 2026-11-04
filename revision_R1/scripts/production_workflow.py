@@ -2100,6 +2100,7 @@ def inspect_lease_readonly(
         "modified_unix": None, "modified_utc": None, "now_unix": now,
         "now_utc": _utc_iso(now), "owner_process_visibility": "unknown",
         "recovery_may_be_attempted_by_existing_lease_logic": False,
+        "lease_acquisition_allowed": False,
     }
     try:
         raw = target.read_text(encoding="utf-8")
@@ -2119,11 +2120,67 @@ def inspect_lease_readonly(
         report.update(status="malformed", parse_error="lease JSON root is not an object")
         return report
     report["record"] = record
+
+    # Drive API lease records have an explicit v1 schema and an inactive
+    # placeholder/released representation. Use the same validator as the CAS
+    # acquisition path so diagnostics cannot call a valid released lease
+    # malformed or label corrupt inactive JSON as available.
+    if "schema_version" in record or "active" in record:
+        from revision_r1.drive_storage import _classify_drive_api_lease_record
+
+        state = _classify_drive_api_lease_record(record, now=now)
+        report["record_kind"] = state.get("record_kind")
+        if state["status"] == "malformed":
+            report.update(status="malformed", parse_error=state["error"])
+            return report
+        for field in ("created_at", "heartbeat_at", "expires_at", "released_at"):
+            value = state.get(field)
+            if value is not None:
+                report[f"{field}_unix"] = value
+                report[f"{field}_utc"] = _utc_iso(value)
+        if state["status"] == "inactive":
+            report.update(
+                status="inactive",
+                owner_process_visibility=(
+                    "released_owner_not_active" if state["record_kind"] == "released"
+                    else "no_active_owner"
+                ),
+                lease_acquisition_allowed=True,
+            )
+            return report
+
+        owner_host = state["owner_host"]
+        owner_pid = state["owner_pid"]
+        if owner_host == host:
+            try:
+                os.kill(owner_pid, 0)
+                owner_process = "same_host_pid_alive"
+            except ProcessLookupError:
+                owner_process = "same_host_pid_not_found"
+            except PermissionError:
+                owner_process = "same_host_pid_exists_permission_denied"
+            except OSError as exc:
+                owner_process = f"same_host_pid_probe_error:{type(exc).__name__}"
+        else:
+            owner_process = "different_runtime_unverifiable"
+        report["owner_process_visibility"] = owner_process
+        if state["status"] == "live":
+            report["status"] = "live"
+        elif owner_process in {"same_host_pid_alive", "same_host_pid_exists_permission_denied"}:
+            report["status"] = "expired_but_owner_process_may_be_alive"
+        else:
+            report.update(
+                status="expired",
+                recovery_may_be_attempted_by_existing_lease_logic=True,
+                lease_acquisition_allowed=True,
+            )
+        return report
+
     for field in ("created_at", "heartbeat_at", "expires_at"):
         raw_value = record.get(field)
         try:
             value = float(raw_value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             value = None
         if value is not None and math.isfinite(value):
             report[f"{field}_unix"] = value
@@ -2158,6 +2215,7 @@ def inspect_lease_readonly(
     else:
         report["status"] = "expired"
         report["recovery_may_be_attempted_by_existing_lease_logic"] = True
+        report["lease_acquisition_allowed"] = True
     return report
 
 
