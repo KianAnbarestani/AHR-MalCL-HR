@@ -533,7 +533,7 @@ def _github_readiness_cell() -> str:
     return '''# Cell C — API-backed local staging, finalized Run 1 reuse, and storage readiness only.
 from scripts.production_workflow import (
     _expected_plan_runner_identity, _preflight_addressed_cache_bytes, _read_matrix_registry,
-    _hydrate_api_matrix_registry, _hydrate_api_run_state,
+    _hydrate_api_matrix_registry, _hydrate_api_run_state, matrix_registry_evidence,
     bind_runtime_schedule, build_frozen_run_plan, inspect_production_capacity,
     load_v62_recovery_checkpoint_bound, project_storage, require_run_capacity,
     reuse_validated_first_run_measurement, run_checkpoint_root, run_output_root,
@@ -565,6 +565,8 @@ _hydrate_api_run_state(
     run_output_root(OUTPUT_ROOT, FIRST_RUN), run_checkpoint_root(CHECKPOINT_ROOT, FIRST_RUN),
     include_recovery=False,
 )
+MATRIX_REGISTRY_EVIDENCE = matrix_registry_evidence(STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN)
+print("CELL_C_CANONICAL_COMPLETION_REGISTRY:", json.dumps(MATRIX_REGISTRY_EVIDENCE, sort_keys=True))
 FIRST_RUN_MEASUREMENT = reuse_validated_first_run_measurement(RUNTIME_PLAN, FIRST_RUN, OUTPUT_ROOT)
 MATRIX_REGISTRY = _read_matrix_registry(OUTPUT_ROOT.resolve(), RUNTIME_PLAN)
 if FIRST_RUN["run_key"] not in MATRIX_REGISTRY["completed_runs"]:
@@ -716,8 +718,10 @@ print(json.dumps({
 
 def _github_completed_run_guard_cell() -> str:
     return '''# Cell E — deliberate no-op: Run 1 is already finalized and registered.
+import json
 print("ALREADY_FINALIZED_COMPLETED_RUN — Run 1 was identity-validated and its existing storage measurement reused in Cell C.")
 print("This cell will not train, load a model, remeasure, re-register, or rerun finalization for Run 1.")
+print("CELL_E_REUSES_CELL_C_REGISTRY_EVIDENCE:", json.dumps(MATRIX_REGISTRY_EVIDENCE, sort_keys=True))
 '''
 
 
@@ -886,6 +890,19 @@ else:
     _blocking_statuses = {"live", "malformed", "unreadable", "expired_but_owner_process_may_be_alive"}
     if _matrix_lease_now["status"] in _blocking_statuses:
         raise RuntimeError("Blocked by matrix lease state: " + json.dumps(_matrix_lease_now, sort_keys=True))
+
+    def _matrix_progress(_event):
+        if _event.get("stage") == "matrix_registry_verified":
+            print("CELL_F_CANONICAL_COMPLETION_REGISTRY:", json.dumps(
+                _event["matrix_registry_evidence"], sort_keys=True,
+            ))
+            print("CELL_F_RUN_SELECTION:", json.dumps({
+                "first_run_status": _event["first_run_status"],
+                "first_run_reused": _event["first_run_key"],
+                "next_pending_run_key": _event["next_pending_run_key"],
+            }, sort_keys=True))
+        live_progress(_event)
+
     MATRIX_RESULT = continue_production_matrix(
         RUNTIME_PLAN, preflight=PREFLIGHT,
         schedule_path=EFFECTIVE_SCHEDULE_PATH,
@@ -894,11 +911,14 @@ else:
         output_root=OUTPUT_ROOT, checkpoint_root=CHECKPOINT_ROOT,
         local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
         launch_enabled=LAUNCH_REMAINING_MATRIX,
-        progress_callback=live_progress, api_factory=STORAGE_API_FACTORY,
+        progress_callback=_matrix_progress, api_factory=STORAGE_API_FACTORY,
         storage_adapter=STORAGE_ADAPTER,
         logical_output_root=LOGICAL_OUTPUT_ROOT,
         logical_checkpoint_root=LOGICAL_CHECKPOINT_ROOT,
     )
+    print("CELL_F_REGISTRY_EVIDENCE_AT_START:", json.dumps(
+        MATRIX_RESULT.get("matrix_registry_evidence_at_start"), sort_keys=True,
+    ))
     print(json.dumps(MATRIX_RESULT, sort_keys=True, indent=2, default=str))
 '''
 

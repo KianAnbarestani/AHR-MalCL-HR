@@ -5414,7 +5414,11 @@ def _record_completed_run(
 def reuse_validated_first_run_measurement(
     plan: dict[str, Any], record: dict[str, Any], output_root: str | Path,
 ) -> dict[str, Any]:
-    """Validate finalized run 1 and reuse its already-registered measurement unchanged."""
+    """Validate finalized run 1 using the plan-level production results root.
+
+    ``output_root`` is the matrix ``results`` root. Per-run artifacts are
+    derived internally; callers must not pass ``run_output_root(...)`` here.
+    """
     if not plan.get("runs") or record != plan["runs"][0] or int(record.get("run_index", -1)) != 1:
         raise ValueError("only frozen completed run 1 can be reused without execution")
     root = Path(output_root).expanduser().resolve()
@@ -5526,6 +5530,82 @@ def _hydrate_api_matrix_registry(storage_adapter, root: Path, plan: dict[str, An
         # A missing registry is acceptable only as the first new run; the
         # caller still checks the identity-bound Run 1 completion requirement.
         return
+
+
+def matrix_registry_evidence(
+    storage_adapter, root: str | Path, plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Report the exact API-backed plan registry after verifying its staged bytes.
+
+    ``root`` is the production results root, not an individual run's output
+    directory. Missing or stale registry content is an error; this function
+    never creates or repairs a completion registry.
+    """
+    if storage_adapter is None:
+        raise StorageCapacityError("matrix registry evidence requires explicit OAuth API storage")
+    results_root = Path(root).expanduser().resolve()
+    local_path = _matrix_registry_path(results_root, plan)
+    logical_path = storage_adapter.logical_path_for_local(local_path)
+    if not local_path.is_file() or local_path.is_symlink():
+        raise StorageCapacityError(
+            "canonical completion registry is not present in local staging after API hydration; "
+            f"plan_sha256={plan.get('plan_sha256')}, logical_path={logical_path}, local_path={local_path}; "
+            "no replacement registry was created"
+        )
+    metadata = storage_adapter.exact_file(logical_path)
+    if metadata is None:
+        raise StorageCapacityError(
+            f"canonical completion registry is not visible by exact Drive path: {logical_path}"
+        )
+    expected_parent_id = storage_adapter.folder_id(logical_path.parent, create=False)
+    observed_parents = [str(value) for value in metadata.get("parents", [])]
+    local_bytes = local_path.read_bytes()
+    local_size = len(local_bytes)
+    local_md5 = hashlib.md5(local_bytes, usedforsecurity=False).hexdigest()
+    try:
+        remote_size = int(metadata.get("size"))
+    except (TypeError, ValueError, OverflowError):
+        remote_size = -1
+    if (
+        not isinstance(metadata.get("id"), str) or not metadata["id"]
+        or metadata.get("name") != logical_path.name
+        or expected_parent_id not in observed_parents
+        or remote_size != local_size
+        or metadata.get("md5Checksum") != local_md5
+    ):
+        expected_metadata = {
+            "name": logical_path.name,
+            "parent_id": expected_parent_id,
+            "size": local_size,
+            "md5": local_md5,
+        }
+        observed_metadata = {
+            "file_id": metadata.get("id"),
+            "name": metadata.get("name"),
+            "parents": observed_parents,
+            "size": remote_size,
+            "md5": metadata.get("md5Checksum"),
+        }
+        raise StorageCapacityError(
+            "canonical completion registry metadata does not match the staged API bytes; "
+            f"expected={json.dumps(expected_metadata, sort_keys=True)}, "
+            f"observed={json.dumps(observed_metadata, sort_keys=True)}"
+        )
+    registry = _read_matrix_registry(results_root, plan)
+    completed_keys = [
+        row["run_key"] for row in plan["runs"]
+        if row["run_key"] in registry["completed_runs"]
+    ]
+    return {
+        "logical_drive_path": str(logical_path),
+        "drive_file_id": str(metadata["id"]),
+        "drive_parent_id": expected_parent_id,
+        "local_staging_path": str(local_path),
+        "plan_sha256": plan["plan_sha256"],
+        "registry_bytes": local_size,
+        "registry_md5": local_md5,
+        "completed_run_keys": completed_keys,
+    }
 
 
 def _rebind_staged_completion_paths(run_output: Path) -> None:
@@ -6506,8 +6586,28 @@ def continue_production_matrix(
     latest_projection: dict[str, Any] | None = None
     latest_capacity: dict[str, Any] | None = None
     with lease:
-        first_output = run_output_root(root, first)
-        first_measurement = reuse_validated_first_run_measurement(plan, first, first_output)
+        # Refresh the small plan registry only after owning the matrix lease.
+        # This prevents a worker that waited for the lease from acting on
+        # registry bytes staged before the preceding owner completed.
+        _hydrate_api_matrix_registry(storage_adapter, root, plan)
+        registry_evidence = matrix_registry_evidence(storage_adapter, root, plan)
+        registry = _read_matrix_registry(root, plan)
+        next_pending_record = next((
+            row for row in plan["runs"][1:]
+            if row["run_key"] not in registry["completed_runs"]
+        ), None)
+        first_measurement = reuse_validated_first_run_measurement(plan, first, root)
+        if progress_callback is not None:
+            progress_callback({
+                "status": "MATRIX_REGISTRY_VERIFIED",
+                "stage": "matrix_registry_verified",
+                "first_run_key": first["run_key"],
+                "matrix_registry_evidence": registry_evidence,
+                "first_run_status": "ALREADY_FINALIZED_COMPLETED_RUN",
+                "next_pending_run_key": (
+                    next_pending_record["run_key"] if next_pending_record is not None else None
+                ),
+            })
         observed_measurements = [first_measurement]
         bundle_cache = _SequentialDatasetBundleCache(
             lambda dataset: load_validated_dataset_bundle(
@@ -6616,6 +6716,9 @@ def continue_production_matrix(
                     "validated_completion_count": completed_count,
                     "schedule_sha256": plan["schedule_sha256"],
                     "training_source_sha256": plan["training_source_sha256"],
+                    "first_run_reused": first["run_key"],
+                    "next_pending_run_key": record["run_key"],
+                    "matrix_registry_evidence_at_start": registry_evidence,
                 }
             if not isinstance(result.get("storage_measurement"), dict):
                 raise ValueError(f"run {record['run_key']} returned without measured checkpoint/output evidence")
@@ -6630,6 +6733,8 @@ def continue_production_matrix(
             "launched_or_resumed": launched_or_resumed,
             "plan_sha256": plan["plan_sha256"], "schedule_sha256": plan["schedule_sha256"],
             "training_source_sha256": plan["training_source_sha256"],
+            "first_run_reused": first["run_key"],
+            "matrix_registry_evidence_at_start": registry_evidence,
             "last_storage_projection": latest_projection,
             "last_capacity_snapshot": latest_capacity,
             "production_matrix_launched": launched_or_resumed > 0,

@@ -177,8 +177,8 @@
       "sha256": "9cdae14f1571b6339e06224fcb05ed6b38650d2c76c354c2974128922ab369a2"
     },
     "scripts/build_github_handoff.py": {
-      "bytes": 59476,
-      "sha256": "a992e40e72ac927a0d756d6d009488734539a071b02443dc60654a9914020c74"
+      "bytes": 60531,
+      "sha256": "4af1d7587e1cca01d05e6e5095eb47f8b6291ab15c68bab456410ae263de78d8"
     },
     "scripts/build_production_handoff.py": {
       "bytes": 65900,
@@ -193,8 +193,8 @@
       "sha256": "1cb4e713e38096b17c215be584a871defd3edaf611290b74dcff7ddba48defba"
     },
     "scripts/production_workflow.py": {
-      "bytes": 377524,
-      "sha256": "abfaec0aab4b85af5630342253612b3e8c8b0b9a68102223817f37eb10a977b3"
+      "bytes": 382364,
+      "sha256": "a5f5ed7ce636390d8228f557aea7f32ce207f40f53578e568e6fd49ad3421a68"
     },
     "scripts/storage_auth.py": {
       "bytes": 6874,
@@ -233,12 +233,12 @@
       "sha256": "43ecc53d4d8a6f0782e44495322bdf00a474c9d3b56c1ab05cdab00771e2b483"
     },
     "tests/test_drive_api_storage.py": {
-      "bytes": 47712,
-      "sha256": "14f0b36a23b49290986dd748b95eea095802218abfc3809e186b637b0ac87f33"
+      "bytes": 57625,
+      "sha256": "9dca8478aa771051266587f9837be44946250ea38bc7a9bbe86af27d7bfe9a2b"
     },
     "tests/test_github_handoff.py": {
-      "bytes": 10273,
-      "sha256": "ccce3c8356b6a0c50250afb24ca7ec025f96097337c63393edcf69f089f289c6"
+      "bytes": 10601,
+      "sha256": "c07b376923f27441aea6484ddfcbd9c05399155e453e58527f503ba376d3edda"
     },
     "tests/test_live_progress.py": {
       "bytes": 9566,
@@ -257,8 +257,8 @@
       "sha256": "c94afd2629970445f0e1964cccad5045b9202e15d40669331fd5ee3154a5f9d0"
     },
     "tests/test_production_workflow.py": {
-      "bytes": 187577,
-      "sha256": "7089877d7bbfa80f4348b640a6256f6352b77f750d17d024512eb3732c1efaa5"
+      "bytes": 187854,
+      "sha256": "87308e2cfc4e6c77df2a9744400c3f7957bb91522c76b4af760c1d512eb7c85e"
     },
     "tests/test_protocol_math.py": {
       "bytes": 7882,

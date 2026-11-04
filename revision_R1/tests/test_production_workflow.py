@@ -1530,10 +1530,14 @@ def test_completed_first_run_is_validated_and_reused_without_remeasurement_or_re
         production_workflow, "_read_matrix_registry",
         lambda *_args: {"completed_runs": {first["run_key"]: entry}},
     )
-    monkeypatch.setattr(
-        production_workflow, "_validate_completed_run",
-        lambda *_args, **_kwargs: {"run_id": measurement["run_id"], "artifact_manifest_sha256": artifact_sha},
-    )
+    validated_output_paths = []
+
+    def validate_run(_plan, _record, _bundle, output, *, synthetic):
+        assert synthetic is False
+        validated_output_paths.append(Path(output))
+        return {"run_id": measurement["run_id"], "artifact_manifest_sha256": artifact_sha}
+
+    monkeypatch.setattr(production_workflow, "_validate_completed_run", validate_run)
     monkeypatch.setattr(
         production_workflow, "measure_completed_production_run",
         lambda *_args, **_kwargs: pytest.fail("completed run must not be measured/finalized again"),
@@ -1543,11 +1547,11 @@ def test_completed_first_run_is_validated_and_reused_without_remeasurement_or_re
         lambda *_args, **_kwargs: pytest.fail("completed run must not be registered again"),
     )
 
-    reused = production_workflow.reuse_validated_first_run_measurement(
-        plan, first, tmp_path / "run1-output",
-    )
+    results_root = tmp_path / "results"
+    reused = production_workflow.reuse_validated_first_run_measurement(plan, first, results_root)
 
     assert reused == measurement
+    assert validated_output_paths == [production_workflow.run_output_root(results_root, first)]
 
 
 def test_execute_first_run_skips_registered_finalized_run_before_reference_or_runner(tmp_path, monkeypatch):

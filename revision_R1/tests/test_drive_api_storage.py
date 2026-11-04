@@ -1016,3 +1016,220 @@ def test_real_runner_api_storage_interrupt_fresh_stage_resume_and_idempotent_com
         )["attempts"]) == attempts_before
     finally:
         torch.set_num_threads(previous_threads)
+
+
+def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_only(
+    tmp_path, monkeypatch,
+):
+    import threading
+
+    from revision_r1.config import DATASETS
+    from scripts import production_workflow as workflow
+
+    package_root = Path(__file__).resolve().parents[1]
+    dataset_references = {
+        name: {
+            "train_md5": values["train"]["md5"],
+            "test_md5": values["test"]["md5"],
+            "feature_dim": values["feature_dim"],
+            "train_shape": list(values["train"]["shape"]),
+            "test_shape": list(values["test"]["shape"]),
+        }
+        for name, values in DATASETS.items()
+    }
+    plan = workflow.build_frozen_run_plan(
+        package_root,
+        schedule_sha256="7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
+        dataset_references=dataset_references,
+    )
+    first = plan["runs"][0]
+    second = plan["runs"][1]
+    assert first["run_key"] == "ember_seed42_full_hybrid"
+    assert second["run_key"] == "ember_seed42_current_only"
+
+    logical_results = Path(
+        "/drive/MyDrive/ReVision/revision_R1/production/results"
+    )
+    logical_checkpoints = Path(
+        "/drive/MyDrive/ReVision/revision_R1/production/checkpoints"
+    )
+    service = _FakeService()
+    seed_root = tmp_path / "seed-stage"
+    seed_results = seed_root / "production" / "results"
+    seed_storage = _storage(service, seed_root, monkeypatch)
+    seed_storage.bind_root(logical_results, seed_results)
+
+    run_id = workflow._run_id_for(first, synthetic=False)
+    artifact_sha = "a" * 64
+    measurement = {
+        "status": "MEASURED_VALIDATED_PRODUCTION_RUN",
+        "run_key": first["run_key"],
+        "run_id": run_id,
+        "max_checkpoint_payload_bytes": 1_000,
+        "run_output_bytes": 2_000,
+    }
+    entry = {
+        "run_key": first["run_key"],
+        "run_index": first["run_index"],
+        "config_sha256": first["config_sha256"],
+        "training_source_sha256": plan["training_source_sha256"],
+        "schedule_sha256": plan["schedule_sha256"],
+        "class_order_sha256": first["class_order_sha256"],
+        "dataset_identity": first.get("dataset_identity"),
+        "run_id": run_id,
+        "artifact_manifest_sha256": artifact_sha,
+        "storage_measurement": measurement,
+    }
+    registry_document = {
+        "schema_version": 1,
+        "plan_sha256": plan["plan_sha256"],
+        "schedule_sha256": plan["schedule_sha256"],
+        "training_source_sha256": plan["training_source_sha256"],
+        "completed_runs": {first["run_key"]: entry},
+    }
+    canonical_registry = workflow._matrix_registry_path(seed_results, plan)
+    canonical_registry.parent.mkdir(parents=True)
+    canonical_registry.write_text(
+        json.dumps(registry_document, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    logical_registry = seed_storage.logical_path_for_local(canonical_registry)
+    published = seed_storage.publish_file(canonical_registry, logical_registry)
+    assert published["status"] == "PASS"
+    original_registry_bytes = canonical_registry.read_bytes()
+
+    # A new Colab session has empty local staging and must hydrate the existing
+    # canonical API registry before Cells C/E/F inspect completed runs.
+    fresh_root = tmp_path / "fresh-stage"
+    fresh_results = fresh_root / "production" / "results"
+    fresh_checkpoints = fresh_root / "production" / "checkpoints"
+    fresh_storage = _storage(service, fresh_root, monkeypatch)
+    fresh_storage.bind_root(logical_results, fresh_results)
+    fresh_storage.bind_root(logical_checkpoints, fresh_checkpoints)
+    assert not fresh_results.exists()
+    from revision_r1.storage import StorageCapacityError
+
+    with pytest.raises(StorageCapacityError, match="not present in local staging"):
+        workflow.matrix_registry_evidence(fresh_storage, fresh_results, plan)
+    assert not workflow._matrix_registry_path(fresh_results, plan).exists()
+    workflow._hydrate_api_matrix_registry(fresh_storage, fresh_results, plan)
+    staged_registry = workflow._matrix_registry_path(fresh_results, plan)
+    assert staged_registry.read_bytes() == original_registry_bytes
+
+    def validated_run(_plan, record, _bundle, _output, *, synthetic):
+        assert synthetic is False
+        if record["run_key"] == first["run_key"]:
+            return {"run_id": run_id, "artifact_manifest_sha256": artifact_sha}
+        raise FileNotFoundError(record["run_key"])
+
+    monkeypatch.setattr(workflow, "_validate_completed_run", validated_run)
+    # Cell C's finalized-run reuse must consult the plan-level registry root.
+    assert workflow.reuse_validated_first_run_measurement(
+        plan, first, fresh_results,
+    ) == measurement
+    registry_evidence = workflow.matrix_registry_evidence(
+        fresh_storage, fresh_results, plan,
+    )
+    assert registry_evidence == {
+        "logical_drive_path": str(logical_registry),
+        "drive_file_id": published["file_id"],
+        "drive_parent_id": fresh_storage.folder_id(logical_registry.parent, create=False),
+        "local_staging_path": str(staged_registry),
+        "plan_sha256": plan["plan_sha256"],
+        "registry_bytes": len(original_registry_bytes),
+        "registry_md5": hashlib.md5(original_registry_bytes, usedforsecurity=False).hexdigest(),
+        "completed_run_keys": ["ember_seed42_full_hybrid"],
+    }
+
+    # Cell E is deliberately read-only and reuses the evidence from Cell C.
+    import contextlib
+    import io
+    from scripts.build_github_handoff import _github_completed_run_guard_cell
+
+    cell_e_output = io.StringIO()
+    with contextlib.redirect_stdout(cell_e_output):
+        exec(_github_completed_run_guard_cell(), {
+            "MATRIX_REGISTRY_EVIDENCE": registry_evidence,
+        })
+    assert "ALREADY_FINALIZED_COMPLETED_RUN" in cell_e_output.getvalue()
+    assert "CELL_E_REUSES_CELL_C_REGISTRY_EVIDENCE" in cell_e_output.getvalue()
+    assert published["file_id"] in cell_e_output.getvalue()
+    assert "ember_seed42_full_hybrid" in cell_e_output.getvalue()
+
+    # Cell F must use the same root, skip Run 1, and stop at the first pending
+    # record. The intercepted runner returns before any model/training work.
+    class NoopLease:
+        def __init__(self, *_args, **_kwargs):
+            self.lost = threading.Event()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
+    monkeypatch.setattr(workflow, "validate_runtime_bound_plan", lambda value, *_a, **_k: value)
+    monkeypatch.setattr(workflow, "_MatrixLeaseHeartbeat", NoopLease)
+    monkeypatch.setattr(fresh_storage, "ensure_lease_record", lambda _path: {"status": "EXISTING_EXACT_ID"})
+    monkeypatch.setattr(workflow, "project_storage", lambda *_a, **_k: {"status": "TEST_ONLY"})
+    monkeypatch.setattr(
+        workflow, "inspect_production_capacity",
+        lambda *_a, **_k: {"production_measurements_validated": True},
+    )
+    monkeypatch.setattr(workflow, "require_run_capacity", lambda *_a, **_k: None)
+    monkeypatch.setattr(workflow, "_preflight_addressed_cache_bytes", lambda *_a, **_k: 0)
+    monkeypatch.setattr(workflow, "_bundle_cache_bytes", lambda *_a, **_k: 0)
+    monkeypatch.setattr(workflow, "_expected_plan_runner_identity", lambda *_a, **_k: {})
+    monkeypatch.setattr(workflow, "_expected_runner_identity", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        workflow, "_SequentialDatasetBundleCache",
+        lambda _loader: type("Cache", (), {"get": lambda _self, _name: object()})(),
+    )
+    runner_calls = []
+
+    def stop_before_training(_plan, record, *_args, **_kwargs):
+        runner_calls.append(record["run_key"])
+        return {"status": "INTERRUPTED_RESUMABLE", "cursor": None}
+
+    monkeypatch.setattr(workflow, "execute_frozen_plan_record", stop_before_training)
+    events = []
+    result = workflow.continue_production_matrix(
+        plan,
+        preflight={},
+        schedule_path=tmp_path / "schedule.csv",
+        schedule_manifest_path=tmp_path / "schedule.manifest.json",
+        data_roots={},
+        cache_root=tmp_path / "cache",
+        output_root=fresh_results,
+        checkpoint_root=fresh_checkpoints,
+        local_checkpoint_root=tmp_path / "local-checkpoints",
+        launch_enabled=True,
+        progress_callback=events.append,
+        api_factory=lambda: service,
+        storage_adapter=fresh_storage,
+        logical_output_root=logical_results,
+        logical_checkpoint_root=Path(
+            "/drive/MyDrive/ReVision/revision_R1/production/checkpoints"
+        ),
+    )
+
+    assert result["status"] == "INTERRUPTED_RESUMABLE"
+    assert result["interrupted_run"] == "ember_seed42_current_only"
+    assert result["run_index"] == 2
+    assert runner_calls == ["ember_seed42_current_only"]
+    assert result["first_run_reused"] == "ember_seed42_full_hybrid"
+    assert result["matrix_registry_evidence_at_start"] == registry_evidence
+    matrix_registry_event = next(
+        event for event in events if event.get("stage") == "matrix_registry_verified"
+    )
+    assert matrix_registry_event["matrix_registry_evidence"] == registry_evidence
+    assert matrix_registry_event["next_pending_run_key"] == "ember_seed42_current_only"
+    assert len(workflow._read_matrix_registry(fresh_results, plan)["completed_runs"]) == 1
+    assert workflow._read_matrix_registry(fresh_results, plan)["completed_runs"].keys() == {first["run_key"]}
+    remote_metadata = fresh_storage.exact_file(logical_registry)
+    assert remote_metadata["id"] == published["file_id"]
+    assert fresh_storage.download_file(
+        logical_registry, tmp_path / "registry-readback.json",
+    )["bytes"] == len(original_registry_bytes)
+    assert json.loads((tmp_path / "registry-readback.json").read_bytes()) == registry_document
