@@ -314,6 +314,189 @@ def test_api_storage_uses_main_account_independent_of_mount_and_roundtrips_by_ex
     assert compute_mount_account != storage.expected_account_email
 
 
+def _seed_preflight_drive(service, *, schedule_bytes=None):
+    if schedule_bytes is None:
+        schedule_bytes = (
+            "dataset,seed,task\n"
+            + "".join(f"ember,42,{task}\n" for task in range(1, 221))
+        ).encode("utf-8")
+    folders = [
+        ("revision-r1", "revision_R1", "revision"),
+        ("results", "results", "revision-r1"),
+        ("preflight", "preflight", "results"),
+        ("schedules", "schedules", "preflight"),
+    ]
+    for file_id, name, parent in folders:
+        service.records[file_id] = {
+            "id": file_id, "name": name, "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent], "owners": [{"emailAddress": OWNER}], "ownedByMe": True,
+            "capabilities": {"canAddChildren": True, "canDelete": True}, "etag": '"v1"', "version": "1",
+        }
+
+    schedule_name = "effective_update_budget_test.csv"
+    manifest_name = "effective_update_budget_test.manifest.json"
+    schedule_sha = hashlib.sha256(schedule_bytes).hexdigest()
+    historical_schedule = (
+        "/content/drive/.shortcut-targets-by-id/old/ReVision/revision_R1/results/preflight/"
+        f"schedules/{schedule_name}"
+    )
+    historical_manifest = (
+        "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/"
+        f"schedules/{manifest_name}"
+    )
+    preflight_payload = json.dumps({
+        "status": "PREFLIGHT_VALIDATED_NO_TRAINING",
+        "training_reproduction_claimed": False,
+        "schedule": {
+            "path": historical_schedule, "manifest_path": historical_manifest,
+            "sha256": schedule_sha, "row_count": 220,
+        },
+    }, sort_keys=True).encode("utf-8")
+    manifest_payload = json.dumps({
+        "source_csv_path": historical_schedule, "source_csv_sha256": schedule_sha,
+    }, sort_keys=True).encode("utf-8")
+
+    def add_file(file_id, name, parent, payload, mime):
+        service.records[file_id] = {
+            "id": file_id, "name": name, "mimeType": mime, "parents": [parent],
+            "owners": [{"emailAddress": OWNER}], "ownedByMe": True,
+            "size": str(len(payload)), "quotaBytesUsed": str(len(payload)),
+            "md5Checksum": hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+            "capabilities": {"canEdit": True, "canDelete": True},
+            "content": payload, "etag": '"v1"', "version": "1",
+        }
+
+    add_file("preflight-json", "preflight.json", "preflight", preflight_payload, "application/json")
+    add_file("effective-csv", schedule_name, "schedules", schedule_bytes, "text/csv")
+    add_file("schedule-manifest", manifest_name, "schedules", manifest_payload, "application/json")
+    return {
+        "schedule_sha": schedule_sha,
+        "historical_schedule": historical_schedule,
+        "historical_manifest": historical_manifest,
+        "schedule_name": schedule_name,
+        "manifest_name": manifest_name,
+        "preflight_payload": preflight_payload,
+        "schedule_payload": schedule_bytes,
+        "manifest_payload": manifest_payload,
+    }
+
+
+def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount(tmp_path, monkeypatch, capsys):
+    from scripts.build_github_handoff import notebook_document
+    from scripts import production_workflow
+
+    service = _FakeService()
+    fixture = _seed_preflight_drive(service)
+    stage_root = tmp_path / "storage" / "preflight"
+    storage = DriveApiStorage(
+        service=service, expected_account_email=OWNER, revision_folder_id="revision",
+        logical_revision_root="/content/drive/MyDrive/ReVision", local_staging_root=tmp_path / "storage",
+        download_to_path=lambda request, path: Path(path).write_bytes(request.execute()), retry_delays=(0,),
+    )
+    logical_preflight = "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/preflight.json"
+    storage.bind_root(Path(logical_preflight).parent, stage_root)
+    monkeypatch.setattr(production_workflow, "inspect_dataset_sources", lambda roots, cache, _preflight: {
+        name: {"splits": {"train": {"source": "test fixture"}, "test": {"source": "test fixture"}}}
+        for name in ("ember", "az_class")
+    })
+    source = "".join(notebook_document("0123456789abcdef0123456789abcdef01234567")["cells"][2]["source"])
+    namespace = {
+        "DRIVE_PATHS": {
+            "ember_data_root": str(tmp_path / "unmounted" / "datasets"),
+            "az_data_root": str(tmp_path / "unmounted" / "datasets"),
+            "preflight_drive_path": logical_preflight,
+            "preflight_staging_root": str(stage_root),
+            "dataset_cache_root": str(tmp_path / "cache"),
+        },
+        "STORAGE_ADAPTER": storage,
+        "EXPECTED_SCHEDULE_SHA256": fixture["schedule_sha"],
+        "PROJECT": Path(__file__).resolve().parents[1],
+        "Path": Path,
+        "json": json,
+        "hashlib": hashlib,
+    }
+
+    exec(compile(source, "generated-cell-B", "exec"), namespace)
+    capsys.readouterr()
+
+    evidence = namespace["PREFLIGHT_STAGING_EVIDENCE"]
+    assert evidence["schedule_sha256"] == fixture["schedule_sha"]
+    assert evidence["drive_files"]["preflight"]["file_id"] == "preflight-json"
+    assert evidence["drive_files"]["schedule"]["file_id"] == "effective-csv"
+    assert evidence["drive_files"]["manifest"]["file_id"] == "schedule-manifest"
+    assert Path(namespace["PREFLIGHT_PATH"]).read_bytes() == fixture["preflight_payload"]
+    assert namespace["EFFECTIVE_SCHEDULE_PATH"].read_bytes() == fixture["schedule_payload"]
+    assert namespace["EFFECTIVE_SCHEDULE_MANIFEST_PATH"].read_bytes() == fixture["manifest_payload"]
+    assert Path(namespace["EFFECTIVE_SCHEDULE_PATH"]).is_relative_to(stage_root)
+    assert all(Path(item["local_path"]).is_file() for item in evidence["drive_files"].values())
+    assert fixture["historical_schedule"] not in str(namespace["EFFECTIVE_SCHEDULE_PATH"])
+    remote_snapshot = {
+        key: (record.get("size"), record.get("md5Checksum"), record.get("content"))
+        for key, record in service.records.items()
+    }
+    first_bundle_key = evidence["bundle_key"]
+    exec(compile(source, "generated-cell-B-rerun", "exec"), namespace)
+    capsys.readouterr()
+    assert namespace["PREFLIGHT_STAGING_EVIDENCE"]["bundle_key"] == first_bundle_key
+    assert {
+        key: (record.get("size"), record.get("md5Checksum"), record.get("content"))
+        for key, record in service.records.items()
+    } == remote_snapshot
+    assert set(service.records) == {
+        "revision", "results", "revision-r1", "preflight", "schedules",
+        "preflight-json", "effective-csv", "schedule-manifest",
+    }
+
+
+def test_preflight_staging_rejects_wrong_schedule_hash_missing_or_ambiguous_canonical_file(tmp_path, monkeypatch):
+    from scripts.build_github_handoff import stage_canonical_preflight_artifacts
+
+    def make_adapter(service, root):
+        return DriveApiStorage(
+            service=service, expected_account_email=OWNER, revision_folder_id="revision",
+            logical_revision_root="/content/drive/MyDrive/ReVision", local_staging_root=root / "storage",
+            download_to_path=lambda request, path: Path(path).write_bytes(request.execute()), retry_delays=(0,),
+        )
+
+    logical_preflight = "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/preflight.json"
+    service = _FakeService()
+    fixture = _seed_preflight_drive(service)
+    adapter = make_adapter(service, tmp_path)
+    with pytest.raises(ValueError, match="does not authenticate"):
+        stage_canonical_preflight_artifacts(
+            adapter, logical_preflight, tmp_path / "storage" / "wrong-hash", "0" * 64,
+        )
+
+    corrupted_service = _FakeService()
+    corrupted_fixture = _seed_preflight_drive(corrupted_service)
+    corrupted_record = corrupted_service.records["effective-csv"]
+    corrupted_record["content"] = b"X" * len(corrupted_record["content"])
+    with pytest.raises(DriveStorageError, match="SHA-256 mismatch"):
+        stage_canonical_preflight_artifacts(
+            make_adapter(corrupted_service, tmp_path / "corrupted"), logical_preflight,
+            tmp_path / "corrupted" / "storage" / "preflight", corrupted_fixture["schedule_sha"],
+        )
+
+    missing_service = _FakeService()
+    missing_fixture = _seed_preflight_drive(missing_service)
+    missing_service.records.pop("effective-csv")
+    with pytest.raises(FileNotFoundError, match="effective_update_budget_test.csv"):
+        stage_canonical_preflight_artifacts(
+            make_adapter(missing_service, tmp_path / "missing"), logical_preflight,
+            tmp_path / "missing" / "storage" / "preflight", missing_fixture["schedule_sha"],
+        )
+
+    ambiguous_service = _FakeService()
+    ambiguous_fixture = _seed_preflight_drive(ambiguous_service)
+    duplicate = dict(ambiguous_service.records["effective-csv"], id="duplicate-effective-csv")
+    ambiguous_service.records["duplicate-effective-csv"] = duplicate
+    with pytest.raises(AmbiguousDrivePathError, match="multiple Drive objects"):
+        stage_canonical_preflight_artifacts(
+            make_adapter(ambiguous_service, tmp_path / "ambiguous"), logical_preflight,
+            tmp_path / "ambiguous" / "storage" / "preflight", ambiguous_fixture["schedule_sha"],
+        )
+
+
 def test_canonical_write_probe_uses_the_same_adapter_create_download_and_exact_delete_path(tmp_path, monkeypatch):
     from scripts import production_workflow
 

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -233,6 +235,201 @@ def verify_package_integrity(package_root: str | Path) -> tuple[dict[str, Any], 
     return package_manifest, build_manifest, package_manifest_sha
 
 
+def stage_canonical_preflight_artifacts(
+    storage_adapter,
+    logical_preflight_path: str | Path,
+    local_staging_root: str | Path,
+    expected_schedule_sha256: str,
+) -> dict[str, Any]:
+    """Download the canonical preflight bundle by verified Drive file IDs.
+
+    Historical absolute paths embedded in preflight JSON are not opened. Their
+    basenames identify candidates only; the API adapter resolves those names
+    under the exact canonical preflight/schedules folder ancestry.
+    """
+    from revision_r1.validation_workflow import resolve_effective_artifacts
+
+    logical_preflight = Path(os.path.abspath(str(Path(logical_preflight_path).expanduser())))
+    try:
+        relative = logical_preflight.relative_to(storage_adapter.logical_revision_root)
+    except ValueError as exc:
+        raise ValueError("preflight logical path is outside the verified canonical ReVision root") from exc
+    if logical_preflight.name != "preflight.json" or relative.parts[-3:] != (
+        "results", "preflight", "preflight.json",
+    ):
+        raise ValueError("preflight must be the canonical revision_R1/results/preflight/preflight.json")
+
+    local_root = Path(local_staging_root).expanduser().resolve()
+    try:
+        local_root.relative_to(storage_adapter.local_staging_root)
+    except ValueError as exc:
+        raise ValueError("preflight staging root is outside the configured local API staging root") from exc
+    local_root.mkdir(parents=True, exist_ok=True)
+
+    def exact_metadata(logical_file: Path) -> dict[str, Any]:
+        parent_id = storage_adapter.folder_id(logical_file.parent, create=False)
+        metadata = storage_adapter.exact_file(logical_file)
+        if metadata is None:
+            raise FileNotFoundError(f"canonical Drive artifact is missing: {logical_file}")
+        if (
+            not metadata.get("id")
+            or metadata.get("name") != logical_file.name
+            or metadata.get("mimeType") == "application/vnd.google-apps.folder"
+            or parent_id not in [str(value) for value in metadata.get("parents", [])]
+            or not metadata.get("md5Checksum")
+        ):
+            raise ValueError(f"canonical Drive artifact identity/parent/checksum metadata is incomplete: {logical_file}")
+        try:
+            if int(metadata.get("size")) <= 0:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"canonical Drive artifact has invalid size metadata: {logical_file}") from exc
+        return metadata
+
+    preflight_metadata = exact_metadata(logical_preflight)
+    preflight_parent_id = storage_adapter.folder_id(logical_preflight.parent, create=False)
+
+    schedule_folder = logical_preflight.parent / "schedules"
+    schedule_folder_id = storage_adapter.folder_id(schedule_folder, create=False)
+    # The JSON is the only first-stage download. Its stored paths are historical
+    # metadata, so only their filenames are used for canonical-folder lookup.
+    discovery_dir = Path(tempfile.mkdtemp(prefix=".preflight-discovery-", dir=local_root))
+    discovery_path = discovery_dir / "preflight.json"
+    try:
+        preliminary = storage_adapter.download_file(
+            logical_preflight, discovery_path,
+            expected_bytes=int(preflight_metadata["size"]),
+        )
+        if (preliminary.get("file_id") != preflight_metadata["id"]
+                or preliminary.get("md5_checksum") != preflight_metadata["md5Checksum"]):
+            raise ValueError("canonical preflight identity changed between lookup and API download")
+        preflight = json.loads(discovery_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"canonical preflight JSON could not be parsed: {exc}") from exc
+    finally:
+        shutil.rmtree(discovery_dir)
+    if not isinstance(preflight, dict):
+        raise ValueError("canonical preflight JSON must contain an object")
+    schedule_info = preflight.get("schedule")
+    if (
+        preflight.get("status") != "PREFLIGHT_VALIDATED_NO_TRAINING"
+        or preflight.get("training_reproduction_claimed") is not False
+        or not isinstance(schedule_info, dict)
+        or schedule_info.get("row_count") != 220
+        or schedule_info.get("sha256") != expected_schedule_sha256
+    ):
+        raise ValueError(
+            "canonical preflight does not authenticate the successful 220-row effective schedule "
+            f"with SHA-256 {expected_schedule_sha256}"
+        )
+
+    def historical_basename(value: Any, label: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"canonical preflight has no historical {label} path")
+        # Normalize separators only to extract a name; never open or query the
+        # stored directory, which may refer to a stale mount/shortcut.
+        basename = value.replace("\\", "/").rsplit("/", 1)[-1]
+        if basename in {"", ".", ".."} or "\x00" in basename:
+            raise ValueError(f"canonical preflight has an invalid {label} filename")
+        return basename
+
+    schedule_name = historical_basename(schedule_info.get("path"), "schedule")
+    manifest_name = historical_basename(schedule_info.get("manifest_path"), "schedule manifest")
+    expected_manifest_name = Path(schedule_name).with_suffix(".manifest.json").name
+    if not schedule_name.endswith(".csv") or manifest_name != expected_manifest_name:
+        raise ValueError("preflight schedule/manifest filenames do not form the expected CSV companion pair")
+
+    logical_schedule = schedule_folder / schedule_name
+    logical_manifest = schedule_folder / manifest_name
+    schedule_metadata = exact_metadata(logical_schedule)
+    manifest_metadata = exact_metadata(logical_manifest)
+    if schedule_folder_id != storage_adapter.folder_id(logical_schedule.parent, create=False):
+        raise ValueError("canonical schedule folder ancestry changed during artifact resolution")
+
+    bundle_identity = {
+        label: {
+            "id": metadata["id"], "parent_id": parent_id,
+            "version": metadata.get("version"), "size": metadata.get("size"),
+            "md5": metadata["md5Checksum"],
+        }
+        for label, metadata, parent_id in (
+            ("preflight", preflight_metadata, preflight_parent_id),
+            ("schedule", schedule_metadata, schedule_folder_id),
+            ("manifest", manifest_metadata, schedule_folder_id),
+        )
+    }
+    bundle_key = _sha256(json.dumps(bundle_identity, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    bundle_root = local_root / bundle_key
+    pending = Path(tempfile.mkdtemp(prefix=".preflight-pending-", dir=local_root))
+    try:
+        downloads = (
+            ("preflight", logical_preflight, preflight_metadata, pending / "preflight.json", None, preflight_parent_id),
+            ("schedule", logical_schedule, schedule_metadata, pending / "schedules" / schedule_name,
+             expected_schedule_sha256, schedule_folder_id),
+            ("manifest", logical_manifest, manifest_metadata, pending / "schedules" / manifest_name,
+             None, schedule_folder_id),
+        )
+        artifact_evidence = {}
+        for label, logical_file, metadata, target, expected_sha256, parent_id in downloads:
+            result = storage_adapter.download_file(
+                logical_file, target, expected_sha256=expected_sha256,
+                expected_bytes=int(metadata["size"]),
+            )
+            if (result.get("file_id") != metadata["id"]
+                    or result.get("md5_checksum") != metadata["md5Checksum"]
+                    or result.get("bytes") != int(metadata["size"])):
+                raise ValueError(f"canonical {label} Drive file identity or version changed during API download")
+            artifact_evidence[label] = {
+                "logical_path": str(logical_file), "file_id": str(metadata["id"]),
+                "parent_id": parent_id, "bytes": result["bytes"],
+                "md5_checksum": result["md5_checksum"], "sha256": result["sha256"],
+                "local_path": str(target),
+            }
+
+        resolved_schedule, resolved_manifest, resolved_preflight = resolve_effective_artifacts(
+            pending / "preflight.json", expected_sha256=expected_schedule_sha256,
+            discover_manifest=True,
+        )
+        if (resolved_preflight != preflight or resolved_schedule.name != schedule_name
+                or resolved_manifest.name != manifest_name):
+            raise ValueError("staged canonical preflight bundle resolved to unexpected artifact names or content")
+
+        if bundle_root.exists() or bundle_root.is_symlink():
+            if bundle_root.is_symlink() or not bundle_root.is_dir():
+                raise ValueError(f"existing preflight staging bundle is not a regular directory: {bundle_root}")
+            for _label, _logical, _metadata, pending_path, _expected, _parent in downloads:
+                existing_path = bundle_root / pending_path.relative_to(pending)
+                if (not existing_path.is_file() or existing_path.is_symlink()
+                        or existing_path.read_bytes() != pending_path.read_bytes()):
+                    raise ValueError(f"existing preflight staging bundle differs; preserved: {existing_path}")
+            shutil.rmtree(pending)
+        else:
+            os.replace(pending, bundle_root)
+    finally:
+        if pending.exists() and not pending.is_symlink():
+            shutil.rmtree(pending)
+
+    final_preflight = bundle_root / "preflight.json"
+    final_schedule, final_manifest, final_report = resolve_effective_artifacts(
+        final_preflight, expected_sha256=expected_schedule_sha256, discover_manifest=True,
+    )
+    artifact_evidence["preflight"]["local_path"] = str(final_preflight)
+    artifact_evidence["schedule"]["local_path"] = str(final_schedule)
+    artifact_evidence["manifest"]["local_path"] = str(final_manifest)
+    return {
+        "status": "PASS", "bundle_key": bundle_key,
+        "preflight_path": str(final_preflight), "schedule_path": str(final_schedule),
+        "manifest_path": str(final_manifest),
+        "schedule_sha256": _sha256(final_schedule.read_bytes()),
+        "manifest_sha256": _sha256(final_manifest.read_bytes()),
+        "drive_files": artifact_evidence,
+        "canonical_preflight_schedule_path": str(logical_schedule),
+        "canonical_preflight_manifest_path": str(logical_manifest),
+        "historical_paths_used_for_lookup": "basenames_only; canonical Drive parent IDs verified",
+        "preflight_status": final_report["status"],
+    }
+
+
 def _github_setup_cell(commit_sha: str) -> str:
     template = r'''# Cell A — Drive/GitHub setup, one pinned detached fetch, and package integrity checks.
 from pathlib import Path, PurePosixPath
@@ -252,7 +449,8 @@ if len(PINNED_GIT_COMMIT) != 40 or any(c not in "0123456789abcdef" for c in PINN
 DRIVE_PATHS = {
     "ember_data_root": "/content/drive/MyDrive/AHR_MalCL/datasets",
     "az_data_root": "/content/drive/MyDrive/AHR_MalCL/datasets",
-    "preflight_path": "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/preflight.json",
+    "preflight_drive_path": "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/preflight.json",
+    "preflight_staging_root": "/content/revision_R1_storage_staging/preflight",
     "v62_recovery_report": "/content/drive/MyDrive/ReVision/revision_R1/results/validation/reports/resume_validation_2b4d8f5f1f29a938_20261026T142320Z_946699443.json",
     "output_root": "/content/drive/MyDrive/ReVision/revision_R1/production/results",
     "checkpoint_root": "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints",
@@ -408,8 +606,8 @@ STORAGE_API_SERVICE, STORAGE_CREDENTIALS, STORAGE_AUTH_EVIDENCE = build_main_acc
 STORAGE_API_FACTORY = lambda: STORAGE_API_SERVICE
 print("Drive API OAuth identity verified:", STORAGE_AUTH_EVIDENCE["authenticated_user"],
       "credential source:", STORAGE_AUTH_EVIDENCE["credential_source"])
-# The mounted filesystem is a dataset/preflight read source only. It may use
-# any compute account; all durable research writes go through explicit OAuth.
+# The mounted filesystem is a dataset read source only. Preflight artifacts
+# and all durable research files use the explicit main-account API adapter.
 drive.mount("/content/drive", force_remount=False)
 ACTUAL_TRAINING_SOURCE_SHA256 = training_source_sha256(PROJECT)
 CHECKPOINT_COMPATIBILITY = verify_checkpoint_compatibility(PROJECT)
@@ -428,6 +626,10 @@ STORAGE_ADAPTER = DriveApiStorage(
     revision_folder_id=CANONICAL_REVISION_FOLDER_ID,
     logical_revision_root="/content/drive/MyDrive/ReVision",
     local_staging_root=STORAGE_STAGE_ROOT,
+)
+STORAGE_ADAPTER.bind_root(
+    Path(DRIVE_PATHS["preflight_drive_path"]).parent,
+    DRIVE_PATHS["preflight_staging_root"],
 )
 STORAGE_ADAPTER.bind_root(DRIVE_PATHS["output_root"], STORAGE_STAGE_ROOT / "production/results")
 STORAGE_ADAPTER.bind_root(DRIVE_PATHS["checkpoint_root"], STORAGE_STAGE_ROOT / "production/checkpoints")
@@ -486,13 +688,24 @@ from revision_r1.validation_workflow import resolve_effective_artifacts
 from revision_r1.config import DATASETS
 from revision_r1.data import inspect_npz_array_layout
 from scripts.production_workflow import inspect_dataset_sources
+from scripts.build_github_handoff import stage_canonical_preflight_artifacts
 
-PREFLIGHT_PATH = Path(DRIVE_PATHS["preflight_path"]).expanduser()
-if not PREFLIGHT_PATH.is_file():
-    raise FileNotFoundError(f"Passed Drive preflight not found: {PREFLIGHT_PATH}")
+PREFLIGHT_STAGING_EVIDENCE = stage_canonical_preflight_artifacts(
+    STORAGE_ADAPTER,
+    DRIVE_PATHS["preflight_drive_path"],
+    DRIVE_PATHS["preflight_staging_root"],
+    EXPECTED_SCHEDULE_SHA256,
+)
+PREFLIGHT_PATH = Path(PREFLIGHT_STAGING_EVIDENCE["preflight_path"]).expanduser()
+if not PREFLIGHT_PATH.is_file() or PREFLIGHT_PATH.is_symlink():
+    raise FileNotFoundError(f"OAuth API-staged preflight is missing or unsafe: {PREFLIGHT_PATH}")
 EFFECTIVE_SCHEDULE_PATH, EFFECTIVE_SCHEDULE_MANIFEST_PATH, PREFLIGHT = resolve_effective_artifacts(
     PREFLIGHT_PATH, expected_sha256=EXPECTED_SCHEDULE_SHA256, discover_manifest=True,
 )
+if (EFFECTIVE_SCHEDULE_PATH != Path(PREFLIGHT_STAGING_EVIDENCE["schedule_path"])
+    or EFFECTIVE_SCHEDULE_MANIFEST_PATH != Path(PREFLIGHT_STAGING_EVIDENCE["manifest_path"])
+    or PREFLIGHT_STAGING_EVIDENCE["schedule_sha256"] != EXPECTED_SCHEDULE_SHA256):
+    raise ValueError("Cell B resolved preflight artifacts differ from their verified canonical Drive IDs")
 if PREFLIGHT.get("status") != "PREFLIGHT_VALIDATED_NO_TRAINING" or PREFLIGHT.get("training_reproduction_claimed") is not False:
     raise ValueError("Drive preflight is not the validated no-training schedule/data record")
 DATA_ROOTS = {
@@ -521,6 +734,8 @@ if PACKAGED_SCHEDULE_SHA256 != PACKAGED_SCHEDULE_MANIFEST.get("source_csv_sha256
 print("Effective schedule:", EFFECTIVE_SCHEDULE_PATH)
 print("Effective schedule SHA-256:", EXPECTED_SCHEDULE_SHA256, "| rows:", PREFLIGHT["schedule"]["row_count"])
 print("Matching manifest:", EFFECTIVE_SCHEDULE_MANIFEST_PATH)
+print("Canonical OAuth API preflight artifact IDs and local staging:")
+print(json.dumps(PREFLIGHT_STAGING_EVIDENCE, sort_keys=True, indent=2))
 print("Original packaged schedule SHA-256 (unchanged):", PACKAGED_SCHEDULE_SHA256)
 print("Canonical dataset sources (missing Drive files require a matching local verified cache):")
 print(json.dumps(DATASET_SOURCE_REPORT, sort_keys=True, indent=2))
@@ -1007,7 +1222,7 @@ def notebook_document(commit_sha: str) -> dict[str, Any]:
     document["cells"][0]["source"] = (
         "# revision_R1 production — GitHub-pinned runner\n\n"
         "Cells A–G use one explicitly selected full Git commit per Colab session. Cell A fetches it once and checks out detached into a commit-versioned local directory, then verifies both manifests, the compatible training-core hash, and frozen schedule.\n\n"
-        "Drive data and durable files use Drive API v3 with the dedicated user-OAuth refresh token from Colab Secrets for the canonical main account. Drive v2, built from those exact same credentials, is used only for lease ETag/If-Match compare-and-swap because v3 no longer exposes file ETags. Cell A verifies both API identities and runs a live stale-write rejection probe before any run; missing ETags or a stale update not returning HTTP 412 keeps production blocked. It never uses `google.auth.default()` for storage. The Drive mount may use any compute account and is only a read source for datasets/preflight. Every durable output, checkpoint, progress record, manifest, registry, lease, journal, and export remains staged locally and written through the verified main-account Drive v3 API.\n\n"
+        "Drive data and durable files use Drive API v3 with the dedicated user-OAuth refresh token from Colab Secrets for the canonical main account. Drive v2, built from those exact same credentials, is used only for lease ETag/If-Match compare-and-swap because v3 no longer exposes file ETags. Cell A verifies both API identities and runs a live stale-write rejection probe before any run; missing ETags or a stale update not returning HTTP 412 keeps production blocked. It never uses `google.auth.default()` for storage. Cell B fetches the canonical preflight JSON, effective schedule, and matching manifest by verified Drive file IDs into local staging; it does not depend on DriveFS paths for those artifacts. The Drive mount may use any compute account and is a read source for datasets only. Every durable output, checkpoint, progress record, manifest, registry, lease, journal, and export remains staged locally and written through the verified main-account Drive v3 API.\n\n"
         "Before Cell A, complete the one-time OAuth setup in `README_GITHUB_COLAB.md` and add `REVISION_R1_STORAGE_OAUTH_CLIENT_ID`, `REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET`, and `REVISION_R1_STORAGE_REFRESH_TOKEN` to Colab Secrets with notebook access enabled. Never put secret values in notebook code or output.\n\n"
         "The repository is currently public, so no GitHub token is required. If private later, use the fine-grained read-only Colab Secret `GITHUB_READ_TOKEN` (Contents: Read-only, restricted to this repo; enable notebook access). Never paste credentials into cells or outputs.\n\n"
         "Run A → B → C → D. D does not change run state or locks; it writes its diagnostic report through the canonical API. B reads Drive datasets or checksum-verified local caches only; external downloads are disabled. Run 1 is already finalized/registered and is reused without remeasurement; E is a no-op. F remains disabled by default."

@@ -143,6 +143,9 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "1tQgfvJNt5MX4cNQbH-4U30hJpcDrBO8x" in cells[1]
     assert "verify_canonical_storage_session(" in cells[1]
     assert "STORAGE_API_FACTORY" in cells[1]
+    assert '"preflight_drive_path": "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/preflight.json"' in cells[1]
+    assert '"preflight_staging_root": "/content/revision_R1_storage_staging/preflight"' in cells[1]
+    assert 'Path(DRIVE_PATHS["preflight_drive_path"]).parent' in cells[1]
     assert "force_remount=False" in cells[1]
     assert "read-only" in cells[1].lower()
     assert "storage account" in cells[1].lower()
@@ -203,6 +206,23 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "REVISION_R1_STORAGE_OAUTH_CLIENT_ID" in cells[0]
     assert "REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET" in cells[0]
     assert "dedicated user-OAuth refresh token" in cells[0]
+
+
+def test_cell_b_preflight_uses_api_staging_and_frozen_schedule_digest():
+    commit = "0123456789abcdef0123456789abcdef01234567"
+    cells = ["".join(cell.get("source", [])) for cell in notebook_document(commit)["cells"]]
+    all_source = "\n".join(cells)
+    cell_b = cells[2]
+
+    assert "stage_canonical_preflight_artifacts(" in cell_b
+    assert 'DRIVE_PATHS["preflight_drive_path"]' in cell_b
+    assert 'DRIVE_PATHS["preflight_staging_root"]' in cell_b
+    assert 'PREFLIGHT_PATH = Path(PREFLIGHT_STAGING_EVIDENCE["preflight_path"])' in cell_b
+    assert "print(json.dumps(PREFLIGHT_STAGING_EVIDENCE, sort_keys=True, indent=2))" in cell_b
+    assert 'PREFLIGHT_PATH = Path(DRIVE_PATHS["preflight_drive_path"])' not in cell_b
+    assert 'if not PREFLIGHT_PATH.is_file()' in cell_b  # checks only the already API-staged local file
+    assert "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212" in cells[1]
+    assert "The Drive mount may use any compute account and is a read source for datasets only" in cells[0]
 
 
 def test_production_readme_has_one_github_execution_order_and_no_zip_setup():
