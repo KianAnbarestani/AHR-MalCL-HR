@@ -54,6 +54,46 @@ def _http_status(error: Exception) -> int | None:
         return None
 
 
+def _header_value(headers: Any, name: str) -> str | None:
+    """Read an HTTP response header without assuming header-name casing."""
+    if not hasattr(headers, "items"):
+        return None
+    for key, value in headers.items():
+        if str(key).casefold() == name.casefold() and value is not None:
+            return str(value)
+    return None
+
+
+def _execute_with_response_headers(request) -> tuple[Any, dict[str, Any]]:
+    """Execute a googleapiclient request while capturing its HTTP response.
+
+    ``googleapiclient.http.HttpRequest`` does not publish the response on a
+    ``request.resp`` attribute. Its supported interface is a response callback.
+    Capture only the ETag and header names needed for safe lease diagnostics.
+    """
+    add_callback = getattr(request, "add_response_callback", None)
+    if not callable(add_callback):
+        raise DriveLeaseError(
+            "Drive API request cannot expose response headers through a response callback; "
+            "conditional leases cannot be verified safely",
+            diagnostics={"observed": {"response_callback_supported": False}},
+        )
+    captured: dict[str, Any] = {"etag": None, "header_names": []}
+
+    def capture(response) -> None:
+        if hasattr(response, "items"):
+            captured["header_names"] = sorted(str(key) for key, _value in response.items())
+        captured["etag"] = _header_value(response, "etag")
+
+    add_callback(capture)
+    result = request.execute()
+    return result, captured
+
+
+def _is_strong_etag(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and not value.lstrip().casefold().startswith("w/")
+
+
 def _retryable(error: Exception) -> bool:
     if isinstance(error, (TimeoutError, ConnectionError)):
         return True
@@ -1110,10 +1150,11 @@ class DriveApiLease:
         file_id = str(metadata["id"])
         request = self.storage.service.files().get(
             fileId=file_id,
-            fields="id,name,mimeType,parents,owners(emailAddress),ownedByMe,capabilities(canEdit),version",
+            fields=("id,name,mimeType,parents,owners(emailAddress),ownedByMe,"
+                    "capabilities(canEdit),size,quotaBytesUsed,version"),
             supportsAllDrives=True,
         )
-        resource = request.execute()
+        resource, response = _execute_with_response_headers(request)
         if (
             resource.get("id") != file_id
             or resource.get("name") != self.logical_path.name
@@ -1127,12 +1168,34 @@ class DriveApiLease:
                 f"expected_file_id={file_id}, expected_parent_id={expected_parent_id}, "
                 f"observed={_safe_metadata_summary(resource)}"
             )
-        etag = None
-        headers = getattr(request, "resp", None)
-        if headers is not None:
-            etag = headers.get("etag") if hasattr(headers, "get") else None
-        if not isinstance(etag, str) or not etag.strip():
-            raise DriveLeaseError("Drive API did not return an ETag required for safe conditional lease updates")
+        etag = response.get("etag")
+        if not _is_strong_etag(etag):
+            diagnostics = {
+                "failure_class": "etag_unavailable_or_weak",
+                "expected": {
+                    "file_id": file_id,
+                    "parent_id": expected_parent_id,
+                    "owner": self.storage.expected_account_email,
+                    "strong_etag": True,
+                },
+                "observed": {
+                    "api_visible": isinstance(resource, dict),
+                    "file_id": resource.get("id") if isinstance(resource, dict) else None,
+                    "parent_ids": resource.get("parents") if isinstance(resource, dict) else None,
+                    "owner": self.storage._owner(resource) if isinstance(resource, dict) else None,
+                    "ownedByMe": resource.get("ownedByMe") if isinstance(resource, dict) else None,
+                    "size": resource.get("size") if isinstance(resource, dict) else None,
+                    "quotaBytesUsed": resource.get("quotaBytesUsed") if isinstance(resource, dict) else None,
+                    "etag_present": bool(etag),
+                    "etag_is_strong": _is_strong_etag(etag),
+                    "response_header_names": response.get("header_names", []),
+                },
+            }
+            raise DriveLeaseError(
+                "Drive API response did not contain a strong ETag required for safe conditional lease updates; "
+                f"diagnostics={json.dumps(diagnostics, sort_keys=True)}",
+                diagnostics=diagnostics,
+            )
         payload = self.storage.service.files().get_media(fileId=file_id, supportsAllDrives=True).execute()
         if not isinstance(payload, (bytes, bytearray)):
             raise DriveLeaseError("Drive API returned non-byte lease content")
@@ -1249,15 +1312,59 @@ def verify_conditional_update_support(service, *, parent_id: str, expected_accou
         if create.get("id") != created_id:
             raise DriveLeaseError("Drive CAS probe create returned a different file ID")
         first_get = service.files().get(
-            fileId=created_id, fields="id,name,parents,owners(emailAddress),ownedByMe",
+            fileId=created_id,
+            fields="id,name,mimeType,parents,owners(emailAddress),ownedByMe,size,quotaBytesUsed",
             supportsAllDrives=True,
         )
-        first_metadata = first_get.execute()
-        etag = getattr(first_get, "resp", {}).get("etag")
-        owner = DriveApiStorage._owner(first_metadata)
-        if (not etag or owner != expected or first_metadata.get("ownedByMe") is not True
-                or parent_id not in first_metadata.get("parents", [])):
-            raise DriveLeaseError("Drive CAS probe identity/parent/ETag was not verified")
+        first_metadata, response = _execute_with_response_headers(first_get)
+        etag = response.get("etag")
+        metadata = first_metadata if isinstance(first_metadata, dict) else {}
+        owner = DriveApiStorage._owner(metadata)
+        observed_parent_ids = [str(value) for value in metadata.get("parents", [])]
+        checks = {
+            "api_visible": isinstance(first_metadata, dict),
+            "file_id_matches": metadata.get("id") == created_id,
+            "parent_matches": parent_id in observed_parent_ids,
+            "owner_matches": owner == expected,
+            "owned_by_authenticated_user": metadata.get("ownedByMe") is True,
+            "strong_etag_present": _is_strong_etag(etag),
+        }
+        if not all(checks.values()):
+            failed_checks = [key for key, passed in checks.items() if not passed]
+            if not checks["api_visible"] or not checks["file_id_matches"]:
+                failure_class = "probe_metadata_missing_or_stale"
+            elif not checks["parent_matches"] or not checks["owner_matches"] or not checks["owned_by_authenticated_user"]:
+                failure_class = "probe_identity_or_parent_mismatch"
+            else:
+                failure_class = "probe_strong_etag_unavailable_or_weak"
+            diagnostics = {
+                "failure_class": failure_class,
+                "expected": {
+                    "file_id": created_id,
+                    "parent_id": parent_id,
+                    "owner": expected,
+                    "ownedByMe": True,
+                    "strong_etag": True,
+                },
+                "observed": {
+                    "api_visible": checks["api_visible"],
+                    "file_id": metadata.get("id"),
+                    "parent_ids": observed_parent_ids,
+                    "owner": owner,
+                    "ownedByMe": metadata.get("ownedByMe"),
+                    "size": metadata.get("size"),
+                    "quotaBytesUsed": metadata.get("quotaBytesUsed"),
+                    "etag_present": bool(etag),
+                    "etag_is_strong": _is_strong_etag(etag),
+                    "response_header_names": response.get("header_names", []),
+                },
+                "checks": checks,
+            }
+            raise DriveLeaseError(
+                "Drive CAS probe identity/parent/strong-ETag verification failed; "
+                f"failed_checks={failed_checks}; diagnostics={json.dumps(diagnostics, sort_keys=True)}",
+                diagnostics=diagnostics,
+            )
         first_payload = b'{"probe":1}\n'
         first_update = service.files().update(
             fileId=created_id,
@@ -1281,7 +1388,8 @@ def verify_conditional_update_support(service, *, parent_id: str, expected_accou
             raise DriveLeaseError("Drive ignored stale If-Match; API cannot safely coordinate active workers")
         return {"status": "PASS", "contract": "stale_if_match_rejected_http_412",
                 "probe_file_id": created_id, "probe_parent_id": parent_id,
-                "owner": owner, "etag_present": True}
+                "owner": owner, "etag_present": True,
+                "etag_source": "http_response_callback"}
     finally:
         if created_id is not None:
             try:

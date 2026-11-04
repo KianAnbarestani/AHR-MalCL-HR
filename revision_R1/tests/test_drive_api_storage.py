@@ -28,13 +28,20 @@ class _HttpError(Exception):
 
 
 class _Request:
-    def __init__(self, execute, etag=None):
+    def __init__(self, execute, response_headers=None):
         self._execute = execute
         self.headers = {}
-        self.resp = {"etag": etag} if etag is not None else {}
+        self._response_headers = response_headers or {}
+        self._response_callbacks = []
+
+    def add_response_callback(self, callback):
+        self._response_callbacks.append(callback)
 
     def execute(self):
-        return self._execute(self)
+        result = self._execute(self)
+        for callback in self._response_callbacks:
+            callback(self._response_headers)
+        return result
 
 
 class _FakeFiles:
@@ -47,6 +54,11 @@ class _FakeFiles:
         self.hide_probe_names_from_list = False
         self.owner_override = None
         self.owned_by_me_override = None
+        self.response_etag_header_name = "etag"
+        self.omit_response_etag = False
+        self.response_etag_override = None
+        self.metadata_parent_override = None
+        self.metadata_file_id_override = None
 
     @staticmethod
     def _contents(media_body):
@@ -119,7 +131,22 @@ class _FakeFiles:
         record = self.records[fileId]
         if alt == "media":
             return _Request(lambda _request: record["content"])
-        return _Request(lambda _request: {key: value for key, value in record.items() if key != "content"}, record["etag"])
+        response_headers = {} if self.omit_response_etag else {
+            self.response_etag_header_name: self.response_etag_override or record["etag"]
+        }
+
+        def metadata_response(_request):
+            result = {key: value for key, value in record.items() if key != "content"}
+            if self.metadata_parent_override is not None:
+                result["parents"] = [self.metadata_parent_override]
+            if self.metadata_file_id_override is not None:
+                result["id"] = self.metadata_file_id_override
+            return result
+
+        return _Request(
+            metadata_response,
+            response_headers,
+        )
 
     def get_media(self, *, fileId, **_kwargs):
         return self.get(fileId=fileId, alt="media")
@@ -358,6 +385,98 @@ def test_drive_api_lease_enforces_active_owner_heartbeat_release_and_stale_etag(
     assert cas["status"] == "PASS"
     assert cas["contract"] == "stale_if_match_rejected_http_412"
     assert not any("cas-probe" in row["name"] for row in service.records.values())
+
+
+def test_conditional_update_probe_captures_etag_from_google_client_response_callback(monkeypatch):
+    monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
+    service = _FakeService()
+    service.files().response_etag_header_name = "ETag"
+
+    result = verify_conditional_update_support(
+        service, parent_id="results", expected_account_email=OWNER,
+    )
+
+    assert result["status"] == "PASS"
+    assert result["contract"] == "stale_if_match_rejected_http_412"
+    assert result["etag_source"] == "http_response_callback"
+    assert not any("cas-probe" in row["name"] for row in service.records.values())
+
+
+def test_google_api_http_request_response_headers_use_callback_not_request_resp_attribute():
+    from googleapiclient.http import HttpRequest
+    from httplib2 import Response
+
+    class _Http:
+        def request(self, *_args, **_kwargs):
+            return Response({"status": "200", "ETag": '"real-client-v1"'}), b'{"visible":true}'
+
+    request = HttpRequest(
+        http=_Http(), postproc=lambda _response, content: json.loads(content),
+        uri="https://example.invalid/drive-probe", method="GET",
+    )
+    assert not hasattr(request, "resp")
+
+    payload, response = drive_storage._execute_with_response_headers(request)
+
+    assert payload == {"visible": True}
+    assert response["etag"] == '"real-client-v1"'
+
+
+@pytest.mark.parametrize("etag", [None, 'W/"weak-v1"'])
+def test_conditional_update_probe_rejects_missing_or_weak_etag_with_field_diagnostics(etag, monkeypatch):
+    monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
+    service = _FakeService()
+    service.files().omit_response_etag = etag is None
+    if etag is not None:
+        service.files().response_etag_override = etag
+
+    with pytest.raises(DriveLeaseError, match="strong-ETag verification failed") as raised:
+        verify_conditional_update_support(
+            service, parent_id="results", expected_account_email=OWNER,
+        )
+
+    assert raised.value.diagnostics["checks"]["api_visible"] is True
+    assert raised.value.diagnostics["checks"]["parent_matches"] is True
+    assert raised.value.diagnostics["checks"]["owner_matches"] is True
+    assert raised.value.diagnostics["checks"]["strong_etag_present"] is False
+    assert raised.value.diagnostics["failure_class"] == "probe_strong_etag_unavailable_or_weak"
+    assert "size" in raised.value.diagnostics["observed"]
+    assert "quotaBytesUsed" in raised.value.diagnostics["observed"]
+    assert not service.records.get("generated-1")
+
+
+@pytest.mark.parametrize(
+    ("fault", "failure_class", "failed_check"),
+    [
+        ("owner", "probe_identity_or_parent_mismatch", "owner_matches"),
+        ("ownedByMe", "probe_identity_or_parent_mismatch", "owned_by_authenticated_user"),
+        ("parent", "probe_identity_or_parent_mismatch", "parent_matches"),
+        ("file_id", "probe_metadata_missing_or_stale", "file_id_matches"),
+    ],
+)
+def test_conditional_update_probe_reports_identity_metadata_failures(fault, failure_class, failed_check, monkeypatch):
+    monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
+    service = _FakeService()
+    if fault == "owner":
+        service.files().owner_override = "compute@example.org"
+    elif fault == "ownedByMe":
+        service.files().owned_by_me_override = False
+    elif fault == "parent":
+        service.files().metadata_parent_override = "not-the-expected-parent"
+    elif fault == "file_id":
+        service.files().metadata_file_id_override = "not-the-probe-id"
+
+    with pytest.raises(DriveLeaseError) as raised:
+        verify_conditional_update_support(
+            service, parent_id="results", expected_account_email=OWNER,
+        )
+
+    diagnostics = raised.value.diagnostics
+    assert diagnostics["failure_class"] == failure_class
+    assert diagnostics["checks"][failed_check] is False
+    assert diagnostics["observed"]["api_visible"] is True
+    assert diagnostics["observed"]["size"] is not None
+    assert diagnostics["observed"]["quotaBytesUsed"] is not None
 
 
 def test_api_storage_rejects_wrong_account_before_any_durable_write(tmp_path, monkeypatch):
