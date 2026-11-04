@@ -820,6 +820,181 @@ def test_drive_api_lease_enforces_active_owner_heartbeat_release_and_stale_etag(
     assert not any("cas-probe" in row["name"] for row in service.records.values())
 
 
+def test_failed_heartbeat_readback_can_release_only_its_exact_pending_write(tmp_path, monkeypatch):
+    import ssl
+    service = _FakeService()
+    storage = _storage(service, tmp_path / "stage", monkeypatch, lease_service=_FakeV2Service(service))
+    logical = "/drive/MyDrive/ReVision/results/.matrix_execution.lease.json"
+    storage.ensure_lease_record(logical)
+    lease = DriveApiLease(storage, logical)
+    lease.acquire()
+    original_read = lease._read
+    calls = 0
+    def fail_readback_once():
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ssl.SSLError("synthetic lost heartbeat readback")
+        return original_read()
+    monkeypatch.setattr(lease, "_read", fail_readback_once)
+    with pytest.raises(ssl.SSLError):
+        lease.heartbeat()
+    assert lease._etag != service.records[lease._file_id]["etag"]
+    lease.release()
+    assert json.loads(service.records[lease._file_id]["content"])["active"] is False
+
+
+def test_heartbeat_and_release_are_serialized_on_one_lease(tmp_path, monkeypatch):
+    import threading
+    service = _FakeService()
+    storage = _storage(service, tmp_path / "stage", monkeypatch, lease_service=_FakeV2Service(service))
+    logical = "/drive/MyDrive/ReVision/results/.matrix_execution.lease.json"
+    storage.ensure_lease_record(logical)
+    lease = DriveApiLease(storage, logical)
+    lease.acquire()
+    entered = threading.Event()
+    proceed = threading.Event()
+    finished = threading.Event()
+    original_read = lease._read
+    errors = []
+    def read():
+        if threading.current_thread().name == "test-heartbeat":
+            entered.set()
+            assert proceed.wait(timeout=5)
+        return original_read()
+    monkeypatch.setattr(lease, "_read", read)
+    def heartbeat():
+        try:
+            lease.heartbeat()
+        except Exception as exc:
+            errors.append(exc)
+    def release():
+        try:
+            lease.release()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+    worker = threading.Thread(target=heartbeat, name="test-heartbeat")
+    cleanup = threading.Thread(target=release, name="test-cleanup")
+    worker.start()
+    assert entered.wait(timeout=5)
+    cleanup.start()
+    assert not finished.wait(timeout=.05)
+    proceed.set()
+    worker.join(timeout=5)
+    cleanup.join(timeout=5)
+    assert not worker.is_alive() and not cleanup.is_alive()
+    assert not errors
+    assert json.loads(service.records[lease._file_id]["content"])["active"] is False
+
+
+def test_release_rejects_unexplained_etag_change_even_for_same_owner(tmp_path, monkeypatch):
+    service = _FakeService()
+    storage = _storage(service, tmp_path / "stage", monkeypatch, lease_service=_FakeV2Service(service))
+    logical = "/drive/MyDrive/ReVision/results/.matrix_execution.lease.json"
+    storage.ensure_lease_record(logical)
+    lease = DriveApiLease(storage, logical)
+    lease.acquire()
+    record = service.records[lease._file_id]
+    old_payload = record["content"]
+    record["etag"] = '"unexpected-change"'
+    with pytest.raises(DriveLeaseError, match="token/ETag changed"):
+        lease.release()
+    assert record["content"] == old_payload
+
+
+def test_matrix_cleanup_does_not_mask_primary_training_or_transport_error(tmp_path):
+    import ssl
+    from scripts.production_workflow import _MatrixLeaseHeartbeat
+    heartbeat = _MatrixLeaseHeartbeat(tmp_path / "lease.json")
+    class BrokenCleanup:
+        def acquire(self):
+            pass
+        def release(self):
+            raise DriveLeaseError("synthetic cleanup ownership conflict")
+    heartbeat.lease = BrokenCleanup()
+    with pytest.raises(ssl.SSLError, match="primary SSL") as caught:
+        with heartbeat:
+            raise ssl.SSLError("primary SSL")
+    assert any("DriveLeaseError" in note for note in caught.value.__notes__)
+
+
+def test_expired_lease_release_requires_exact_record_and_rejects_live_owner(tmp_path, monkeypatch):
+    service = _FakeService()
+    storage = _storage(service, tmp_path / "stage", monkeypatch, lease_service=_FakeV2Service(service))
+    logical = "/drive/MyDrive/ReVision/results/.matrix_execution.lease.json"
+    storage.ensure_lease_record(logical)
+    lease = DriveApiLease(storage, logical)
+    lease.acquire()
+    doc = json.loads(service.records[lease._file_id]["content"])
+    with pytest.raises(DriveLeaseError, match="expired"):
+        lease.release_expired_record(doc)
+    time.sleep(0.01)
+    monkeypatch.setattr(drive_storage.time, "time", lambda: doc["expires_at"] + 1)
+    changed = dict(doc, owner_token="not-the-recorded-owner")
+    with pytest.raises(DriveLeaseError, match="changed"):
+        lease.release_expired_record(changed)
+    result = lease.release_expired_record(doc)
+    assert result["status"] == "EXPIRED_RECORD_RELEASED_BY_CAS"
+    assert json.loads(service.records[lease._file_id]["content"])["active"] is False
+
+
+def test_failed_matrix_owner_recovery_requires_failed_attempt_expiry_and_stopped_threads(tmp_path, monkeypatch):
+    import os
+    import socket
+    import types
+    from scripts import production_workflow as workflow
+    service = _FakeService()
+    storage = _storage(service, tmp_path / "stage", monkeypatch, lease_service=_FakeV2Service(service))
+    root = tmp_path / "stage/results"
+    storage.bind_root("/drive/MyDrive/ReVision/results", root)
+    plan = json.loads((Path(__file__).parents[1] / "configs/production_run_plan_v1.json").read_text())
+    record = plan["runs"][1]
+    logical = "/drive/MyDrive/ReVision/results/.matrix_execution.lease.json"
+    storage.ensure_lease_record(logical)
+    lease = DriveApiLease(storage, logical)
+    lease.acquire()
+    expected = json.loads(service.records[lease._file_id]["content"])
+    assert expected["pid"] == os.getpid() and expected["host"] == socket.gethostname()
+    progress_path = root / "progress" / plan["plan_sha256"] / f"{record['run_key']}_{record['config_sha256'][:12]}.json"
+    progress_path.parent.mkdir(parents=True)
+    failure = {
+        "status": "FAILED", "run_key": record["run_key"], "config_sha256": record["config_sha256"],
+        "plan_sha256": plan["plan_sha256"], "schedule_sha256": plan["schedule_sha256"],
+        "training_source_sha256": plan["training_source_sha256"],
+        "attempt_id": f"{int((expected['created_at'] + 1) * 1e9)}-{os.getpid()}",
+        "attempt_elapsed_seconds": 2,
+        "last_verified_drive_checkpoint": {"generation": 2, "kind": "failed-recovery"},
+    }
+    def publish_progress(document):
+        progress_path.write_text(json.dumps(document))
+        storage.publish_file(progress_path, storage.logical_path_for_local(progress_path))
+    publish_progress(failure)
+    run_lock = workflow.run_output_root(root, record) / ".run.lease.json"
+    storage.ensure_lease_record(storage.logical_path_for_local(run_lock))
+    monkeypatch.setattr(workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
+    arguments = dict(storage_adapter=storage, output_root=root, api_factory=lambda: service,
+                     expected_matrix_record=expected, acknowledge_no_other_worker=True)
+    with pytest.raises(DriveLeaseError, match="expired"):
+        workflow.recover_failed_matrix_lease(plan, record, **arguments)
+    monkeypatch.setattr(drive_storage.time, "time", lambda: expected["expires_at"] + 1)
+    publish_progress(dict(failure, status="RUNNING"))
+    with pytest.raises(DriveLeaseError, match="FAILED"):
+        workflow.recover_failed_matrix_lease(plan, record, **arguments)
+    publish_progress(failure)
+    with monkeypatch.context() as context:
+        context.setattr(workflow.threading, "enumerate", lambda: [types.SimpleNamespace(
+            name="revision-r1-matrix-lease", is_alive=lambda: True)])
+        with pytest.raises(DriveLeaseError, match="heartbeat thread"):
+            workflow.recover_failed_matrix_lease(plan, record, **arguments)
+    result = workflow.recover_failed_matrix_lease(plan, record, **arguments)
+    assert result["status"] == "EXPIRED_RECORD_RELEASED_BY_CAS"
+    assert result["failed_run_key"] == record["run_key"]
+    assert result["training_launched"] is False
+    assert workflow.recover_failed_matrix_lease(plan, record, **arguments)["status"] == "ALREADY_RELEASED"
+
+
 @pytest.mark.parametrize("document", [
     {"schema_version": 1, "active": False, "expires_at": 10},
     {"schema_version": 1, "active": False, "expires_at": -1},

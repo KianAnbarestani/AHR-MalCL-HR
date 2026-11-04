@@ -17,6 +17,8 @@ import re
 import shutil
 import tempfile
 import time
+import threading
+from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -1206,6 +1208,14 @@ class DriveApiStorage:
         return {"status": "CREATED_AND_VERIFIED", "file_id": str(exact["id"]), "parent_id": exact["parents"][0]}
 
 
+def _serialized_lease_operation(operation):
+    @wraps(operation)
+    def guarded(self, *args, **kwargs):
+        with self._operation_lock:
+            return operation(self, *args, **kwargs)
+    return guarded
+
+
 class DriveApiLease:
     """CAS-based lease over a single pre-provisioned API file.
 
@@ -1229,6 +1239,8 @@ class DriveApiLease:
         self._held = False
         self._file_id: str | None = None
         self._etag: str | None = None
+        self._operation_lock = threading.RLock()
+        self._pending_write: dict[str, Any] | None = None
 
     def _read(self) -> tuple[dict[str, Any], str, dict[str, Any]]:
         metadata = self.storage.exact_file(self.logical_path)
@@ -1363,10 +1375,12 @@ class DriveApiLease:
         if headers is None or not hasattr(headers, "__setitem__"):
             raise DriveLeaseError("Drive API client cannot send If-Match for a conditional lease update")
         headers["If-Match"] = etag
+        self._pending_write = dict(document)
         try:
             response = request.execute()
         except Exception as exc:
             if _http_status(exc) == 412:
+                self._pending_write = None
                 raise DriveLeaseError("lease compare-and-swap lost to another worker; no run started") from exc
             raise DriveLeaseError(f"conditional Drive lease update failed: {type(exc).__name__}") from exc
         if response.get("id") != self._file_id:
@@ -1374,8 +1388,10 @@ class DriveApiLease:
         check, next_etag, _metadata = self._read()
         if check != document:
             raise DriveLeaseError("Drive lease compare-and-swap read-back differs; ownership not assumed")
+        self._pending_write = None
         return next_etag
 
+    @_serialized_lease_operation
     def acquire(self) -> None:
         if self._held:
             raise DriveLeaseError("lease is already held by this object")
@@ -1399,6 +1415,7 @@ class DriveApiLease:
         self._etag = self._cas_write(claimed, etag)
         self._held = True
 
+    @_serialized_lease_operation
     def heartbeat(self) -> None:
         if not self._held or not self._file_id or not self._etag:
             raise DriveLeaseError("cannot renew a lease not held by this owner")
@@ -1410,16 +1427,33 @@ class DriveApiLease:
         renewed = {**current, "heartbeat_at": now, "expires_at": now + self.ttl_seconds}
         self._etag = self._cas_write(renewed, etag)
 
+    @_serialized_lease_operation
     def release(self) -> None:
         if not self._held or not self._file_id or not self._etag:
             raise DriveLeaseError("cannot release a lease not held by this owner")
         current, etag, _metadata = self._read()
-        if current.get("owner_token") != self.owner_token or etag != self._etag:
+        if (current.get("owner_token") != self.owner_token
+                or (etag != self._etag and current != self._pending_write)):
             self._held = False
             raise DriveLeaseError("Drive lease token/ETag changed before release")
         released = {**current, "active": False, "released_at": time.time(), "expires_at": 0}
         self._etag = self._cas_write(released, etag)
         self._held = False
+
+    @_serialized_lease_operation
+    def release_expired_record(self, expected_document: dict[str, Any]) -> dict[str, Any]:
+        """CAS-release one exact expired record after caller verifies abandonment."""
+        current, etag, metadata = self._read()
+        if current != expected_document:
+            raise DriveLeaseError("expired lease record changed since diagnostic; preserved")
+        if _classify_drive_api_lease_record(current, now=time.time())["status"] != "expired":
+            raise DriveLeaseError("lease must be valid and expired before abandoned-owner recovery")
+        self._file_id = str(metadata["id"])
+        released = {**current, "active": False, "released_at": time.time(), "expires_at": 0}
+        self._cas_write(released, etag)
+        self._held = False
+        return {"status": "EXPIRED_RECORD_RELEASED_BY_CAS", "file_id": self._file_id,
+                "prior_record": current, "released_record": released}
 
     def __enter__(self):
         self.acquire()

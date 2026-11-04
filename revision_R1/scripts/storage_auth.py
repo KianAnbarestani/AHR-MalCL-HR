@@ -30,8 +30,23 @@ def _default_credentials_factory(**kwargs):
 
 
 def _default_drive_service_builder(api_name: str, version: str, **kwargs):
+    import threading
+    import httplib2
+    import google_auth_httplib2
     from googleapiclient.discovery import build
+    from googleapiclient.http import HttpRequest
 
+    credentials = kwargs["credentials"]
+    transports = threading.local()
+    def build_thread_request(_discovery_http, *args, **request_kwargs):
+        # httplib2 connections may be reused sequentially, but never across
+        # the training/progress and matrix/run heartbeat threads.
+        if not hasattr(transports, "http"):
+            transports.http = google_auth_httplib2.AuthorizedHttp(
+                credentials, http=httplib2.Http(timeout=60),
+            )
+        return HttpRequest(transports.http, *args, **request_kwargs)
+    kwargs["requestBuilder"] = build_thread_request
     return build(api_name, version, **kwargs)
 
 

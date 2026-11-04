@@ -5449,6 +5449,94 @@ def reuse_validated_first_run_measurement(
     return measurement
 
 
+def recover_failed_matrix_lease(
+    plan, record, *, storage_adapter, output_root, api_factory,
+    expected_matrix_record, acknowledge_no_other_worker=False,
+):
+    """Release one expired failed-attempt lease in its original idle kernel.
+
+    This performs no training or checkpoint mutation. A PID alone is never
+    abandonment evidence: require canonical FAILED progress, a released run
+    lease, no heartbeat threads, exact diagnostic identity, and expired CAS.
+    """
+    from revision_r1.drive_storage import DriveApiLease, DriveLeaseError, _classify_drive_api_lease_record
+    _require_canonical_storage_api_factory(api_factory)
+    if storage_adapter.service is not api_factory():
+        raise DriveLeaseError("recovery adapter must use the verified canonical OAuth service")
+    if acknowledge_no_other_worker is not True:
+        raise DriveLeaseError("check Colab Manage Sessions before abandoned-worker recovery")
+    if record not in plan["runs"][1:]:
+        raise DriveLeaseError("recovery is restricted to the pending non-first run")
+    root = Path(output_root).expanduser().resolve()
+    logical = storage_adapter.logical_path_for_local(root / ".matrix_execution.lease.json")
+    lease = DriveApiLease(storage_adapter, logical)
+    current, _etag, metadata = lease._read()
+    expected = expected_matrix_record
+    if not isinstance(expected, dict) or not isinstance(expected.get("owner_token"), str):
+        raise DriveLeaseError("fresh diagnostic must identify the exact abandoned owner")
+    state = _classify_drive_api_lease_record(current, now=time.time())
+    if (state["status"] == "inactive" and current.get("released_at") is not None
+            and set(current) == set(expected) | {"released_at"}
+            and all(current.get(key) == value for key, value in expected.items()
+                    if key not in {"active", "expires_at", "released_at"})):
+        return {"status": "ALREADY_RELEASED", "file_id": metadata["id"], "training_launched": False}
+    if current != expected:
+        raise DriveLeaseError("matrix owner/record changed since diagnostic; preserved")
+    if state["status"] != "expired":
+        raise DriveLeaseError("matrix lease must be valid and expired; rerun D after its expiry")
+    if current.get("host") != socket.gethostname() or current.get("pid") != os.getpid():
+        raise DriveLeaseError("same-runtime failure recovery requires the original idle kernel; no lease changed")
+    if any(thread.name == "revision-r1-matrix-lease" and thread.is_alive()
+           for thread in threading.enumerate()):
+        raise DriveLeaseError("a heartbeat thread is still alive; no lease changed")
+
+    progress_path = root / "progress" / plan["plan_sha256"] / f"{record['run_key']}_{record['config_sha256'][:12]}.json"
+    progress_download = storage_adapter.download_file(
+        storage_adapter.logical_path_for_local(progress_path), progress_path,
+    )
+    failure = json.loads(progress_path.read_text(encoding="utf-8"))
+    if failure.get("status") != "FAILED":
+        raise DriveLeaseError("canonical progress must record a FAILED attempt; preserved")
+    expected_identity = {
+        "run_key": record["run_key"], "config_sha256": record["config_sha256"],
+        "plan_sha256": plan["plan_sha256"], "schedule_sha256": plan["schedule_sha256"],
+        "training_source_sha256": plan["training_source_sha256"],
+    }
+    if any(failure.get(key) != value for key, value in expected_identity.items()):
+        raise DriveLeaseError("failed-attempt identity differs from the frozen plan; preserved")
+    try:
+        start_ns, pid = failure["attempt_id"].rsplit("-", 1)
+        started = int(start_ns) / 1e9
+        ended = started + float(failure["attempt_elapsed_seconds"])
+        if (int(pid) != current["pid"] or not math.isfinite(ended)
+                or not current["created_at"] <= started <= ended <= time.time()
+                or current["heartbeat_at"] > ended):
+            raise ValueError("failed attempt does not cover this lease owner/heartbeat")
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise DriveLeaseError("failed-attempt process/timing evidence is inconsistent; preserved") from exc
+    run_logical = storage_adapter.logical_path_for_local(run_output_root(root, record) / ".run.lease.json")
+    run_document, _run_etag, _run_metadata = DriveApiLease(storage_adapter, run_logical)._read()
+    if _classify_drive_api_lease_record(run_document, now=time.time())["status"] != "inactive":
+        raise DriveLeaseError("run lease is not released; no matrix lease changed")
+
+    audit = {
+        "status": "PREPARED", **expected_identity, "matrix_file_id": metadata["id"],
+        "prior_matrix_record": current, "failed_attempt_id": failure["attempt_id"],
+        "failed_progress_file_id": progress_download["file_id"],
+        "failed_progress_sha256": progress_download["sha256"],
+        "last_reported_checkpoint": failure.get("last_verified_drive_checkpoint"),
+        "training_launched": False, "checkpoints_modified": False,
+    }
+    audit_path = root / "diagnostics" / f"failed_matrix_lease_recovery_{time.time_ns()}_{uuid.uuid4().hex[:8]}.json"
+    _atomic_json(audit_path, audit)
+    _api_publish_file(storage_adapter, audit_path)
+    result = lease.release_expired_record(current)
+    audit.update(result, failed_run_key=record["run_key"], audit_path=str(audit_path))
+    _atomic_json(audit_path, audit)
+    _api_publish_file(storage_adapter, audit_path)
+    return audit
+
+
 class _MatrixLeaseHeartbeat:
     def __init__(self, path: Path, *, interval_seconds: float = 60.0, ttl_seconds: float = 300.0,
                  storage_adapter=None):
@@ -5480,11 +5568,22 @@ class _MatrixLeaseHeartbeat:
                 self.lost.set()
                 return
 
-    def __exit__(self, *_exc):
+    def __exit__(self, exc_type, primary_error, traceback):
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=max(1.0, self.interval_seconds + 1.0))
-        self.lease.release()
+        try:
+            if self._thread is not None and self._thread.is_alive():
+                raise RuntimeError("heartbeat request is still in flight; lease preserved until verified recovery")
+            self.lease.release()
+        except Exception as cleanup_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(
+                f"Lease cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}; "
+                "the primary error is preserved and the lease requires a fresh diagnostic"
+            )
+        return False
 
 
 def _api_storage_include_nonlease(logical_path: Path, metadata: dict[str, Any]) -> bool:
@@ -6168,12 +6267,15 @@ def execute_frozen_plan_record(
                 "training_source_sha256": plan["training_source_sha256"],
                 "last_progress": last_progress_record,
             }
-            _append_progress_jsonl(event_log_path, failed_event)
-            _atomic_json(progress_file, failed_event)
-            if storage_adapter is not None:
-                _api_publish_file(storage_adapter, event_log_path)
-                _api_publish_file(storage_adapter, progress_file)
-            callback(failed_event)
+            try:
+                _append_progress_jsonl(event_log_path, failed_event)
+                _atomic_json(progress_file, failed_event)
+                if storage_adapter is not None:
+                    _api_publish_file(storage_adapter, event_log_path)
+                    _api_publish_file(storage_adapter, progress_file)
+                callback(failed_event)
+            except Exception as reporting_error:
+                exc.add_note(f"Failure reporting also failed: {type(reporting_error).__name__}; original error preserved")
             raise
         finally:
             runner_module.mirror_checkpoint_generations = previous_mirror

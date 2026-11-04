@@ -18,6 +18,42 @@ from scripts.storage_auth import (
 MAIN_ACCOUNT = "kian.anb777@gmail.com"
 
 
+def test_default_drive_builder_isolates_real_http_requests_by_thread(monkeypatch):
+    import concurrent.futures
+    import threading
+    import httplib2
+    from google.auth.credentials import AnonymousCredentials
+    from googleapiclient import discovery
+    from scripts import storage_auth
+
+    captured = {}
+    monkeypatch.setattr(discovery, "build", lambda *_a, **kw: captured.update(kw))
+    storage_auth._default_drive_service_builder(
+        "drive", "v3", credentials=AnonymousCredentials(), cache_discovery=False,
+    )
+    assert "requestBuilder" in captured, "default shared httplib2 transport is unsafe"
+    build_request = captured["requestBuilder"]
+    barrier = threading.Barrier(2)
+    transports = []
+    def request(http, uri, method="GET", body=None, headers=None, **kwargs):
+        transports.append((threading.get_ident(), id(http)))
+        barrier.wait(timeout=5)
+        return httplib2.Response({"status": "200"}), b'{"ok":true}'
+    monkeypatch.setattr(httplib2.Http, "request", request)
+    def worker():
+        ids = []
+        for _ in range(2):
+            req = build_request(object(), lambda _r, body: json.loads(body), "https://example.invalid/drive")
+            ids.append(id(req.http))
+            assert req.execute() == {"ok": True}
+        return ids
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        a, b = list(pool.map(lambda _: worker(), range(2)))
+    assert a[0] == a[1] and b[0] == b[1]
+    assert a[0] != b[0]
+    assert len({transport for _thread, transport in transports}) == 2
+
+
 class _FakeCredentials:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
