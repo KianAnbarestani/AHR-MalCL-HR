@@ -434,7 +434,7 @@ def _github_setup_cell(commit_sha: str) -> str:
     template = r'''# Cell A — Drive/GitHub setup, one pinned detached fetch, and package integrity checks.
 from pathlib import Path, PurePosixPath
 import hashlib, json, os, platform, shutil, subprocess, sys, tempfile, urllib.error, urllib.request
-from google.colab import drive, userdata
+from google.colab import userdata
 
 GITHUB_REPOSITORY = "KianAnbarestani/AHR-MalCL-HR"
 PINNED_GIT_COMMIT = "__PINNED_COMMIT__"  # Change only this full SHA for a tested code release.
@@ -606,9 +606,7 @@ STORAGE_API_SERVICE, STORAGE_CREDENTIALS, STORAGE_AUTH_EVIDENCE = build_main_acc
 STORAGE_API_FACTORY = lambda: STORAGE_API_SERVICE
 print("Drive API OAuth identity verified:", STORAGE_AUTH_EVIDENCE["authenticated_user"],
       "credential source:", STORAGE_AUTH_EVIDENCE["credential_source"])
-# The mounted filesystem is a dataset read source only. Preflight artifacts
-# and all durable research files use the explicit main-account API adapter.
-drive.mount("/content/drive", force_remount=False)
+# Drive paths below are logical API addresses; setup requires no DriveFS mount.
 ACTUAL_TRAINING_SOURCE_SHA256 = training_source_sha256(PROJECT)
 CHECKPOINT_COMPATIBILITY = verify_checkpoint_compatibility(PROJECT)
 ACTUAL_RUNTIME_SOURCE_SHA256 = runtime_source_sha256(PROJECT)
@@ -683,13 +681,23 @@ print(json.dumps({"repository": GITHUB_REPOSITORY, "repository_private": bool(RE
 
 
 def _github_data_cell() -> str:
-    return '''# Cell B — exact canonical Drive datasets; no external downloads.
+    return '''# Cell B — OAuth API preflight/data staging; no training or preflight regeneration.
+from pathlib import Path
+import hashlib, json, os
 from revision_r1.validation_workflow import resolve_effective_artifacts
 from revision_r1.config import DATASETS
-from revision_r1.data import inspect_npz_array_layout
-from scripts.production_workflow import inspect_dataset_sources
+from revision_r1.data import inspect_npz_array_layout, file_digest
+from revision_r1.drive_storage import DriveApiStorage
+from scripts.production_workflow import (
+    inspect_dataset_sources, resolve_drive_folder,
+    _verified_cache_candidate, _load_verified_cache_split,
+)
 from scripts.build_github_handoff import stage_canonical_preflight_artifacts
 
+STORAGE_STAGE_ROOT = Path(STORAGE_ADAPTER.local_staging_root)
+DRIVE_PATHS.setdefault("preflight_drive_path", str(
+    STORAGE_ADAPTER.logical_revision_root / "revision_R1/results/preflight/preflight.json"))
+DRIVE_PATHS.setdefault("preflight_staging_root", str(STORAGE_STAGE_ROOT / "preflight"))
 PREFLIGHT_STAGING_EVIDENCE = stage_canonical_preflight_artifacts(
     STORAGE_ADAPTER,
     DRIVE_PATHS["preflight_drive_path"],
@@ -708,11 +716,71 @@ if (EFFECTIVE_SCHEDULE_PATH != Path(PREFLIGHT_STAGING_EVIDENCE["schedule_path"])
     raise ValueError("Cell B resolved preflight artifacts differ from their verified canonical Drive IDs")
 if PREFLIGHT.get("status") != "PREFLIGHT_VALIDATED_NO_TRAINING" or PREFLIGHT.get("training_reproduction_claimed") is not False:
     raise ValueError("Drive preflight is not the validated no-training schedule/data record")
-DATA_ROOTS = {
-    "ember": Path(DRIVE_PATHS["ember_data_root"]).expanduser(),
-    "az_class": Path(DRIVE_PATHS["az_data_root"]).expanduser(),
-}
+DRIVE_PATHS["preflight_path"] = str(PREFLIGHT_PATH)
+DRIVE_PATHS.setdefault("dataset_drive_roots", {
+    "ember": str(DRIVE_PATHS["ember_data_root"]),
+    "az_class": str(DRIVE_PATHS["az_data_root"]),
+})
 LOCAL_DATASET_CACHE_ROOT = Path(DRIVE_PATHS["dataset_cache_root"]).expanduser().resolve()
+DATA_ROOTS = {name: STORAGE_STAGE_ROOT / "dataset_sources" / name for name in DATASETS}
+DATASET_API_STAGING_EVIDENCE = {}
+for _dataset, _root in DATA_ROOTS.items():
+    _reader = None
+    _logical_root = Path(DRIVE_PATHS["dataset_drive_roots"][_dataset]).expanduser()
+    for _split in ("train", "test"):
+        _spec = DATASETS[_dataset][_split]
+        _expected = PREFLIGHT[_dataset][_split]
+        if (_expected["md5"] != _spec["md5"] or len(_expected["sha256"]) != 64):
+            raise ValueError(f"Dataset preflight identity differs from frozen protocol: {_dataset}/{_split}")
+        _key = f"{_dataset}/{_split}"
+        if _verified_cache_candidate(LOCAL_DATASET_CACHE_ROOT, _dataset, _split, PREFLIGHT) is not None:
+            # Fully verify mmap contents; no archive download or decompression.
+            _x, _y, _metadata = _load_verified_cache_split(
+                LOCAL_DATASET_CACHE_ROOT, _dataset, _split, PREFLIGHT)
+            del _x, _y
+            DATASET_API_STAGING_EVIDENCE[_key] = {"source": "VERIFIED_LOCAL_MMAP_CACHE"}
+            print("Dataset:", _key, "verified mmap cache reused", flush=True)
+            continue
+        _target = _root / _spec["filename"]
+        if _target.exists() or _target.is_symlink():
+            if (_target.is_symlink() or not _target.is_file()
+                or file_digest(_target, "sha256") != _expected["sha256"]
+                or file_digest(_target, "md5") != _expected["md5"]):
+                raise ValueError(f"Existing local dataset staging differs; preserved: {_target}")
+            DATASET_API_STAGING_EVIDENCE[_key] = {"source": "VERIFIED_LOCAL_NPZ", "path": str(_target)}
+            continue
+        if _reader is None:
+            try:
+                _components = _logical_root.relative_to("/content/drive/MyDrive").parts
+            except ValueError as _error:
+                raise ValueError("Dataset API source must be a configured logical MyDrive path") from _error
+            _folder = resolve_drive_folder(STORAGE_ADAPTER.service, _components)
+            if not _folder["path_exists"] or not _folder["folder_id"]:
+                raise FileNotFoundError(f"Existing dataset Drive folder is absent: {_logical_root}")
+            _reader = DriveApiStorage(
+                service=STORAGE_ADAPTER.service,
+                expected_account_email=STORAGE_ADAPTER.expected_account_email,
+                revision_folder_id=_folder["folder_id"],
+                logical_revision_root=_logical_root, local_staging_root=_root,
+                download_to_path=STORAGE_ADAPTER.download_to_path,
+            )
+        _logical_file = _logical_root / _spec["filename"]
+        _remote = _reader.exact_file(_logical_file)
+        if _remote is None or _remote.get("md5Checksum") != _expected["md5"]:
+            raise ValueError(f"Missing or mismatched canonical dataset API source: {_logical_file}")
+        print("Dataset:", _key, "API download starting; bytes:", _remote.get("size"), flush=True)
+        _evidence = _reader.download_file(
+            _logical_file, _target, expected_sha256=_expected["sha256"],
+            expected_bytes=int(_remote["size"]),
+        )
+        if file_digest(_target, "md5") != _expected["md5"]:
+            raise ValueError(f"Dataset download MD5 differs from frozen identity: {_target}")
+        DATASET_API_STAGING_EVIDENCE[_key] = {"source": "CANONICAL_OAUTH_API", **_evidence}
+        print("Dataset:", _key, "API download verified", flush=True)
+# The runner builds/reuses its streamed mmap cache once when each dataset is
+# first used. This cell only inspects NPZ headers; it never extracts arrays.
+DRIVE_PATHS["ember_data_root"] = str(DATA_ROOTS["ember"])
+DRIVE_PATHS["az_data_root"] = str(DATA_ROOTS["az_class"])
 DATASET_SOURCE_REPORT = inspect_dataset_sources(DATA_ROOTS, LOCAL_DATASET_CACHE_ROOT, PREFLIGHT)
 DATASET_LAYOUTS = {}
 for _dataset, _root in DATA_ROOTS.items():
@@ -724,6 +792,15 @@ for _dataset, _root in DATA_ROOTS.items():
         else:
             _layout[_split] = {"archive": "ABSENT", "source": DATASET_SOURCE_REPORT[_dataset]["splits"][_split]["source"]}
     DATASET_LAYOUTS[_dataset] = _layout
+
+# Cell C also consumes this existing small report; stage it through OAuth so
+# the readiness interface has no hidden DriveFS dependency.
+DRIVE_PATHS.setdefault("v62_recovery_report_drive_path", DRIVE_PATHS["v62_recovery_report"])
+_reference_logical = Path(DRIVE_PATHS["v62_recovery_report_drive_path"])
+_reference_relative = _reference_logical.relative_to(STORAGE_ADAPTER.logical_revision_root)
+_reference_local = STORAGE_STAGE_ROOT / "read_only_references" / _reference_relative
+REFERENCE_STAGING_EVIDENCE = STORAGE_ADAPTER.download_file(_reference_logical, _reference_local)
+DRIVE_PATHS["v62_recovery_report"] = str(_reference_local)
 
 PACKAGED_SCHEDULE_PATH = PROJECT / "configs" / "update_budget.csv"
 PACKAGED_SCHEDULE_MANIFEST_PATH = PROJECT / "configs" / "update_budget_manifest.json"
@@ -739,6 +816,7 @@ print(json.dumps(PREFLIGHT_STAGING_EVIDENCE, sort_keys=True, indent=2))
 print("Original packaged schedule SHA-256 (unchanged):", PACKAGED_SCHEDULE_SHA256)
 print("Canonical dataset sources (missing Drive files require a matching local verified cache):")
 print(json.dumps(DATASET_SOURCE_REPORT, sort_keys=True, indent=2))
+print("Dataset API/cache staging:", json.dumps(DATASET_API_STAGING_EVIDENCE, sort_keys=True))
 print("If both canonical Drive files and a matching verified local cache are absent, preflight fails; no external download will be attempted.")
 print("External dataset downloads: DISABLED")
 '''
@@ -1222,7 +1300,7 @@ def notebook_document(commit_sha: str) -> dict[str, Any]:
     document["cells"][0]["source"] = (
         "# revision_R1 production — GitHub-pinned runner\n\n"
         "Cells A–G use one explicitly selected full Git commit per Colab session. Cell A fetches it once and checks out detached into a commit-versioned local directory, then verifies both manifests, the compatible training-core hash, and frozen schedule.\n\n"
-        "Drive data and durable files use Drive API v3 with the dedicated user-OAuth refresh token from Colab Secrets for the canonical main account. Drive v2, built from those exact same credentials, is used only for lease ETag/If-Match compare-and-swap because v3 no longer exposes file ETags. Cell A verifies both API identities and runs a live stale-write rejection probe before any run; missing ETags or a stale update not returning HTTP 412 keeps production blocked. It never uses `google.auth.default()` for storage. Cell B fetches the canonical preflight JSON, effective schedule, and matching manifest by verified Drive file IDs into local staging; it does not depend on DriveFS paths for those artifacts. The Drive mount may use any compute account and is a read source for datasets only. Every durable output, checkpoint, progress record, manifest, registry, lease, journal, and export remains staged locally and written through the verified main-account Drive v3 API.\n\n"
+        "Drive data and durable files use Drive API v3 with the dedicated user-OAuth refresh token from Colab Secrets for the canonical main account. Drive v2, built from those exact same credentials, is used only for lease ETag/If-Match compare-and-swap because v3 no longer exposes file ETags. Cell A verifies both API identities and runs a live stale-write rejection probe before any run; missing ETags or a stale update not returning HTTP 412 keeps production blocked. It never uses `google.auth.default()` for storage. Cell B fetches the canonical preflight JSON, effective schedule, matching manifest, recovery reference, and uncached datasets by verified Drive file IDs into local staging. Verified mmap caches are reused. Cells A through C require no DriveFS mount. Every durable output, checkpoint, progress record, manifest, registry, lease, journal, and export remains staged locally and written through the verified main-account Drive v3 API.\n\n"
         "Before Cell A, complete the one-time OAuth setup in `README_GITHUB_COLAB.md` and add `REVISION_R1_STORAGE_OAUTH_CLIENT_ID`, `REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET`, and `REVISION_R1_STORAGE_REFRESH_TOKEN` to Colab Secrets with notebook access enabled. Never put secret values in notebook code or output.\n\n"
         "The repository is currently public, so no GitHub token is required. If private later, use the fine-grained read-only Colab Secret `GITHUB_READ_TOKEN` (Contents: Read-only, restricted to this repo; enable notebook access). Never paste credentials into cells or outputs.\n\n"
         "Run A → B → C → D. D does not change run state or locks; it writes its diagnostic report through the canonical API. B reads Drive datasets or checksum-verified local caches only; external downloads are disabled. Run 1 is already finalized/registered and is reused without remeasurement; E is a no-op. F remains disabled by default."

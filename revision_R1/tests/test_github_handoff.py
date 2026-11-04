@@ -131,7 +131,8 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert commit in cells[1]
     assert "auth.authenticate_user()" not in cells[1]
     assert "google.auth.default(" not in cells[1]
-    assert cells[1].index("build_main_account_storage_api(") < cells[1].index('drive.mount("/content/drive", force_remount=False)')
+    assert "build_main_account_storage_api(" in cells[1]
+    assert "drive.mount(" not in cells[1]
     assert "build_main_account_drive_v2_api(" not in cells[1]
     assert "lease_service=STORAGE_LEASE_API_SERVICE" not in cells[1]
     assert "DriveApiStorage" in cells[1]
@@ -146,7 +147,6 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert '"preflight_drive_path": "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/preflight.json"' in cells[1]
     assert '"preflight_staging_root": "/content/revision_R1_storage_staging/preflight"' in cells[1]
     assert 'Path(DRIVE_PATHS["preflight_drive_path"]).parent' in cells[1]
-    assert "force_remount=False" in cells[1]
     assert "read-only" in cells[1].lower()
     assert "storage account" in cells[1].lower()
     assert 'STORAGE_AUTH_EVIDENCE["credential_source"]' in cells[1]
@@ -222,7 +222,7 @@ def test_cell_b_preflight_uses_api_staging_and_frozen_schedule_digest():
     assert 'PREFLIGHT_PATH = Path(DRIVE_PATHS["preflight_drive_path"])' not in cell_b
     assert 'if not PREFLIGHT_PATH.is_file()' in cell_b  # checks only the already API-staged local file
     assert "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212" in cells[1]
-    assert "The Drive mount may use any compute account and is a read source for datasets only" in cells[0]
+    assert "Cells A through C require no DriveFS mount" in cells[0]
 
 
 def test_production_readme_has_one_github_execution_order_and_no_zip_setup():

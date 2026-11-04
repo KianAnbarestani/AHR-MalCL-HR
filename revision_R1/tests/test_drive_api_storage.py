@@ -384,28 +384,66 @@ def _seed_preflight_drive(service, *, schedule_bytes=None):
 def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount(tmp_path, monkeypatch, capsys):
     from scripts.build_github_handoff import notebook_document
     from scripts import production_workflow
+    from revision_r1.config import DATASETS
+    import io
+    if not hasattr(np.lib.format, "_read_array_header"):
+        # Local NumPy 2.5 moved this unchanged parser; Colab pins NumPy 2.0.2.
+        from numpy.lib import _format_impl
+        monkeypatch.setattr(np.lib.format, "_read_array_header", _format_impl._read_array_header, raising=False)
 
     service = _FakeService()
     fixture = _seed_preflight_drive(service)
+    original_specs = {dataset: {split: DATASETS[dataset][split] for split in ("train", "test")}
+                      for dataset in DATASETS}
+    def seed_file(file_id, name, parent, payload, mime="application/json"):
+        service.records[file_id] = {
+            "id": file_id, "name": name, "mimeType": mime, "parents": [parent],
+            "owners": [{"emailAddress": OWNER}], "ownedByMe": True,
+            "size": str(len(payload)), "quotaBytesUsed": str(len(payload)),
+            "md5Checksum": hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+            "content": payload, "version": "1", "etag": '"v1"',
+            "capabilities": {"canEdit": True, "canDelete": True, "canAddChildren": True},
+        }
+    seed_file("dataset-parent", "AHR_MalCL", "root", b"", "application/vnd.google-apps.folder")
+    seed_file("dataset-folder", "datasets", "dataset-parent", b"", "application/vnd.google-apps.folder")
+    preflight = json.loads(fixture["preflight_payload"])
+    for dataset in DATASETS:
+        preflight[dataset] = {}
+        for split in ("train", "test"):
+            stream = io.BytesIO()
+            np.savez_compressed(stream, **{f"X_{split}": np.ones((100, 3), dtype=np.float32),
+                                         f"y_{split}": np.arange(100)})
+            payload = stream.getvalue()
+            spec = dict(DATASETS[dataset][split], shape=[100, 3],
+                        md5=hashlib.md5(payload, usedforsecurity=False).hexdigest())
+            monkeypatch.setitem(DATASETS[dataset], split, spec)
+            preflight[dataset][split] = {"md5": spec["md5"], "sha256": hashlib.sha256(payload).hexdigest()}
+            seed_file(f"{dataset}-{split}", spec["filename"], "dataset-folder", payload, "application/zip")
+    fixture["preflight_payload"] = json.dumps(preflight, sort_keys=True).encode()
+    seed_file("preflight-json", "preflight.json", "preflight", fixture["preflight_payload"])
+    seed_file("reference", "reference.json", "results", b'{"fixture":"recovery"}')
+    downloads = []
+    def download(request, path):
+        payload = request.execute()
+        downloads.append(payload)
+        Path(path).write_bytes(payload)
     stage_root = tmp_path / "storage" / "preflight"
     storage = DriveApiStorage(
         service=service, expected_account_email=OWNER, revision_folder_id="revision",
         logical_revision_root="/content/drive/MyDrive/ReVision", local_staging_root=tmp_path / "storage",
-        download_to_path=lambda request, path: Path(path).write_bytes(request.execute()), retry_delays=(0,),
+        download_to_path=download, retry_delays=(0,),
     )
     logical_preflight = "/content/drive/MyDrive/ReVision/revision_R1/results/preflight/preflight.json"
     storage.bind_root(Path(logical_preflight).parent, stage_root)
-    monkeypatch.setattr(production_workflow, "inspect_dataset_sources", lambda roots, cache, _preflight: {
-        name: {"splits": {"train": {"source": "test fixture"}, "test": {"source": "test fixture"}}}
-        for name in ("ember", "az_class")
-    })
     source = "".join(notebook_document("0123456789abcdef0123456789abcdef01234567")["cells"][2]["source"])
     namespace = {
         "DRIVE_PATHS": {
-            "ember_data_root": str(tmp_path / "unmounted" / "datasets"),
-            "az_data_root": str(tmp_path / "unmounted" / "datasets"),
-            "preflight_drive_path": logical_preflight,
-            "preflight_staging_root": str(stage_root),
+            "ember_data_root": "/content/drive/MyDrive/AHR_MalCL/datasets",
+            "az_data_root": "/content/drive/MyDrive/AHR_MalCL/datasets",
+            # Older Cell A used preflight_path; the replacement B must supply
+            # the canonical logical defaults without depending on a mount.
+            "preflight_path": logical_preflight,
+            "v62_recovery_report": "/content/drive/MyDrive/ReVision/revision_R1/results/reference.json",
             "dataset_cache_root": str(tmp_path / "cache"),
         },
         "STORAGE_ADAPTER": storage,
@@ -430,6 +468,9 @@ def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount
     assert Path(namespace["EFFECTIVE_SCHEDULE_PATH"]).is_relative_to(stage_root)
     assert all(Path(item["local_path"]).is_file() for item in evidence["drive_files"].values())
     assert fixture["historical_schedule"] not in str(namespace["EFFECTIVE_SCHEDULE_PATH"])
+    dataset_downloads = len(downloads)
+    assert all(Path(root).is_relative_to(tmp_path) for root in namespace["DATA_ROOTS"].values())
+    assert Path(namespace["DRIVE_PATHS"]["v62_recovery_report"]).is_file()
     remote_snapshot = {
         key: (record.get("size"), record.get("md5Checksum"), record.get("content"))
         for key, record in service.records.items()
@@ -438,14 +479,84 @@ def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount
     exec(compile(source, "generated-cell-B-rerun", "exec"), namespace)
     capsys.readouterr()
     assert namespace["PREFLIGHT_STAGING_EVIDENCE"]["bundle_key"] == first_bundle_key
+    # Small preflight records may redownload; NPZs and the operational report
+    # must reuse already hash-verified local bytes.
+    assert len(downloads) == dataset_downloads + 4
+    assert sum(payload.startswith(b"PK") for payload in downloads) == 4
     assert {
         key: (record.get("size"), record.get("md5Checksum"), record.get("content"))
         for key, record in service.records.items()
     } == remote_snapshot
-    assert set(service.records) == {
-        "revision", "results", "revision-r1", "preflight", "schedules",
-        "preflight-json", "effective-csv", "schedule-manifest",
-    }
+    from revision_r1 import data as data_module
+    for dataset, root in namespace["DATA_ROOTS"].items():
+        for split in ("train", "test"):
+            archive = root / DATASETS[dataset][split]["filename"]
+            x, y, _metadata = data_module.load_npz_arrays(
+                archive, split=split, expected_md5=DATASETS[dataset][split]["md5"],
+                expected_shape=(100, 3), expected_labels=range(100),
+                cache_dir=namespace["LOCAL_DATASET_CACHE_ROOT"],
+            )
+            assert isinstance(x, np.memmap) and isinstance(y, np.memmap)
+            del x, y
+            archive.unlink()  # Only this test's synthetic local NPZ fixture.
+    def forbid_decompression(*_args, **_kwargs):
+        raise AssertionError("verified cache must not be decompressed a second time")
+    monkeypatch.setattr(data_module, "_populate_streamed_cache", forbid_decompression)
+    exec(compile(source, "generated-cell-B-cache-only", "exec"), namespace)
+    assert sum(payload.startswith(b"PK") for payload in downloads) == 4
+    assert all(row["source"] == "VERIFIED_LOCAL_MMAP_CACHE"
+               for row in namespace["DATASET_API_STAGING_EVIDENCE"].values())
+    # Test the real generated C with external readiness evidence mocked. The
+    # schedule/data downloads and filesystem serialization above remain real.
+    for dataset, splits in original_specs.items():
+        for split, spec in splits.items():
+            monkeypatch.setitem(DATASETS[dataset], split, spec)
+    plan = json.loads((namespace["PROJECT"] / "configs/production_run_plan_v1.json").read_text())
+    for row in plan["runs"]:
+        row["dataset_identity"] = {}
+    first = plan["runs"][0]
+    measurement = {"max_checkpoint_payload_bytes": 100, "run_output_bytes": 100}
+    monkeypatch.setattr(production_workflow, "bind_runtime_schedule", lambda *_args: plan)
+    monkeypatch.setattr(production_workflow, "validate_runtime_bound_plan", lambda *_args: None)
+    monkeypatch.setattr(production_workflow, "_hydrate_api_matrix_registry", lambda *_args: None)
+    monkeypatch.setattr(production_workflow, "_hydrate_api_run_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(production_workflow, "matrix_registry_evidence", lambda *_args: {"completed_run_keys": [first["run_key"]]})
+    monkeypatch.setattr(production_workflow, "reuse_validated_first_run_measurement", lambda *_args: measurement)
+    monkeypatch.setattr(production_workflow, "_read_matrix_registry", lambda *_args: {"completed_runs": {first["run_key"]: {}}})
+    def reference_reader(path):
+        assert Path(path).is_relative_to(tmp_path)
+        assert json.loads(Path(path).read_bytes()) == {"fixture": "recovery"}
+        return {"max_checkpoint_payload_bytes": 100}
+    monkeypatch.setattr(production_workflow, "load_v62_recovery_checkpoint_bound", reference_reader)
+    monkeypatch.setattr(production_workflow, "_preflight_addressed_cache_bytes", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(production_workflow, "require_run_capacity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(production_workflow, "project_storage", lambda *_args, **_kwargs: {"drive": {
+        "matrix_peak_with_reserve_bytes": 100, "next_run_peak_with_reserve_bytes": 100,
+        "next_run_required_without_reserve_bytes": 100,
+    }})
+    monkeypatch.setattr(production_workflow, "inspect_production_capacity", lambda *_args, **_kwargs: {
+        "canonical_storage_identity_verified": True, "drive_available_bytes": 1 << 40,
+        "quota_account_email": OWNER, "canonical_revision_folder_id": "revision",
+        "quota_status": "TEST_FIXTURE", "output_destination": {"destination_owner": OWNER, "new_file_owner": OWNER},
+        "checkpoint_destination": {"destination_owner": OWNER, "new_file_owner": OWNER},
+    })
+    monkeypatch.setattr(drive_storage, "_make_media_upload", lambda path, _mime: Path(path))
+    monkeypatch.setattr(storage, "media_upload_factory", lambda path, _mime: Path(path))
+    monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
+    for key in ("output_root", "checkpoint_root", "export_root", "checkpoint_backup_root"):
+        logical = Path("/content/drive/MyDrive/ReVision/revision_R1/production") / key
+        namespace["DRIVE_PATHS"][key] = str(logical)
+        local_name = {"output_root": "results", "checkpoint_root": "checkpoints",
+                      "export_root": "exports", "checkpoint_backup_root": "checkpoint_backups"}[key]
+        storage.bind_root(logical, tmp_path / "storage/production" / local_name)
+    namespace["DRIVE_PATHS"]["local_checkpoint_root"] = str(tmp_path / "local-checkpoints")
+    namespace.update(STORAGE_API_FACTORY=lambda: service, ACTUAL_GIT_COMMIT="a" * 40,
+                     ACTUAL_TRAINING_SOURCE_SHA256=plan["training_source_sha256"],
+                     ACTUAL_RUNTIME_SOURCE_SHA256="b" * 64, PACKAGE_MANIFEST_SHA256="c" * 64)
+    c_source = "".join(notebook_document("a" * 40)["cells"][3]["source"])
+    exec(compile(c_source, "generated-cell-C", "exec"), namespace)
+    assert namespace["NEXT_PENDING_RECORD"]["run_key"] == "ember_seed42_current_only"
+    assert namespace["DATA_ROOTS"]["ember"].is_relative_to(tmp_path)
 
 
 def test_preflight_staging_rejects_wrong_schedule_hash_missing_or_ambiguous_canonical_file(tmp_path, monkeypatch):
