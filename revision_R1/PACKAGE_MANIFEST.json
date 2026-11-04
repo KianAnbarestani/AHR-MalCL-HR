@@ -1,6 +1,6 @@
 {
   "checkpoint_compatibility_baseline_commit": "e7bea685827137a1ea48c5886db22518d68a6b06",
-  "checkpoint_compatibility_manifest_sha256": "0485c3cc0de2918f4a85a5036509df633f9e9ff0ad2ebebdd2c37df3f0b7538d",
+  "checkpoint_compatibility_manifest_sha256": "9e724f26342a5391d3759a688454edc55384b5f373de918ef7eb242e20468d11",
   "credential_policy": "no credential for public repository; private read-only token only via Colab Secrets",
   "expected_effective_schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
   "files": {
@@ -17,16 +17,16 @@
       "sha256": "c6118ca7e356726f0646259da9f3bd49d2922f908dcdea2e7dc3ae08a93e5263"
     },
     "PRODUCTION_COLAB_README.md": {
-      "bytes": 3483,
-      "sha256": "280c3815e659660702b5b45ae23695de079bebcaaf0c020737e8aba5ad0612c3"
+      "bytes": 3553,
+      "sha256": "18f198b407aae073610fc65c13796c4c7914f0c125806cf39ea6d7f984be6f42"
     },
     "README_GITHUB_COLAB.md": {
-      "bytes": 8957,
-      "sha256": "3cf97db2e27e71e4b27654250e9f1a6bb7f4369186403fc8984830e837c256e5"
+      "bytes": 9490,
+      "sha256": "c8d50165e8b48c33b2cabc059cfd73f71fa11d0528985118552a90b7324e3f3b"
     },
     "checkpoint_compatibility.json": {
       "bytes": 6204,
-      "sha256": "0485c3cc0de2918f4a85a5036509df633f9e9ff0ad2ebebdd2c37df3f0b7538d"
+      "sha256": "9e724f26342a5391d3759a688454edc55384b5f373de918ef7eb242e20468d11"
     },
     "configs/legacy_v1_2_first_run_identity.json": {
       "bytes": 7695,
@@ -85,8 +85,8 @@
       "sha256": "3acecda586b9c2a97a5d39888ffc8b0e54af3295e16f0d034a77122454e20ac5"
     },
     "revision_r1/drive_storage.py": {
-      "bytes": 74410,
-      "sha256": "3a3b3e046e9916fce045fd2f06db36a516712021bc934abcdcafe690805a795b"
+      "bytes": 81717,
+      "sha256": "e00e3e96bcc98a92c7fab84cd1db76c1b833a98a117d904f57c414e349a63094"
     },
     "revision_r1/engine.py": {
       "bytes": 2748,
@@ -177,8 +177,8 @@
       "sha256": "9cdae14f1571b6339e06224fcb05ed6b38650d2c76c354c2974128922ab369a2"
     },
     "scripts/build_github_handoff.py": {
-      "bytes": 59225,
-      "sha256": "17b4f0f885f135fc7520b753590297af4c48696e4cd3b6564eb58817fec644db"
+      "bytes": 59476,
+      "sha256": "a992e40e72ac927a0d756d6d009488734539a071b02443dc60654a9914020c74"
     },
     "scripts/build_production_handoff.py": {
       "bytes": 65900,
@@ -193,12 +193,12 @@
       "sha256": "1cb4e713e38096b17c215be584a871defd3edaf611290b74dcff7ddba48defba"
     },
     "scripts/production_workflow.py": {
-      "bytes": 374815,
-      "sha256": "73a49c56f341f84b0c503ef51e6635173f04bf0581063bf80335663f41088ee2"
+      "bytes": 374930,
+      "sha256": "769e6f17fcb8cff49b66237e7b6bfc31a874ee1088bb87ebfd89dbb74d63f346"
     },
     "scripts/storage_auth.py": {
-      "bytes": 4262,
-      "sha256": "16f3c6a276c62ce9dfd8e6e1b8340db7c1700dfc0cda0bc1bfa9eeb2d5926de5"
+      "bytes": 6874,
+      "sha256": "41f43aae50663d3a3c108df3fc0921a70063121aca0cc3e9ecfcddd6b43f6fc2"
     },
     "tests/conftest.py": {
       "bytes": 169,
@@ -233,12 +233,12 @@
       "sha256": "43ecc53d4d8a6f0782e44495322bdf00a474c9d3b56c1ab05cdab00771e2b483"
     },
     "tests/test_drive_api_storage.py": {
-      "bytes": 39350,
-      "sha256": "0d40c74138776064854b4ac368b1b4372ed79cb38536912fc221d3858b1e3b19"
+      "bytes": 44717,
+      "sha256": "8fceba2a5883556c958a7048317e675c3bdf6e904da7ab2549a523cc695149fb"
     },
     "tests/test_github_handoff.py": {
-      "bytes": 10101,
-      "sha256": "3078303e67c8f73ad8d935bc02cf8742cec33d839a0f5b9969b557b598208600"
+      "bytes": 10273,
+      "sha256": "ccce3c8356b6a0c50250afb24ca7ec025f96097337c63393edcf69f089f289c6"
     },
     "tests/test_live_progress.py": {
       "bytes": 9566,
@@ -293,8 +293,8 @@
       "sha256": "646c070099a4623f801fc806c5fd2ff5741083a228880c8f22f3e9224941a1e0"
     },
     "tests/test_storage_auth.py": {
-      "bytes": 15749,
-      "sha256": "6365e106068a1466bd9a2e88b89fb6142edc74f71c74a1344b21b5f9c2c034a3"
+      "bytes": 18161,
+      "sha256": "8cc92667132ff2a50c370c1fda173c609876ef02eb893165f82930f60c0f762f"
     },
     "tests/test_task_stream_config.py": {
       "bytes": 3454,
@@ -351,7 +351,7 @@
   "release_kind": "GITHUB_PINNED_COLAB_RUNNER",
   "repository": "KianAnbarestani/AHR-MalCL-HR",
   "run_count": 100,
-  "runtime_source_sha256": "9cdbb2ed94db030fe18b931e433aa060deef6f54c0b235de173a78c7ce290abc",
+  "runtime_source_sha256": "4c02c68d57ad730d7eb14c17827b38df2f205aa47adcefca502e45e7d32915ba",
   "schema_version": 1,
   "training_source_sha256": "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
 }

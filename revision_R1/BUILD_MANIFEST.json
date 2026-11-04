@@ -2,9 +2,9 @@
   "commit_sha_is_bound_by_colab_not_embedded": true,
   "effective_schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
   "file_count": 74,
-  "package_manifest_sha256": "a8962b0c5b73d4d5dc28c7d06bef8849894805cd4e466feaaf6955579b70b580",
+  "package_manifest_sha256": "4dc220ed7f072d080c8abf58af5ebdb0031fd9fc887102783ccb9080c30c5fb4",
   "release_kind": "GITHUB_PINNED_COLAB_RUNNER",
-  "runtime_source_sha256": "9cdbb2ed94db030fe18b931e433aa060deef6f54c0b235de173a78c7ce290abc",
+  "runtime_source_sha256": "4c02c68d57ad730d7eb14c17827b38df2f205aa47adcefca502e45e7d32915ba",
   "schema_version": 1,
   "training_source_sha256": "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
 }

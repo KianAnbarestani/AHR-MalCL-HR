@@ -11,6 +11,7 @@ from scripts.storage_auth import (
     STORAGE_REFRESH_TOKEN_SECRET,
     StorageOAuthError,
     build_main_account_storage_api,
+    build_main_account_drive_v2_api,
 )
 
 
@@ -59,6 +60,8 @@ def _secrets(refresh_token="refresh-secret", email=None):
 def test_explicit_storage_oauth_injects_colab_secret_credentials_without_adc():
     requested = []
     service = _FakeService(MAIN_ACCOUNT)
+    lease_service = _FakeService(MAIN_ACCOUNT)
+    service_build_calls = []
     credential_calls = []
 
     def secret_getter(name):
@@ -67,10 +70,11 @@ def test_explicit_storage_oauth_injects_colab_secret_credentials_without_adc():
 
     def service_builder(api_name, version, *, credentials, cache_discovery):
         assert api_name == "drive"
-        assert version == "v3"
+        assert version in {"v2", "v3"}
         assert credentials.kwargs["refresh_token"] == "refresh-secret"
         assert cache_discovery is False
-        return service
+        service_build_calls.append(version)
+        return service if version == "v3" else lease_service
 
     def credentials_factory(**kwargs):
         credential_calls.append(kwargs)
@@ -84,6 +88,7 @@ def test_explicit_storage_oauth_injects_colab_secret_credentials_without_adc():
     )
 
     assert observed_service is service
+    assert observed_service._revision_r1_lease_service is lease_service
     assert credentials.kwargs == {
         "token": None,
         "refresh_token": "refresh-secret",
@@ -98,11 +103,14 @@ def test_explicit_storage_oauth_injects_colab_secret_credentials_without_adc():
         STORAGE_REFRESH_TOKEN_SECRET,
     ]
     assert credential_calls == [credentials.kwargs]
+    assert service_build_calls == ["v3", "v2"]
     assert service.about_resource.request.fields == "user(emailAddress,permissionId)"
     assert evidence == {
         "status": "PASS",
         "credential_source": "explicit_colab_secret_user_oauth",
         "authenticated_user": MAIN_ACCOUNT,
+        "lease_api_version": "v2_lease_cas_only",
+        "lease_authenticated_user": MAIN_ACCOUNT,
     }
 
 
@@ -126,6 +134,52 @@ def test_explicit_storage_oauth_rejects_wrong_account_without_leaking_secrets(mo
     assert "kiananbarestani62@gmail.com" in str(exc.value)
     assert "refresh-secret" not in str(exc.value)
     assert "client-secret" not in str(exc.value)
+
+
+def test_drive_v2_lease_api_reuses_explicit_credentials_and_verifies_canonical_user():
+    credentials = _FakeCredentials(refresh_token="canonical-refresh")
+    service = _FakeService(MAIN_ACCOUNT)
+    builder_calls = []
+
+    def builder(api_name, version, *, credentials, cache_discovery):
+        builder_calls.append((api_name, version, credentials, cache_discovery))
+        return service
+
+    observed, evidence = build_main_account_drive_v2_api(
+        credentials=credentials,
+        expected_account_email=MAIN_ACCOUNT,
+        drive_service_builder=builder,
+    )
+
+    assert observed is service
+    assert builder_calls == [("drive", "v2", credentials, False)]
+    assert service.about_resource.request.fields == "user(emailAddress,permissionId)"
+    assert evidence == {
+        "status": "PASS",
+        "credential_source": "same_explicit_main_account_oauth_as_drive_v3",
+        "api_version": "v2_lease_cas_only",
+        "authenticated_user": MAIN_ACCOUNT,
+    }
+
+
+def test_drive_v2_lease_api_rejects_wrong_account_and_hides_transport_errors():
+    wrong = _FakeService("compute@example.org")
+    with pytest.raises(StorageOAuthError, match="storage account mismatch") as caught:
+        build_main_account_drive_v2_api(
+            credentials=_FakeCredentials(refresh_token="secret-refresh"),
+            expected_account_email=MAIN_ACCOUNT,
+            drive_service_builder=lambda *_args, **_kwargs: wrong,
+        )
+    assert "compute@example.org" in str(caught.value)
+    assert "secret-refresh" not in str(caught.value)
+
+    with pytest.raises(StorageOAuthError, match="Drive v2 lease API could not verify") as caught:
+        build_main_account_drive_v2_api(
+            credentials=_FakeCredentials(refresh_token="secret-refresh"),
+            expected_account_email=MAIN_ACCOUNT,
+            drive_service_builder=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("secret-refresh")),
+        )
+    assert "secret-refresh" not in str(caught.value)
 
 
 def test_drive_capacity_helpers_require_and_reuse_verified_storage_service(monkeypatch):

@@ -918,8 +918,10 @@ def verify_canonical_storage_session(
         or revision.get("folder_id")
     )
     from revision_r1.drive_storage import verify_conditional_update_support
+    lease_service = getattr(storage_adapter, "lease_service", None) or service
     conditional_update = (conditional_update_probe or verify_conditional_update_support)(
         service, parent_id=lock_parent_id, expected_account_email=expected_account,
+        lease_service=lease_service,
     )
     if not isinstance(conditional_update, dict) or conditional_update.get("status") != "PASS":
         raise StorageCapacityError(
@@ -5983,7 +5985,7 @@ def execute_frozen_plan_record(
                     "live_progress": formatted,
                     "matrix_lock_is_best_effort": storage_adapter is None,
                     "matrix_lock_backend": (
-                        "canonical_drive_api_etag_if_match" if storage_adapter is not None
+                        "canonical_drive_v2_etag_if_match" if storage_adapter is not None
                         else "local_filesystem_lock"
                     ),
                 }

@@ -132,6 +132,9 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "auth.authenticate_user()" not in cells[1]
     assert "google.auth.default(" not in cells[1]
     assert cells[1].index("build_main_account_storage_api(") < cells[1].index('drive.mount("/content/drive", force_remount=False)')
+    assert "build_main_account_drive_v2_api(" not in cells[1]
+    assert "lease_service=STORAGE_LEASE_API_SERVICE" not in cells[1]
+    assert "DriveApiStorage" in cells[1]
     assert cells[1].index("verify_package_integrity(PACKAGE_ROOT)") < cells[1].index("build_main_account_storage_api(")
     assert cells[1].index('_git(["fetch"') < cells[1].index("build_main_account_storage_api(")
     assert "credential_source" in cells[1]

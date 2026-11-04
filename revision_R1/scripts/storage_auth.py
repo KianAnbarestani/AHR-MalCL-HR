@@ -98,8 +98,66 @@ def build_main_account_storage_api(
             f"storage account mismatch: expected {expected!r}, observed {observed!r}; "
             "no production paths or checkpoints were modified"
         )
+    lease_service, lease_evidence = build_main_account_drive_v2_api(
+        credentials=credentials,
+        expected_account_email=expected,
+        drive_service_builder=service_builder,
+    )
+    try:
+        # Keep the existing notebook API stable: it already passes this v3
+        # service into DriveApiStorage. The adapter discovers the paired v2
+        # service here, without changing Cell A or creating another credential.
+        service._revision_r1_lease_service = lease_service
+    except Exception:
+        raise StorageOAuthError(
+            "Drive v3 client cannot retain the verified v2 lease client; "
+            "conditional lease setup is unavailable and no worker may start"
+        ) from None
     return service, credentials, {
         "status": "PASS",
         "credential_source": "explicit_colab_secret_user_oauth",
+        "authenticated_user": observed,
+        "lease_api_version": lease_evidence["api_version"],
+        "lease_authenticated_user": lease_evidence["authenticated_user"],
+    }
+
+
+def build_main_account_drive_v2_api(
+    *,
+    credentials: Any,
+    expected_account_email: str,
+    drive_service_builder: Callable[..., Any] | None = None,
+) -> tuple[Any, dict[str, str]]:
+    """Build the same user's Drive v2 API, used only for ETag lease CAS.
+
+    Drive v3 does not expose file ETags. This narrowly scoped v2 client shares
+    the already verified explicit OAuth credentials; callers must still prove
+    stale ``If-Match`` rejection with the live temporary-file capability probe.
+    """
+    expected = str(expected_account_email).strip().lower()
+    if not expected:
+        raise ValueError("expected storage account email must be explicit")
+    service_builder = drive_service_builder or _default_drive_service_builder
+    try:
+        service = service_builder(
+            "drive", "v2", credentials=credentials, cache_discovery=False,
+        )
+        account = service.about().get(fields="user(emailAddress,permissionId)").execute()
+    except Exception:
+        raise StorageOAuthError(
+            "Drive v2 lease API could not verify the canonical storage account; "
+            "conditional lease support is unavailable and no worker may start"
+        ) from None
+
+    observed = str((account.get("user") or {}).get("emailAddress") or "").strip().lower()
+    if observed != expected:
+        raise StorageOAuthError(
+            f"storage account mismatch for Drive v2 lease API: expected {expected!r}, "
+            f"observed {observed!r}; no production paths or checkpoints were modified"
+        )
+    return service, {
+        "status": "PASS",
+        "credential_source": "same_explicit_main_account_oauth_as_drive_v3",
+        "api_version": "v2_lease_cas_only",
         "authenticated_user": observed,
     }

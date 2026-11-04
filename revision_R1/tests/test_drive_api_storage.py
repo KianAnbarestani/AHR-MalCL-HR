@@ -48,6 +48,7 @@ class _FakeFiles:
     def __init__(self, records):
         self.records = records
         self.next_id = 1
+        self.update_calls = 0
         self.fail_next_create = False
         self.fail_create_name = None
         self.fail_create_status = 403
@@ -59,6 +60,7 @@ class _FakeFiles:
         self.response_etag_override = None
         self.metadata_parent_override = None
         self.metadata_file_id_override = None
+        self.ignore_if_match = False
 
     @staticmethod
     def _contents(media_body):
@@ -112,9 +114,11 @@ class _FakeFiles:
         return _Request(execute)
 
     def update(self, *, fileId, media_body, **_kwargs):
+        self.update_calls += 1
         def execute(request):
             record = self.records[fileId]
-            if request.headers.get("If-Match") is not None and request.headers["If-Match"] != record["etag"]:
+            if (not self.ignore_if_match and request.headers.get("If-Match") is not None
+                    and request.headers["If-Match"] != record["etag"]):
                 raise _HttpError(412)
             payload = self._contents(media_body)
             record.update(content=payload, size=str(len(payload)), quotaBytesUsed=str(len(payload)),
@@ -184,15 +188,107 @@ class _FakeService:
         })
 
 
-def _storage(service, stage_root, monkeypatch):
+class _FakeV2Files:
+    def __init__(self, records):
+        self.records = records
+        self.delegate = _FakeFiles(records)
+        self.update_calls = 0
+        self.omit_etag = False
+        self.omit_resource_etag = False
+        self.etag_override = None
+        self.metadata_parent_override = None
+        self.metadata_file_id_override = None
+
+    def get(self, *, fileId, **_kwargs):
+        record = self.records.get(fileId)
+        if record is None:
+            return _Request(lambda _request: (_ for _ in ()).throw(_HttpError(404)))
+        response_etag = self.etag_override or record.get("etag")
+        headers = {} if self.omit_etag or response_etag is None else {"ETag": response_etag}
+
+        def execute(_request):
+            result = {
+                "id": self.metadata_file_id_override or record["id"], "title": record["name"],
+                "mimeType": record["mimeType"],
+                "parents": [{"id": parent} for parent in (
+                    [self.metadata_parent_override] if self.metadata_parent_override
+                    else record.get("parents", [])
+                )],
+                "owners": record.get("owners", []),
+                "ownedByMe": record.get("ownedByMe"),
+                "editable": True,
+                "capabilities": record.get("capabilities", {}),
+                "fileSize": record.get("size"),
+                "quotaBytesUsed": record.get("quotaBytesUsed"),
+                "version": record.get("version"),
+            }
+            if not self.omit_etag and not self.omit_resource_etag:
+                result["etag"] = response_etag
+            return result
+
+        return _Request(execute, headers)
+
+    def update(self, *, fileId, media_body, **kwargs):
+        self.update_calls += 1
+        return self.delegate.update(fileId=fileId, media_body=media_body, **kwargs)
+
+
+class _FakeV2Service:
+    def __init__(self, storage_service):
+        self.records = storage_service.records
+        self._files = _FakeV2Files(self.records)
+        self.email = OWNER
+
+    def files(self):
+        return self._files
+
+    def about(self):
+        return self
+
+    def get(self, **_kwargs):
+        return _Request(lambda _request: {"user": {"emailAddress": self.email}})
+
+
+def _storage(service, stage_root, monkeypatch, *, lease_service=None):
     monkeypatch.setattr(drive_storage, "_make_media_upload", lambda path, _mime: Path(path))
     monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
     return DriveApiStorage(
         service=service, expected_account_email=OWNER, revision_folder_id="revision",
+        lease_service=lease_service,
         logical_revision_root="/drive/MyDrive/ReVision", local_staging_root=stage_root,
         download_to_path=lambda request, path: Path(path).write_bytes(request.execute()),
         retry_delays=(0,),
     )
+
+
+def test_existing_notebook_adapter_call_discovers_paired_v2_client_from_verified_v3_service(tmp_path, monkeypatch):
+    service = _FakeService()
+    lease_service = _FakeV2Service(service)
+    service._revision_r1_lease_service = lease_service
+
+    # This matches the stable notebook's existing constructor call: no new
+    # parameter, secret, or setup-cell edit is required for the v2 CAS client.
+    storage = DriveApiStorage(
+        service=service, expected_account_email=OWNER, revision_folder_id="revision",
+        logical_revision_root="/drive/MyDrive/ReVision", local_staging_root=tmp_path / "local",
+        retry_delays=(0,),
+    )
+
+    assert storage.lease_service is lease_service
+
+
+def test_storage_adapter_rejects_paired_v2_lease_client_for_another_account(tmp_path):
+    service = _FakeService()
+    lease_service = _FakeV2Service(service)
+    lease_service.email = "compute@example.org"
+    service._revision_r1_lease_service = lease_service
+
+    with pytest.raises(DriveStorageError, match="Drive lease API identity mismatch"):
+        DriveApiStorage(
+            service=service, expected_account_email=OWNER, revision_folder_id="revision",
+            logical_revision_root="/drive/MyDrive/ReVision", local_staging_root=tmp_path / "local",
+            retry_delays=(0,),
+        )
 
 
 def test_api_storage_uses_main_account_independent_of_mount_and_roundtrips_by_exact_id(tmp_path, monkeypatch):
@@ -243,7 +339,9 @@ def test_storage_session_verifier_uses_the_bound_adapter_probe(tmp_path, monkeyp
     from revision_r1 import storage
 
     service = _FakeService()
-    adapter = _storage(service, tmp_path / "stage", monkeypatch)
+    lease_service = _FakeV2Service(service)
+    adapter = _storage(service, tmp_path / "stage", monkeypatch, lease_service=lease_service)
+    captured_cas_services = []
     monkeypatch.setattr(production_workflow, "_BOUND_DRIVE_API_SERVICE", None)
     monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_SESSION", None)
     monkeypatch.setattr(production_workflow, "_BOUND_STORAGE_ADAPTER", None)
@@ -253,11 +351,15 @@ def test_storage_session_verifier_uses_the_bound_adapter_probe(tmp_path, monkeyp
         api_factory=lambda: service, drive_mount_root="/drive/MyDrive",
         expected_account_email=OWNER, expected_revision_folder_id="revision",
         storage_adapter=adapter,
-        conditional_update_probe=lambda *_args, **_kwargs: {"status": "PASS", "test_only": True},
+        conditional_update_probe=lambda _service, **kwargs: (
+            captured_cas_services.append(kwargs.get("lease_service"))
+            or {"status": "PASS", "test_only": True}
+        ),
     )
 
     assert evidence["durable_storage_backend"] == "explicit_main_account_drive_api_with_local_staging"
     assert evidence["probe"]["write_path"] == "DriveApiStorage.publish_file_download_file_delete_exact"
+    assert captured_cas_services == [lease_service]
     assert production_workflow._BOUND_STORAGE_ADAPTER is adapter
     assert storage.verified_drive_api_service(expected_account_email=OWNER) is service
 
@@ -365,7 +467,8 @@ def test_api_storage_rejects_duplicate_names_and_preserves_existing_file_on_fail
 
 def test_drive_api_lease_enforces_active_owner_heartbeat_release_and_stale_etag(tmp_path, monkeypatch):
     service = _FakeService()
-    storage = _storage(service, tmp_path / "local", monkeypatch)
+    lease_service = _FakeV2Service(service)
+    storage = _storage(service, tmp_path / "local", monkeypatch, lease_service=lease_service)
     local_lock = tmp_path / "local/lease.json"
     local_lock.parent.mkdir(parents=True, exist_ok=True)
     local_lock.write_text(json.dumps({"schema_version": 1, "active": False, "expires_at": 0}) + "\n")
@@ -380,25 +483,48 @@ def test_drive_api_lease_enforces_active_owner_heartbeat_release_and_stale_etag(
     lease1.release()
     lease2.acquire()
     lease2.release()
+    assert lease_service.files().update_calls >= 5
+    assert service.files().update_calls == 0, "lease CAS updates must not use the Drive v3 data client"
 
-    cas = verify_conditional_update_support(service, parent_id="results", expected_account_email=OWNER)
+    cas = verify_conditional_update_support(
+        service, parent_id="results", expected_account_email=OWNER, lease_service=lease_service,
+    )
     assert cas["status"] == "PASS"
     assert cas["contract"] == "stale_if_match_rejected_http_412"
     assert not any("cas-probe" in row["name"] for row in service.records.values())
 
 
-def test_conditional_update_probe_captures_etag_from_google_client_response_callback(monkeypatch):
+def test_conditional_update_probe_uses_drive_v2_etag_from_response_callback(monkeypatch):
     monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
     service = _FakeService()
-    service.files().response_etag_header_name = "ETag"
+    lease_service = _FakeV2Service(service)
+    lease_service.files().omit_resource_etag = True
 
     result = verify_conditional_update_support(
-        service, parent_id="results", expected_account_email=OWNER,
+        service, parent_id="results", expected_account_email=OWNER, lease_service=lease_service,
     )
 
     assert result["status"] == "PASS"
     assert result["contract"] == "stale_if_match_rejected_http_412"
-    assert result["etag_source"] == "http_response_callback"
+    assert result["etag_source"] == "drive_v2_response_callback"
+    assert result["api_version"] == "v2_lease_cas_only"
+    assert result["probe_bytes_preserved_after_stale_update"] is True
+    assert lease_service.files().update_calls == 2
+    assert not any("cas-probe" in row["name"] for row in service.records.values())
+
+
+def test_conditional_update_probe_rejects_drive_v2_ignoring_stale_if_match_and_cleans_probe(monkeypatch):
+    monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
+    service = _FakeService()
+    lease_service = _FakeV2Service(service)
+    lease_service.files().delegate.ignore_if_match = True
+
+    with pytest.raises(DriveLeaseError, match="ignored stale If-Match"):
+        verify_conditional_update_support(
+            service, parent_id="results", expected_account_email=OWNER,
+            lease_service=lease_service,
+        )
+
     assert not any("cas-probe" in row["name"] for row in service.records.values())
 
 
@@ -426,13 +552,14 @@ def test_google_api_http_request_response_headers_use_callback_not_request_resp_
 def test_conditional_update_probe_rejects_missing_or_weak_etag_with_field_diagnostics(etag, monkeypatch):
     monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
     service = _FakeService()
-    service.files().omit_response_etag = etag is None
+    lease_service = _FakeV2Service(service)
+    lease_service.files().omit_etag = etag is None
     if etag is not None:
-        service.files().response_etag_override = etag
+        lease_service.files().etag_override = etag
 
     with pytest.raises(DriveLeaseError, match="strong-ETag verification failed") as raised:
         verify_conditional_update_support(
-            service, parent_id="results", expected_account_email=OWNER,
+            service, parent_id="results", expected_account_email=OWNER, lease_service=lease_service,
         )
 
     assert raised.value.diagnostics["checks"]["api_visible"] is True
@@ -457,18 +584,20 @@ def test_conditional_update_probe_rejects_missing_or_weak_etag_with_field_diagno
 def test_conditional_update_probe_reports_identity_metadata_failures(fault, failure_class, failed_check, monkeypatch):
     monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
     service = _FakeService()
+    lease_service = _FakeV2Service(service)
     if fault == "owner":
         service.files().owner_override = "compute@example.org"
     elif fault == "ownedByMe":
         service.files().owned_by_me_override = False
     elif fault == "parent":
-        service.files().metadata_parent_override = "not-the-expected-parent"
+        lease_service.files().metadata_parent_override = "not-the-expected-parent"
     elif fault == "file_id":
-        service.files().metadata_file_id_override = "not-the-probe-id"
+        lease_service.files().metadata_file_id_override = "not-the-probe-id"
 
     with pytest.raises(DriveLeaseError) as raised:
         verify_conditional_update_support(
             service, parent_id="results", expected_account_email=OWNER,
+            lease_service=lease_service,
         )
 
     diagnostics = raised.value.diagnostics
@@ -747,7 +876,7 @@ def test_real_runner_api_storage_interrupt_fresh_stage_resume_and_idempotent_com
         assert progress["status"] == "SYNTHETIC_VALIDATED_NON_REPORTABLE"
         assert any(
             event.get("matrix_lock_is_best_effort") is False
-            and event.get("matrix_lock_backend") == "canonical_drive_api_etag_if_match"
+                and event.get("matrix_lock_backend") == "canonical_drive_v2_etag_if_match"
             for event in progress_events
         )
 

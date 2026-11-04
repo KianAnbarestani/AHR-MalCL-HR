@@ -35,7 +35,8 @@ account and is read-only for datasets/preflight. All durable writes use local
 staging plus the verified OAuth Drive API: checkpoints, outputs, progress,
 manifests, registries, leases, journals, and exports. Cell A verifies the exact
 folder/path, API write/read-back probe, new-file owner/quota metadata, cleanup
-capability, and current-session stale-ETag rejection. Wrong OAuth credentials,
+capability, and Drive v2 current-session stale-ETag rejection using the same
+explicit OAuth credentials as the v3 data API. Wrong OAuth credentials,
 unknown quota, Viewer access, ambiguous paths, or an unverified conditional
 lease update stop before workers. No sharing changes, ownership transfers, or
 service accounts are used; no compute-account email allowlist is required.
