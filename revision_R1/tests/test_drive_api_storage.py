@@ -1158,19 +1158,45 @@ def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_on
 
     # Cell F must use the same root, skip Run 1, and stop at the first pending
     # record. The intercepted runner returns before any model/training work.
-    class NoopLease:
+    lease_events = []
+    lease_state = {"acquired": False}
+
+    class TrackedLease:
         def __init__(self, *_args, **_kwargs):
             self.lost = threading.Event()
 
         def __enter__(self):
+            lease_state["acquired"] = True
+            lease_events.append("lease_acquired")
             return self
 
         def __exit__(self, *_exc):
+            lease_state["acquired"] = False
+            lease_events.append("lease_released")
             return False
+
+    original_hydrate_registry = workflow._hydrate_api_matrix_registry
+    f_hydration_count = 0
+
+    def track_f_registry_hydration(storage_adapter, root, runtime_plan):
+        nonlocal f_hydration_count
+        original_hydrate_registry(storage_adapter, root, runtime_plan)
+        f_hydration_count += 1
+        lease_events.append(("registry_hydrated", f_hydration_count, lease_state["acquired"]))
+        if f_hydration_count == 1:
+            # Simulate stale local staging after the pre-lease fetch. The
+            # under-lease fetch must replace it from the canonical API bytes
+            # before Run 1 can be reused or the next key selected.
+            staged = workflow._matrix_registry_path(Path(root), runtime_plan)
+            stale = json.loads(staged.read_text(encoding="utf-8"))
+            stale["completed_runs"] = {}
+            staged.write_text(json.dumps(stale), encoding="utf-8")
+            lease_events.append("prelease_staging_invalidated")
 
     monkeypatch.setattr(workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
     monkeypatch.setattr(workflow, "validate_runtime_bound_plan", lambda value, *_a, **_k: value)
-    monkeypatch.setattr(workflow, "_MatrixLeaseHeartbeat", NoopLease)
+    monkeypatch.setattr(workflow, "_MatrixLeaseHeartbeat", TrackedLease)
+    monkeypatch.setattr(workflow, "_hydrate_api_matrix_registry", track_f_registry_hydration)
     monkeypatch.setattr(fresh_storage, "ensure_lease_record", lambda _path: {"status": "EXISTING_EXACT_ID"})
     monkeypatch.setattr(workflow, "project_storage", lambda *_a, **_k: {"status": "TEST_ONLY"})
     monkeypatch.setattr(
@@ -1220,6 +1246,14 @@ def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_on
     assert runner_calls == ["ember_seed42_current_only"]
     assert result["first_run_reused"] == "ember_seed42_full_hybrid"
     assert result["matrix_registry_evidence_at_start"] == registry_evidence
+    assert f_hydration_count == 2
+    assert lease_events == [
+        ("registry_hydrated", 1, False),
+        "prelease_staging_invalidated",
+        "lease_acquired",
+        ("registry_hydrated", 2, True),
+        "lease_released",
+    ]
     matrix_registry_event = next(
         event for event in events if event.get("stage") == "matrix_registry_verified"
     )
@@ -1229,6 +1263,10 @@ def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_on
     assert workflow._read_matrix_registry(fresh_results, plan)["completed_runs"].keys() == {first["run_key"]}
     remote_metadata = fresh_storage.exact_file(logical_registry)
     assert remote_metadata["id"] == published["file_id"]
+    assert remote_metadata["version"] == service.records[published["file_id"]]["version"] == "1"
+    assert remote_metadata["md5Checksum"] == hashlib.md5(
+        original_registry_bytes, usedforsecurity=False,
+    ).hexdigest()
     assert fresh_storage.download_file(
         logical_registry, tmp_path / "registry-readback.json",
     )["bytes"] == len(original_registry_bytes)

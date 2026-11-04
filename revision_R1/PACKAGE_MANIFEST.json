@@ -233,8 +233,8 @@
       "sha256": "43ecc53d4d8a6f0782e44495322bdf00a474c9d3b56c1ab05cdab00771e2b483"
     },
     "tests/test_drive_api_storage.py": {
-      "bytes": 57625,
-      "sha256": "9dca8478aa771051266587f9837be44946250ea38bc7a9bbe86af27d7bfe9a2b"
+      "bytes": 59417,
+      "sha256": "6d26babd8ab1e92a7f66c39499bdd703bd557482781b9f84fcfdccec2bdae725"
     },
     "tests/test_github_handoff.py": {
       "bytes": 10601,
