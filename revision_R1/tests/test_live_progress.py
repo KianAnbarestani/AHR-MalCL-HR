@@ -376,9 +376,49 @@ def test_task_completion_summary_uses_latest_actual_metrics_once():
         now[0] = tick
         callback(record)
     summaries = [line for line in printed if line.startswith("Completed task")]
-    assert summaries == ["Completed task 3 | run run-1 | all seen test classes | "
-                         "accuracy 81.00% | macro F1 76.00% | TASK_COMPLETED"]
+    assert summaries == ["Completed task 3 evaluation | run run-1 | all seen test classes | "
+                         "accuracy 81.00% | macro F1 76.00% | run not durably finalized"]
     assert record == before
+
+
+def test_all_task_evaluations_do_not_announce_durable_run_completion():
+    from scripts.live_progress import ColabProgressDisplay
+    printed = []
+    callback = ColabProgressDisplay(display_fn=False, print_fn=printed.append, clock=lambda: 0)
+    for task in range(1, 12):
+        record = _record(status="TASK_COMPLETED")
+        record["live_progress"]["task"]["number"] = task
+        record["live_progress"]["metrics"].update(task_id=task, latest_task={"accuracy": 0.81})
+        callback(record)
+    summaries = [line for line in printed if line.startswith("Completed")]
+    assert len(summaries) == 11
+    assert all("evaluation" in line and "run not durably finalized" in line for line in summaries)
+    assert all("TASK_COMPLETED" not in line and "accuracy 81.00%" in line for line in summaries)
+    assert not any(line.startswith("Completed run") for line in printed)
+    callback(_record(status="COMPLETED_VALIDATED"))
+    callback(_record(status="COMPLETED_VALIDATED"))
+    assert [line for line in printed if line.startswith("Completed run")] == [
+        "Completed run run-1 | COMPLETED_VALIDATED"]
+
+
+@pytest.mark.parametrize("status", ["RUN_COMPLETE", "CHECKPOINT_VERIFIED", "VALIDATED", "FAILED"])
+def test_unfinalized_status_does_not_print_permanent_run_completion(status):
+    from scripts.live_progress import ColabProgressDisplay
+    printed = []
+    ColabProgressDisplay(display_fn=False, print_fn=printed.append)(_record(status=status))
+    assert not any(line.startswith("Completed run") for line in printed)
+
+
+@pytest.mark.parametrize("status", ["COMPLETED_VALIDATED", "FIRST_COUNTED_PRODUCTION_RUN_VALIDATED",
+                                    "SYNTHETIC_VALIDATED_NON_REPORTABLE"])
+def test_validated_run_status_keeps_permanent_completion(status):
+    from scripts.live_progress import ColabProgressDisplay
+    printed = []
+    callback = ColabProgressDisplay(display_fn=False, print_fn=printed.append)
+    callback(_record(status=status))
+    callback(_record(status=status))
+    assert [line for line in printed if line.startswith("Completed run")] == [
+        f"Completed run run-1 | {status}"]
 
 
 @pytest.mark.parametrize("metrics, evaluation_task, expected", [

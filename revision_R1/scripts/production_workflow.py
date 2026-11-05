@@ -1257,16 +1257,15 @@ def verify_drive_checkpoint_generation(
             or owner != CANONICAL_STORAGE_ACCOUNT_EMAIL
             or metadata.get("ownedByMe") is not True
             or size != expected_size
-            or quota_bytes is None or quota_bytes <= 0
             or not md5_remote or md5_remote != md5_local
         ):
             mismatch = StorageCapacityError(
-                "Drive checkpoint API read-back failed exact parent, main-account ownership, quota attribution, "
+                "Drive checkpoint API read-back failed exact parent, main-account ownership, "
                 f"size, or MD5 verification for {local_path.name!r}; no stale recovery generation was pruned"
             )
             # DriveFS can expose a just-published file before its metadata settles.
             # Retry only a clearly incomplete size/hash read-back; parent, owner,
-            # quota attribution, IDs, and names are authorization/integrity failures.
+            # IDs and names are authorization/integrity failures. Quota is accounting.
             if (
                 metadata.get("name") == local_path.name
                 and metadata.get("id")
@@ -1274,7 +1273,6 @@ def verify_drive_checkpoint_generation(
                 and parents == [parent_id]
                 and owner == CANONICAL_STORAGE_ACCOUNT_EMAIL
                 and metadata.get("ownedByMe") is True
-                and quota_bytes is not None and quota_bytes > 0
                 and (size != expected_size or not md5_remote or md5_remote != md5_local)
             ):
                 raise _CheckpointPublicationReadbackPending(
@@ -1428,17 +1426,16 @@ def _write_capability_probe(
             or adapter_result.get("owner") != authenticated_user
             or adapter_result.get("ownedByMe") is not True
             or adapter_result.get("size") != len(DRIVE_WRITE_PROBE_BYTES)
-            or not isinstance(adapter_result.get("quotaBytesUsed"), int)
-            or adapter_result.get("quotaBytesUsed", 0) <= 0
             or adapter_result.get("delete_verified") is not True
         ):
             raise StorageCapacityError(
-                "main-account API adapter probe did not verify exact owner/parent/quota/read-back/cleanup: "
+                "main-account API adapter probe did not verify exact owner/parent/read-back/cleanup: "
                 + json.dumps(diagnostics or {"observed": observed}, sort_keys=True, default=str)
             )
         return {
             "status": "PASS", "probe_name": name,
             "probe_parent_id": parent_id, "new_file_owner": adapter_result["owner"],
+            "file_quota_accounting_status": adapter_result.get("quota_status", "UNKNOWN"),
             "new_file_owned_by_authenticated_user": adapter_result["ownedByMe"],
             "new_file_quota_bytes": adapter_result["quotaBytesUsed"],
             "new_file_size_bytes": adapter_result["size"],
@@ -1465,7 +1462,7 @@ def _write_capability_probe(
         "owner": authenticated_user,
         "ownedByMe": True,
         "size": len(DRIVE_WRITE_PROBE_BYTES),
-        "quotaBytesUsed": "positive integer",
+        "quotaBytesUsed": "nonnegative integer if available; accounting only",
         "api_visible": True,
     }
     try:
@@ -1548,8 +1545,6 @@ def _write_capability_probe(
             mismatch_fields.append("owner")
         if size is None or size != len(DRIVE_WRITE_PROBE_BYTES):
             mismatch_fields.append("size")
-        if quota_bytes is None or quota_bytes <= 0:
-            mismatch_fields.append("quotaBytesUsed")
         diagnostics = _write_probe_diagnostics(expected, observed, metadata_status="VISIBLE")
         missing_fields = [
             field for field, condition in diagnostics["conditions"].items()
@@ -1663,7 +1658,7 @@ def _write_probe_diagnostics(expected: dict[str, Any], observed: dict[str, Any],
         if key == "file_id":
             passed = isinstance(value, str) and bool(value)
         elif key == "quotaBytesUsed":
-            passed = type(value) is int and value > 0
+            passed = type(value) is int and value >= 0
         elif key == "api_visible":
             passed = value is True
         elif key == "parent_id" and isinstance(value, list):
@@ -1673,11 +1668,12 @@ def _write_probe_diagnostics(expected: dict[str, Any], observed: dict[str, Any],
         else:
             passed = value == target
         conditions[key] = {
-            "status": "PASS" if passed else "MISMATCH" if value is not None else "MISSING_OR_STALE",
+            "status": ("ACCOUNTING_UNAVAILABLE" if key == "quotaBytesUsed" and value is None
+                       else "PASS" if passed else "MISMATCH" if value is not None else "MISSING_OR_STALE"),
             "expected": target, "observed": value,
         }
     return {
-        "classification": "VERIFIED" if all(item["status"] == "PASS" for item in conditions.values()) else metadata_status,
+        "classification": "VERIFIED" if all(item["status"] in {"PASS", "ACCOUNTING_UNAVAILABLE"} for item in conditions.values()) else metadata_status,
         "expected_owner": expected.get("owner"),
         "observed_owner": observed.get("owner"),
         "conditions": conditions,
@@ -6076,22 +6072,8 @@ def execute_frozen_plan_record(
         if storage_adapter is not None:
             from revision_r1.drive_storage import DriveApiLease
 
-            class ApiRunRegistry(previous_run_registry):
-                def begin_attempt(self, run_id, *, identity):
-                    result = super().begin_attempt(run_id, identity=identity)
-                    _publish_api_tree(storage_adapter, self.root)
-                    return result
-
-                def fail_attempt(self, run_id, reason):
-                    result = super().fail_attempt(run_id, reason)
-                    _publish_api_tree(storage_adapter, self.root)
-                    return result
-
-                def complete(self, run_id, artifacts):
-                    _publish_api_tree(storage_adapter, self.root.parent)
-                    result = super().complete(run_id, artifacts)
-                    _publish_api_tree(storage_adapter, self.root)
-                    return result
+            from scripts.production_recovery import api_run_registry_class
+            ApiRunRegistry = api_run_registry_class(storage_adapter, previous_run_registry)
 
             def api_run_lease(path, *, ttl_seconds=900):
                 logical = storage_adapter.logical_path_for_local(path)

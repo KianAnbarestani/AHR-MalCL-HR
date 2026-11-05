@@ -460,10 +460,11 @@ class ColabProgressDisplay:
         status = str(record.get("status", progress.get("status", "RUNNING")))
         stage = str(record.get("stage", ""))
         marker = (status + " " + stage).lower()
-        completion = (any(word in marker for word in ("task_complete", "run_complete"))
-                      or status in {"FIRST_COUNTED_PRODUCTION_RUN_VALIDATED",
-                                    "SYNTHETIC_VALIDATED_NON_REPORTABLE", "VALIDATED",
-                                    "COMPLETED_VALIDATED"})
+        task_completion = "task_complet" in marker
+        run_completion = status in {"FIRST_COUNTED_PRODUCTION_RUN_VALIDATED",
+                                    "SYNTHETIC_VALIDATED_NON_REPORTABLE",
+                                    "COMPLETED_VALIDATED"}
+        completion = task_completion or run_completion
         important = completion or status.startswith("CHECKPOINT_") or any(
             word in marker for word in ("fail", "error", "interrupt", "blocked"))
         if not progress and not important and not self.debug_logging:
@@ -473,13 +474,13 @@ class ColabProgressDisplay:
                      upload.get("generation"), upload.get("filename"), upload.get("status"))
         due = self.throttle.should_emit(signature, self.clock())
         if completion:
-            kind = "task" if "task_complet" in marker else "run"
+            kind = "run" if run_completion else "task"
             key = (kind, task.get("number") if kind == "task" else None)
             if key not in self._summaries:
                 self._summaries.add(key)
                 summary = f"Completed run {run_key}"
                 if kind == "task":
-                    summary = f"Completed task {task.get('number')} | run {run_key}"
+                    summary = f"Completed task {task.get('number')} evaluation | run {run_key}"
                     evaluation = progress.get("metrics", {})
                     if evaluation.get("task_id") == task.get("number"):
                         metrics = evaluation.get("latest_task", {})
@@ -488,7 +489,10 @@ class ColabProgressDisplay:
                                     if _safe_number(metrics.get(name)) is not None]
                         if measured:
                             summary += " | all seen test classes | " + " | ".join(measured)
-                self.print_fn(f"{summary} | {status}")
+                if kind == "task":
+                    self.print_fn(f"{summary} | run not durably finalized")
+                else:
+                    self.print_fn(f"{summary} | {status}")
         if not due:
             return
         self.latest_text = render_progress_line(record)

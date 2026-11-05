@@ -95,3 +95,36 @@ transport, which leaves HTTP 308 acknowledgements to the upload state machine.
 Chunk retries are bounded; neither global transport patches nor dependency
 downgrades are used. Sanitized exception diagnostics expose observed HTTP status
 and allowlisted response headers, never credentials, bodies or session URLs.
+
+## Post-export publication failure: completion only
+
+For the Current-only failure at release `96f202d6`, an empty
+`selection_records.jsonl` is legitimate: records are emitted only by generated
+replay selection. The file must exist and its exact empty-content hash must
+verify. Zero bytes are not missing bytes. Publisher checks owner, exact parent,
+type, size and content digest; zero or unavailable per-file quota is reported
+separately and is never substituted for content integrity or available capacity.
+Account quota/capacity and existing reserves remain enforced independently.
+
+Keep the existing Colab VM and local exports/checkpoints. After fetching the
+corrected pinned code with A, use `Complete_Exported_Run.py` with existing C
+variables, or the matching F with `COMPLETE_EXPORTED_RUN_ONLY = True` and both
+launch/preparation False. Explicitly acknowledge no other worker after checking
+Manage sessions. This is not a training restart: the helper verifies the frozen
+identity, existing 11-task exports and manifest, hashes two recovery generations
+(including the terminal complete checkpoint) and all eleven task-boundary
+checkpoints, publishes existing bytes, then uses the normal registry completion
+API. It never loads tensor state, constructs a model, runs an update or deletes
+an artifact. The failed training attempt is retained; any new publication-only
+attempt is explicitly labeled `completion_only`.
+
+Runner completion is published/validated before the canonical matrix registry
+is updated. Retries reuse valid completion evidence without adding another
+completion; fresh staging rebinds absolute paths locally but never publishes
+those rebound historical markers over a valid canonical marker. Missing/corrupt
+evidence stops with an error rather than regenerating outputs or training.
+After Run 2 is finalized, rerun C and D, keep E's Run 1 no-op, set all F recovery
+modes False and explicitly enable F only when ready. Frozen-plan continuation
+skips Runs 1 and 2 and selects `ember_seed42_anchor_only` next. Launch switches
+remain False in the delivered notebook. Compact recovery evidence is published
+under `production/results/completion_recovery/`; old logs and artifacts remain.

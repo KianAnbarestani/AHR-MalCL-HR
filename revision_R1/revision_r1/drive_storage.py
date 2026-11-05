@@ -226,6 +226,24 @@ def _safe_metadata_summary(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _nonnegative_int(value: Any) -> int | None:
+    """Parse Drive byte counts without confusing zero with missing metadata."""
+    if type(value) is int:
+        return value if value >= 0 else None
+    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+        return int(value)
+    return None
+
+
+def _quota_accounting(metadata: dict[str, Any]) -> dict[str, Any]:
+    raw = metadata.get("quotaBytesUsed")
+    count = _nonnegative_int(raw)
+    return {"quota_bytes_used": count,
+            "quota_status": "AVAILABLE" if count is not None else "UNKNOWN",
+            "quota_accounting_status": ("MISSING" if raw is None else
+                                        "AVAILABLE" if count is not None else "INVALID")}
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -498,9 +516,12 @@ class DriveApiStorage:
         if not file_id:
             raise DriveStorageError("cannot download Drive content without an exact file ID")
         target.parent.mkdir(parents=True, exist_ok=True)
-        expected_size = int(metadata.get("size") or 0)
-        if expected_size <= 0:
-            raise DriveStorageError(f"Drive metadata has no positive content size for file ID {file_id}")
+        expected_size = _nonnegative_int(metadata.get("size"))
+        if expected_size is None:
+            raise DriveStorageError(f"Drive metadata has no valid content size for file ID {file_id}")
+        mime = metadata.get("mimeType")
+        if not isinstance(mime, str) or mime.startswith("application/vnd.google-apps."):
+            raise DriveStorageError(f"Drive content type is not a binary artifact for file ID {file_id}")
         from .storage import DEFAULT_STORAGE_RESERVE_BYTES
         free = shutil.disk_usage(target.parent).free
         if free < expected_size + DEFAULT_STORAGE_RESERVE_BYTES:
@@ -523,11 +544,13 @@ class DriveApiStorage:
             request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
             self.download_to_path(request, temporary)
             actual_size = temporary.stat().st_size
-            if expected_size and actual_size != expected_size:
+            if actual_size != expected_size:
                 raise DriveStorageError(f"Drive download size mismatch for {file_id}: {actual_size} != {expected_size}")
             digest = _file_sha256(temporary)
             if expected_sha256 is not None and digest != expected_sha256:
                 raise DriveStorageError(f"Drive download SHA-256 mismatch for {file_id}")
+            if metadata.get("md5Checksum") is not None and _file_md5(temporary) != metadata["md5Checksum"]:
+                raise DriveStorageError(f"Drive download MD5 mismatch for {file_id}")
             os.replace(temporary, target)
             return {"file_id": file_id, "bytes": actual_size, "sha256": digest,
                     "md5_checksum": metadata.get("md5Checksum"), "path": str(target)}
@@ -541,7 +564,7 @@ class DriveApiStorage:
         metadata = self.exact_file(logical_file)
         if metadata is None:
             raise FileNotFoundError(f"Drive file not found: {logical_file}")
-        if expected_bytes is not None and int(metadata.get("size") or -1) != int(expected_bytes):
+        if expected_bytes is not None and _nonnegative_int(metadata.get("size")) != int(expected_bytes):
             raise DriveStorageError(f"Drive metadata size differs from expected bytes for {logical_file}")
         return self._download_id(metadata, Path(local_file).expanduser().resolve(), expected_sha256=expected_sha256)
 
@@ -560,23 +583,34 @@ class DriveApiStorage:
         local_sha = _file_sha256(local)
         existing_owner = None
         existing_owned_by_me = None
+        expected_mime = "application/octet-stream"
         if existing is not None:
-            if parent_id not in [str(value) for value in existing.get("parents", [])]:
+            expected_mime = existing.get("mimeType")
+            if (not isinstance(expected_mime, str)
+                    or expected_mime.startswith("application/vnd.google-apps.")):
+                raise DriveStorageError("existing Drive file type is not a binary artifact; preserved")
+            if [str(value) for value in existing.get("parents", [])] != [parent_id]:
                 raise DriveStorageError(f"existing file ID {existing.get('id')} has a different parent")
-            if existing.get("capabilities", {}).get("canEdit") is not True:
-                raise DriveStorageError(f"storage account cannot edit exact existing file ID {existing.get('id')}")
-            if (int(existing.get("size") or -1) == local_size and existing.get("md5Checksum") == local_md5):
-                return {"status": "UNCHANGED_VERIFIED_METADATA", "file_id": existing["id"],
-                        "parent_id": parent_id, "bytes": local_size, "sha256": local_sha,
-                        "new_file": False, "write_bytes": 0,
-                        "file_owner": self._owner(existing),
-                        "owned_by_canonical_account": existing.get("ownedByMe") is True,
-                        "quota_attribution": "existing_file_unchanged"}
+            if not self._owner(existing) or type(existing.get("ownedByMe")) is not bool:
+                raise DriveStorageError("existing Drive file ownership metadata is incomplete; preserved")
             existing_owner = self._owner(existing)
             existing_owned_by_me = existing.get("ownedByMe")
+            if existing_owned_by_me is not (existing_owner == self.expected_account_email):
+                raise DriveStorageError("existing Drive file ownership metadata is inconsistent; preserved")
             canonical_owner = (
                 existing_owner == self.expected_account_email and existing_owned_by_me is True
             )
+            # Reusing verified bytes does not require ownership or permission
+            # to replace them. Historical artifacts may belong to another user.
+            if (_nonnegative_int(existing.get("size")) == local_size and existing.get("md5Checksum") == local_md5):
+                return {"status": "UNCHANGED_VERIFIED_METADATA", "file_id": existing["id"],
+                        "parent_id": parent_id, "bytes": local_size, "sha256": local_sha,
+                        "new_file": False, "write_bytes": 0,
+                        "file_owner": existing_owner,
+                        "owned_by_canonical_account": canonical_owner,
+                        "quota_attribution": "existing_file_unchanged", **_quota_accounting(existing)}
+            if existing.get("capabilities", {}).get("canEdit") is not True:
+                raise DriveStorageError(f"storage account cannot edit exact existing file ID {existing.get('id')}")
             if not canonical_owner and (
                 not allow_foreign_owner_update
                 or not self.is_mutable_control_path(logical)
@@ -651,9 +685,11 @@ class DriveApiStorage:
                             supportsAllDrives=True,
                         ).execute()
                         if (observed.get("name") == logical.name
-                                and parent_id in [str(value) for value in observed.get("parents", [])]
-                                and int(observed.get("size") or -1) == local_size
-                                and observed.get("md5Checksum") == local_md5):
+                                and observed.get("id") == file_id
+                                and observed.get("mimeType") == expected_mime
+                                and [str(value) for value in observed.get("parents", [])] == [parent_id]
+                                and _nonnegative_int(observed.get("size")) == local_size
+                                and observed.get("md5Checksum") in (None, local_md5)):
                             response = observed
                             break
                     except Exception as get_error:
@@ -672,7 +708,7 @@ class DriveApiStorage:
         last_readback_error = None
         expected_readback = {
             "id": file_id, "name": logical.name, "parent_id": parent_id,
-            "size": local_size, "md5Checksum": local_md5,
+            "size": local_size, "md5Checksum": local_md5, "mimeType": expected_mime,
         }
         readback_delays = (0.0, *self.retry_delays)
         for attempt, delay in enumerate(readback_delays):
@@ -694,14 +730,14 @@ class DriveApiStorage:
             base_metadata_matches = (
                 isinstance(verified, dict) and verified.get("id") == file_id
                 and verified.get("name") == logical.name
-                and parent_id in [str(value) for value in verified.get("parents", [])]
-                and int(verified.get("size") or -1) == local_size
-                and verified.get("md5Checksum") == local_md5
+                and verified.get("mimeType") == expected_mime
+                and [str(value) for value in verified.get("parents", [])] == [parent_id]
+                and _nonnegative_int(verified.get("size")) == local_size
+                and verified.get("md5Checksum") in (None, local_md5)
             )
             new_file_identity_visible = (
                 not new_file or (
                     self._owner(verified) is not None and type(verified.get("ownedByMe")) is bool
-                    and verified.get("quotaBytesUsed") is not None
                 )
             ) if isinstance(verified, dict) else False
             if base_metadata_matches and new_file_identity_visible:
@@ -723,7 +759,7 @@ class DriveApiStorage:
                         "expected": {
                             "file_id": file_id, "parent_id": parent_id,
                             "owner": self.expected_account_email, "ownedByMe": True,
-                            "size": local_size, "quotaBytesUsed": "positive integer",
+                            "size": local_size,
                             "api_visible": True,
                         },
                         "observed": {
@@ -731,17 +767,17 @@ class DriveApiStorage:
                             "parent_id": (verified.get("parents") or [None])[0],
                             "owner": self._owner(verified), "ownedByMe": verified.get("ownedByMe"),
                             "size": int(verified.get("size")) if verified.get("size") is not None else None,
-                            "quotaBytesUsed": (int(verified.get("quotaBytesUsed"))
-                                               if verified.get("quotaBytesUsed") is not None else None),
+                            "quotaBytesUsed": _nonnegative_int(verified.get("quotaBytesUsed")),
                             "api_visible": True,
                         },
                     },
                 )
         if (not isinstance(verified, dict) or verified.get("id") != file_id
                 or verified.get("name") != logical.name
-                or parent_id not in [str(value) for value in verified.get("parents", [])]
-                or int(verified.get("size") or -1) != local_size
-                or verified.get("md5Checksum") != local_md5):
+                or verified.get("mimeType") != expected_mime
+                or [str(value) for value in verified.get("parents", [])] != [parent_id]
+                or _nonnegative_int(verified.get("size")) != local_size
+                or verified.get("md5Checksum") not in (None, local_md5)):
             raise DriveStorageError(
                 "Drive upload metadata remained stale or mismatched after bounded read-back attempts; "
                 f"expected={expected_readback}, observed={_safe_metadata_summary(verified)}, "
@@ -758,7 +794,7 @@ class DriveApiStorage:
                         "expected": {
                             "file_id": file_id, "parent_id": parent_id,
                             "owner": self.expected_account_email, "ownedByMe": True,
-                            "size": local_size, "quotaBytesUsed": "positive integer",
+                            "size": local_size,
                             "api_visible": True,
                         },
                         "observed": {
@@ -766,31 +802,7 @@ class DriveApiStorage:
                             "parent_id": (verified.get("parents") or [None])[0],
                             "owner": self._owner(verified), "ownedByMe": verified.get("ownedByMe"),
                             "size": int(verified.get("size")) if verified.get("size") is not None else None,
-                            "quotaBytesUsed": (int(verified.get("quotaBytesUsed"))
-                                               if verified.get("quotaBytesUsed") is not None else None),
-                            "api_visible": True,
-                        },
-                    },
-                )
-            quota_bytes = int(verified.get("quotaBytesUsed") or 0)
-            if quota_bytes <= 0:
-                raise DriveStorageError(
-                    "new Drive file quota metadata remains missing after bounded read-back; "
-                    f"expected positive quotaBytesUsed, observed={_safe_metadata_summary(verified)}",
-                    diagnostics={
-                        "phase": "new_file_quota_readback",
-                        "expected": {
-                            "file_id": file_id, "parent_id": parent_id,
-                            "owner": self.expected_account_email, "ownedByMe": True,
-                            "size": local_size, "quotaBytesUsed": "positive integer",
-                            "api_visible": True,
-                        },
-                        "observed": {
-                            "file_id": verified.get("id"),
-                            "parent_id": (verified.get("parents") or [None])[0],
-                            "owner": self._owner(verified), "ownedByMe": verified.get("ownedByMe"),
-                            "size": int(verified.get("size")) if verified.get("size") is not None else None,
-                            "quotaBytesUsed": quota_bytes,
+                            "quotaBytesUsed": _nonnegative_int(verified.get("quotaBytesUsed")),
                             "api_visible": True,
                         },
                     },
@@ -815,7 +827,7 @@ class DriveApiStorage:
                         "expected": {
                             "file_id": file_id, "parent_id": parent_id,
                             "owner": self.expected_account_email, "ownedByMe": True,
-                            "size": local_size, "quotaBytesUsed": "positive integer",
+                            "size": local_size,
                             "api_visible": True,
                         },
                         "observed": {
@@ -825,6 +837,15 @@ class DriveApiStorage:
                         },
                     },
                 )
+        if not new_file and (
+            self._owner(verified) != existing_owner or verified.get("ownedByMe") is not existing_owned_by_me
+        ):
+            raise DriveStorageError("existing Drive file ownership changed during upload; content not verified")
+        if verified.get("md5Checksum") is None:
+            # Quota metadata is not a content checksum. If Drive omits MD5,
+            # verify the exact remote bytes through a bounded local staging file.
+            with tempfile.TemporaryDirectory(prefix=".publish-readback-", dir=self.local_staging_root) as directory:
+                self._download_id(verified, Path(directory) / "content", expected_sha256=local_sha)
         return {"status": "PASS", "file_id": file_id, "parent_id": parent_id,
                 "bytes": local_size, "sha256": local_sha, "md5_checksum": local_md5,
                 "new_file": new_file, "write_bytes": local_size,
@@ -832,6 +853,7 @@ class DriveApiStorage:
                 "owned_by_canonical_account": (
                     verified.get("ownedByMe") is True if isinstance(verified, dict) else False
                 ),
+                **_quota_accounting(verified),
                 "quota_attribution": (
                     "verified_canonical_account" if new_file or existing_owned_by_me is True
                     else "existing_foreign_owner_quota_unverified"
@@ -864,7 +886,8 @@ class DriveApiStorage:
         expected = {
             "file_id": "non-empty API-created file ID", "parent_id": parent_id,
             "owner": self.expected_account_email, "ownedByMe": True,
-            "size": len(raw_payload), "quotaBytesUsed": "positive integer",
+            "size": len(raw_payload), "mimeType": "application/octet-stream",
+            "name": logical.name, "md5Checksum": md5,
             "api_visible": True,
         }
         probe_dir = self.local_staging_root / ".probes"
@@ -888,20 +911,16 @@ class DriveApiStorage:
                 return None
             parents = [str(value) for value in row.get("parents", [])]
             quota_raw = row.get("quotaBytesUsed")
-            size_raw = row.get("size")
-            try:
-                quota = int(quota_raw) if quota_raw is not None else None
-            except (TypeError, ValueError, OverflowError):
-                quota = None
-            try:
-                size = int(size_raw) if size_raw is not None else None
-            except (TypeError, ValueError, OverflowError):
-                size = None
+            quota = _nonnegative_int(quota_raw)
+            size = _nonnegative_int(row.get("size"))
+            quota_status = ("MISSING" if quota_raw is None else "ZERO" if quota == 0
+                            else "AVAILABLE" if quota is not None else "INVALID")
             return {
                 "file_id": row.get("id"),
                 "parent_id": parents[0] if len(parents) == 1 else parents,
                 "owner": self._owner(row), "ownedByMe": row.get("ownedByMe"),
                 "size": size, "quotaBytesUsed": quota, "api_visible": True,
+                "quota_status": quota_status,
                 "name": row.get("name"), "mimeType": row.get("mimeType"),
                 "md5Checksum": row.get("md5Checksum"),
                 "capabilities": row.get("capabilities"),
@@ -926,8 +945,8 @@ class DriveApiStorage:
             )
             if (
                 metadata.get("id") != file_id or metadata.get("name") != logical.name
-                or parent_id not in parents or metadata.get("mimeType") == "application/vnd.google-apps.folder"
-                or int(metadata.get("size") or -1) != len(raw_payload)
+                or parents != [parent_id] or metadata.get("mimeType") != "application/octet-stream"
+                or _nonnegative_int(metadata.get("size")) != len(raw_payload)
                 or metadata.get("md5Checksum") != md5
                 or not (ownership_valid or probe_delete_allowed)
             ):
@@ -966,8 +985,8 @@ class DriveApiStorage:
                 or observed["owner"] != self.expected_account_email
                 or observed["ownedByMe"] is not True
                 or observed["size"] != len(raw_payload)
-                or type(observed["quotaBytesUsed"]) is not int
-                or observed["quotaBytesUsed"] <= 0
+                or observed["name"] != logical.name
+                or observed["mimeType"] != "application/octet-stream"
                 or observed["md5Checksum"] != md5
             ):
                 raise DriveStorageError("probe metadata differs after the adapter verified upload")
@@ -983,6 +1002,7 @@ class DriveApiStorage:
                 "status": "PASS", "file_id": file_id, "parent_id": parent_id,
                 "owner": observed["owner"], "ownedByMe": observed["ownedByMe"],
                 "size": observed["size"], "quotaBytesUsed": observed["quotaBytesUsed"],
+                "quota_status": observed["quota_status"],
                 "quota_usage_before_bytes": before["usage_bytes"],
                 "quota_usage_during_bytes": during["usage_bytes"],
                 "quota_limit_before_bytes": before["limit_bytes"],
@@ -1018,6 +1038,8 @@ class DriveApiStorage:
                     exact_probe_content = (
                         current.get("file_id") == file_id
                         and current.get("parent_id") == parent_id
+                        and current.get("name") == logical.name
+                        and current.get("mimeType") == "application/octet-stream"
                         and current.get("size") == len(raw_payload)
                         and current.get("md5Checksum") == md5
                     )
@@ -1070,8 +1092,6 @@ class DriveApiStorage:
                     passed = isinstance(value, str) and bool(value) and (
                         target == "non-empty API-created file ID" or value == target
                     )
-                elif key == "quotaBytesUsed":
-                    passed = type(value) is int and value > 0
                 elif key == "api_visible":
                     passed = value is True
                 elif key == "size":

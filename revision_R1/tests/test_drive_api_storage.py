@@ -62,6 +62,8 @@ class _FakeFiles:
         self.metadata_parent_override = None
         self.metadata_file_id_override = None
         self.ignore_if_match = False
+        self.create_metadata_overrides = {}
+        self.lose_next_create_response = False
 
     @staticmethod
     def _contents(media_body):
@@ -110,7 +112,11 @@ class _FakeFiles:
                 "capabilities": {"canEdit": True, "canDelete": True, "canAddChildren": True},
                 "content": payload, "etag": '"v1"', "version": "1",
             }
+            record.update(self.create_metadata_overrides)
             self.records[file_id] = record
+            if self.lose_next_create_response:
+                self.lose_next_create_response = False
+                raise _HttpError(503)
             return {key: value for key, value in record.items() if key != "content"}
         return _Request(execute)
 
@@ -260,6 +266,225 @@ def _storage(service, stage_root, monkeypatch, *, lease_service=None):
         download_to_path=lambda request, path: Path(path).write_bytes(request.execute()),
         retry_delays=(0,),
     )
+
+
+@pytest.mark.parametrize("size", [0, "0"])
+def test_empty_artifact_new_publication_and_retry_reuse_exact_id(tmp_path, monkeypatch, size):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"size": size, "quotaBytesUsed": 0}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "selection_records.jsonl"
+    local.write_bytes(b"")
+    logical = "/drive/MyDrive/ReVision/results/selection_records.jsonl"
+    first = storage.publish_file(local, logical)
+    second = storage.publish_file(local, logical)
+    assert first["status"] == "PASS" and first["new_file"] is True
+    assert first["bytes"] == 0 and first["quota_bytes_used"] == 0
+    assert first["quota_accounting_status"] == "AVAILABLE"
+    assert first["md5_checksum"] == "d41d8cd98f00b204e9800998ecf8427e"
+    assert second["status"] == "UNCHANGED_VERIFIED_METADATA"
+    assert first["file_id"] == second["file_id"] and second["write_bytes"] == 0
+    assert len([row for row in service.records.values() if row["name"] == local.name]) == 1
+    restored = tmp_path / "restored.jsonl"
+    result = storage.download_file(logical, restored, expected_bytes=0, expected_sha256=first["sha256"])
+    assert result["bytes"] == 0 and restored.read_bytes() == b""
+
+
+def test_empty_artifact_lost_create_response_is_reconciled_without_duplicate(tmp_path, monkeypatch):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"size": 0, "quotaBytesUsed": 0}
+    service.files().lose_next_create_response = True
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "empty.jsonl"
+    local.write_bytes(b"")
+    result = storage.publish_file(local, "/drive/MyDrive/ReVision/results/empty.jsonl")
+    assert result["status"] == "PASS"
+    assert service.records[result["file_id"]]["version"] == "1"
+    assert len([row for row in service.records.values() if row["name"] == local.name]) == 1
+
+
+@pytest.mark.parametrize("payload", [b"", b"actual content"])
+def test_missing_file_quota_is_distinct_from_verified_content(tmp_path, monkeypatch, payload):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"quotaBytesUsed": None}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "artifact.jsonl"
+    local.write_bytes(payload)
+    result = storage.publish_file(local, "/drive/MyDrive/ReVision/results/artifact.jsonl")
+    assert result["status"] == "PASS"
+    assert result["quota_bytes_used"] is None and result["quota_accounting_status"] == "MISSING"
+    assert result["quota_status"] == "UNKNOWN"
+    assert result["owned_by_canonical_account"] is True and result["file_owner"] == OWNER
+    assert result["quota_attribution"] == "verified_canonical_account"
+    assert service.records[result["file_id"]]["content"] == payload
+
+
+@pytest.mark.parametrize("mime", ["application/vnd.google-apps.folder", "application/vnd.google-apps.shortcut", "text/plain"])
+def test_new_publication_rejects_wrong_remote_type(tmp_path, monkeypatch, mime):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"mimeType": mime}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "artifact.jsonl"
+    local.write_bytes(b"real content")
+    with pytest.raises(DriveStorageError, match="type|mismatch"):
+        storage.publish_file(local, "/drive/MyDrive/ReVision/results/artifact.jsonl")
+    assert local.read_bytes() == b"real content"
+
+
+def test_nonempty_local_artifact_cannot_verify_as_empty_remote(tmp_path, monkeypatch):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"size": 0, "quotaBytesUsed": None,
+        "md5Checksum": "d41d8cd98f00b204e9800998ecf8427e", "content": b""}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "artifact.jsonl"
+    local.write_bytes(b"real content")
+    with pytest.raises(DriveStorageError, match="metadata.*mismatch") as caught:
+        storage.publish_file(local, "/drive/MyDrive/ReVision/results/artifact.jsonl")
+    assert "quota metadata" not in str(caught.value)
+    assert local.read_bytes() == b"real content"
+
+
+@pytest.mark.parametrize("payload", [b"", b"real content"])
+def test_missing_md5_uses_actual_remote_sha_readback(tmp_path, monkeypatch, payload):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"md5Checksum": None}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "artifact.jsonl"
+    local.write_bytes(payload)
+    result = storage.publish_file(local, "/drive/MyDrive/ReVision/results/artifact.jsonl")
+    assert result["status"] == "PASS"
+    assert result["sha256"] == hashlib.sha256(payload).hexdigest()
+
+
+def test_missing_md5_readback_rejects_same_size_corruption(tmp_path, monkeypatch):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"md5Checksum": None, "content": b"BAD"}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "artifact.jsonl"
+    local.write_bytes(b"yes")
+    with pytest.raises(DriveStorageError, match="SHA-256 mismatch"):
+        storage.publish_file(local, "/drive/MyDrive/ReVision/results/artifact.jsonl")
+
+
+@pytest.mark.parametrize("overrides", [
+    {"owners": []},
+    {"owners": [{"emailAddress": "other@example.org"}], "ownedByMe": True},
+    {"ownedByMe": False},
+    {"mimeType": "application/vnd.google-apps.folder"},
+    {"mimeType": "application/vnd.google-apps.shortcut"},
+])
+def test_empty_existing_fastpath_enforces_owner_and_type_policy(tmp_path, monkeypatch, overrides):
+    service = _FakeService()
+    service.files().create_metadata_overrides = overrides
+    metadata = service.files().create(body={"name": "selection_records.jsonl",
+        "mimeType": "application/octet-stream", "parents": ["results"]}, media_body=b"").execute()
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "selection_records.jsonl"
+    local.write_bytes(b"")
+    with pytest.raises(DriveStorageError):
+        storage.publish_file(local, "/drive/MyDrive/ReVision/results/selection_records.jsonl")
+    assert service.records[metadata["id"]]["version"] == "1"
+
+
+def test_empty_existing_fastpath_reports_missing_quota_as_unknown(tmp_path, monkeypatch):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"quotaBytesUsed": None}
+    metadata = service.files().create(body={"name": "selection_records.jsonl",
+        "mimeType": "application/octet-stream", "parents": ["results"]}, media_body=b"").execute()
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "selection_records.jsonl"
+    local.write_bytes(b"")
+    result = storage.publish_file(local, "/drive/MyDrive/ReVision/results/selection_records.jsonl")
+    assert result["status"] == "UNCHANGED_VERIFIED_METADATA"
+    assert result["quota_status"] == "UNKNOWN" and result["quota_bytes_used"] is None
+    assert result["file_id"] == metadata["id"]
+    assert service.records[metadata["id"]]["version"] == "1"
+
+
+@pytest.mark.parametrize("payload", [b"", b"historical artifact\n"])
+@pytest.mark.parametrize("can_edit", [False, True])
+def test_foreign_identical_historical_artifact_reused_without_update_permission(tmp_path, monkeypatch, payload, can_edit):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {
+        "owners": [{"emailAddress": "historical@example.org"}], "ownedByMe": False,
+        "quotaBytesUsed": None, "capabilities": {"canEdit": can_edit}}
+    metadata = service.files().create(body={"name": "selection_records.jsonl",
+        "mimeType": "application/octet-stream", "parents": ["results"]}, media_body=payload).execute()
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "selection_records.jsonl"
+    local.write_bytes(payload)
+    logical = "/drive/MyDrive/ReVision/results/selection_records.jsonl"
+    result = storage.publish_file(local, logical)
+    assert result["status"] == "UNCHANGED_VERIFIED_METADATA"
+    assert result["file_id"] == metadata["id"] and result["write_bytes"] == 0
+    assert result["file_owner"] == "historical@example.org"
+    assert result["owned_by_canonical_account"] is False
+    assert result["quota_status"] == "UNKNOWN" and result["quota_bytes_used"] is None
+    local.write_bytes(payload + b"changed")
+    with pytest.raises(DriveStorageError):
+        storage.publish_file(local, logical, allow_foreign_owner_update=True)
+    assert service.records[metadata["id"]]["version"] == "1"
+    assert service.records[metadata["id"]]["content"] == payload
+    assert len([row for row in service.records.values() if row["name"] == local.name]) == 1
+
+
+def test_empty_existing_fastpath_rejects_extra_parent(tmp_path, monkeypatch):
+    service = _FakeService()
+    metadata = service.files().create(body={"name": "selection_records.jsonl",
+        "mimeType": "application/octet-stream", "parents": ["results", "unrelated"]}, media_body=b"").execute()
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "selection_records.jsonl"
+    local.write_bytes(b"")
+    with pytest.raises(DriveStorageError, match="parent"):
+        storage.publish_file(local, "/drive/MyDrive/ReVision/results/selection_records.jsonl")
+    assert service.records[metadata["id"]]["version"] == "1"
+
+
+@pytest.mark.parametrize("quota,quota_status", [(None, "MISSING"), (0, "ZERO")])
+def test_nonempty_capacity_probe_verifies_content_with_zero_or_missing_quota(tmp_path, monkeypatch, quota, quota_status):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"quotaBytesUsed": quota}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    result = storage.probe_write("/drive/MyDrive/ReVision/results/.capacity-test", b"probe", expected_parent_id="results")
+    assert result["status"] == "PASS" and result["delete_verified"] is True
+    assert result["quotaBytesUsed"] == quota and result["quota_status"] == quota_status
+    assert result["size"] == 5 and result["owner"] == OWNER and result["parent_id"] == "results"
+    assert result["sha256"] == hashlib.sha256(b"probe").hexdigest()
+    assert result["md5_checksum"] == hashlib.md5(b"probe", usedforsecurity=False).hexdigest()
+    assert result["diagnostics"]["observed"]["quota_status"] == quota_status
+    assert result["diagnostics"]["observed"]["mimeType"] == "application/octet-stream"
+    assert not any(row["name"] == ".capacity-test" for row in service.records.values())
+
+
+@pytest.mark.parametrize("quota", [None, 0])
+def test_probe_zero_or_missing_quota_does_not_hide_readback_corruption(tmp_path, monkeypatch, quota):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"quotaBytesUsed": quota, "content": b"wrong"}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    with pytest.raises(DriveStorageError, match="write-capability probe failed") as caught:
+        storage.probe_write("/drive/MyDrive/ReVision/results/.capacity-test", b"probe", expected_parent_id="results")
+    assert "SHA-256 mismatch" in str(caught.value.__cause__)
+
+
+def test_probe_still_rejects_empty_payload_without_upload(tmp_path, monkeypatch):
+    service = _FakeService()
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    with pytest.raises(ValueError, match="nonempty"):
+        storage.probe_write("/drive/MyDrive/ReVision/results/.capacity-test", b"", expected_parent_id="results")
+    assert set(service.records) == {"revision", "results"}
+
+
+@pytest.mark.parametrize("quota", [{}, {"limit": "100", "usage": "0"}])
+def test_empty_publication_preserves_account_capacity_and_reserve_gate(tmp_path, monkeypatch, quota):
+    service = _FakeService()
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    monkeypatch.setattr(service, "get", lambda **kw: _Request(lambda request: {
+        "user": {"emailAddress": OWNER}, "storageQuota": quota}))
+    local = tmp_path / "empty.jsonl"
+    local.write_bytes(b"")
+    with pytest.raises(DriveStorageError, match="unknown|reserve"):
+        storage.publish_file(local, "/drive/MyDrive/ReVision/results/empty.jsonl")
+    assert set(service.records) == {"revision", "results"}
 
 
 def test_existing_notebook_adapter_call_discovers_paired_v2_client_from_verified_v3_service(tmp_path, monkeypatch):

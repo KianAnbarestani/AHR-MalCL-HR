@@ -25,6 +25,7 @@ EXTRA_TESTS = (
     "test_checkpoint_compatibility.py",
     "test_drive_api_storage.py",
     "test_publication_recovery.py",
+    "test_completion_recovery.py",
     "test_github_handoff.py",
     "test_runtime_compatibility.py",
     "test_storage_auth.py",
@@ -1169,7 +1170,21 @@ from scripts.production_workflow import inspect_lease_readonly, continue_product
 LAUNCH_REMAINING_MATRIX = False
 ACKNOWLEDGE_NO_OTHER_COLAB_WORKER = False
 PREPARE_EXISTING_CHECKPOINT_ONLY = False
-if PREPARE_EXISTING_CHECKPOINT_ONLY:
+COMPLETE_EXPORTED_RUN_ONLY = False
+COMPLETION_RUN_KEY = "ember_seed42_current_only"
+if COMPLETE_EXPORTED_RUN_ONLY:
+    if LAUNCH_REMAINING_MATRIX or PREPARE_EXISTING_CHECKPOINT_ONLY:
+        raise RuntimeError("Completion-only recovery must not enable checkpoint preparation or training.")
+    from scripts.production_recovery import complete_exported_run
+    _completion_record = next(row for row in RUNTIME_PLAN["runs"] if row["run_key"] == COMPLETION_RUN_KEY)
+    COMPLETION_REPORT = complete_exported_run(
+        RUNTIME_PLAN, _completion_record, output_root=OUTPUT_ROOT,
+        checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
+        storage_adapter=STORAGE_ADAPTER, api_factory=STORAGE_API_FACTORY,
+        acknowledge_no_other_worker=ACKNOWLEDGE_NO_OTHER_COLAB_WORKER,
+    )
+    print("No training launched. Rerun C and D before separately enabling the remaining matrix.")
+elif PREPARE_EXISTING_CHECKPOINT_ONLY:
     if LAUNCH_REMAINING_MATRIX:
         raise RuntimeError("Preparation and training are separate steps; leave launch False for preparation.")
     from scripts.production_recovery import prepare_pending_checkpoint_publication
