@@ -1409,6 +1409,14 @@ def test_real_runner_api_storage_interrupt_fresh_stage_resume_and_idempotent_com
         )
         progress = json.loads(progress_path.read_text(encoding="utf-8"))
         assert progress["status"] == "SYNTHETIC_VALIDATED_NON_REPORTABLE"
+        components = progress["progress_observer_components_seconds"]
+        assert {"memory", "formatting", "local_logging", "rendering", "drive_sync"} <= components.keys()
+        assert all(value >= 0 for value in components.values())
+        assert progress["progress_drive_sync_seconds"] == components["drive_sync"]
+        assert any(row.get("status") == "CHECKPOINT_FAILED" for row in progress_events)
+        assert any(row.get("status") == "CHECKPOINT_VERIFIED" for row in progress_events)
+        completed = [row for row in progress_events if row.get("status") == "TASK_COMPLETED"]
+        assert completed and all(row["live_progress"]["metrics"]["latest_task"] for row in completed)
         assert any(
             event.get("matrix_lock_is_best_effort") is False
                 and event.get("matrix_lock_backend") == "canonical_drive_v2_etag_if_match"
@@ -1619,6 +1627,7 @@ def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_on
     with contextlib.redirect_stdout(cell_e_output):
         exec(_github_completed_run_guard_cell(), {
             "MATRIX_REGISTRY_EVIDENCE": registry_evidence,
+            "DEBUG_LOGGING": True,
         })
     assert "ALREADY_FINALIZED_COMPLETED_RUN" in cell_e_output.getvalue()
     assert "CELL_E_REUSES_CELL_C_REGISTRY_EVIDENCE" in cell_e_output.getvalue()

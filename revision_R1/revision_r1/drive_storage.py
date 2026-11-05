@@ -48,12 +48,36 @@ def _escape_query(value: str) -> str:
 
 
 def _http_status(error: Exception) -> int | None:
-    response = getattr(error, "resp", None)
-    raw = getattr(response, "status", None) or getattr(error, "status_code", None)
+    response = getattr(error, "resp", None) or getattr(error, "response", None)
+    raw = (getattr(response, "status", None)
+           or (response.get("status") if hasattr(response, "get") else None)
+           or getattr(error, "status_code", None))
     try:
         return int(raw) if raw is not None else None
     except (ValueError, TypeError):
         return None
+
+
+def describe_upload_failure(error: BaseException | None) -> dict[str, Any]:
+    """Sanitized HTTP evidence from a cause chain; never include URLs or bodies."""
+    chain = []
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        response = getattr(error, "resp", None) or getattr(error, "response", None)
+        safe = {}
+        if hasattr(response, "items"):
+            for key, value in response.items():
+                name = str(key).lower()
+                if name in {"status", "range", "content-length", "content-type", "retry-after"}:
+                    safe[name] = str(value)[:160]
+            safe["location_present"] = _header_value(response, "location") is not None
+        chain.append({"error_type": type(error).__name__, "http_status": _http_status(error),
+                      "response_headers": safe})
+        error = error.__cause__ or error.__context__
+    return {"exception_chain": chain, "http_status": next(
+        (row["http_status"] for row in chain if row["http_status"] is not None), None),
+        "http_status_observed": any(row["http_status"] is not None for row in chain)}
 
 
 def _header_value(headers: Any, name: str) -> str | None:
@@ -231,7 +255,7 @@ def _make_media_bytes_upload(payload: bytes, mime_type: str):
     return MediaIoBaseUpload(io.BytesIO(payload), mimetype=mime_type, resumable=False)
 
 
-def _execute_media_request(request, media_body):
+def _execute_media_request(request, media_body, progress_callback=None):
     """Execute large resumable uploads through the API client's chunk loop."""
     resumable = getattr(media_body, "resumable", None)
     if callable(resumable) and resumable():
@@ -239,7 +263,10 @@ def _execute_media_request(request, media_body):
             raise DriveStorageError("Drive client returned no resumable-upload chunk interface")
         response = None
         while response is None:
-            _status, response = request.next_chunk(num_retries=0)
+            _status, response = request.next_chunk(num_retries=2)
+            if progress_callback is not None and _status is not None:
+                progress_callback({"uploaded_bytes": int(_status.resumable_progress),
+                                   "total_bytes": int(_status.total_size)})
         return response
     return request.execute()
 
@@ -286,6 +313,7 @@ class DriveApiStorage:
         self.download_to_path = download_to_path or _download_request_to_path
         self.retry_delays = tuple(float(delay) for delay in retry_delays)
         self._root_bindings: list[tuple[Path, Path]] = []
+        self.progress_callback = None
         self._folder_cache: dict[tuple[str, ...], str] = {(): self.revision_folder_id}
         self._verify_account()
         if self.lease_service is not self.service:
@@ -601,7 +629,12 @@ class DriveApiStorage:
                     fields="id,name,mimeType,parents,owners(emailAddress),ownedByMe,size,quotaBytesUsed,md5Checksum,capabilities(canEdit)",
                 )
             try:
-                response = _execute_media_request(request, media_body)
+                progress_callback = None
+                if callable(self.progress_callback):
+                    progress_callback = lambda values: self.progress_callback({
+                        "filename": logical.name, "file_id": file_id, **values,
+                    })
+                response = _execute_media_request(request, media_body, progress_callback)
                 break
             except Exception as exc:
                 last_error = exc
@@ -630,7 +663,8 @@ class DriveApiStorage:
         if response is None:
             raise DriveStorageError(
                 f"Drive upload failed for exact logical path {logical}: "
-                f"{type(last_error).__name__ if last_error else 'no response'}"
+                f"{type(last_error).__name__ if last_error else 'no response'}",
+                diagnostics=describe_upload_failure(last_error),
             ) from last_error
         if response.get("id") != file_id:
             raise DriveStorageError("Drive upload response changed the preselected exact file ID")

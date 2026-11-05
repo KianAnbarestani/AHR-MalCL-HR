@@ -24,6 +24,7 @@ BUILD_MANIFEST_NAME = "BUILD_MANIFEST.json"
 EXTRA_TESTS = (
     "test_checkpoint_compatibility.py",
     "test_drive_api_storage.py",
+    "test_publication_recovery.py",
     "test_github_handoff.py",
     "test_runtime_compatibility.py",
     "test_storage_auth.py",
@@ -46,6 +47,7 @@ SCRIPT_FILES = (
     "scripts/dataset_bootstrap.py",
     "scripts/live_progress.py",
     "scripts/production_workflow.py",
+    "scripts/production_recovery.py",
     "scripts/storage_auth.py",
 )
 CONFIG_FILES = (
@@ -1014,7 +1016,8 @@ def _github_completed_run_guard_cell() -> str:
 import json
 print("ALREADY_FINALIZED_COMPLETED_RUN — Run 1 was identity-validated and its existing storage measurement reused in Cell C.")
 print("This cell will not train, load a model, remeasure, re-register, or rerun finalization for Run 1.")
-print("CELL_E_REUSES_CELL_C_REGISTRY_EVIDENCE:", json.dumps(MATRIX_REGISTRY_EVIDENCE, sort_keys=True))
+if globals().get("DEBUG_LOGGING", False):
+    print("CELL_E_REUSES_CELL_C_REGISTRY_EVIDENCE:", json.dumps(MATRIX_REGISTRY_EVIDENCE, sort_keys=True))
 '''
 
 
@@ -1027,20 +1030,12 @@ from scripts.production_workflow import (
     _expected_plan_runner_identity, inspect_lease_readonly, load_run_progress,
     run_checkpoint_root, run_output_root,
 )
-from scripts.live_progress import BoundedProgressBuffer
-from IPython.display import display
+from scripts.live_progress import ColabProgressDisplay
 
 if not globals().get("COLAB_RUNTIME_INSTANCE_ID"):
     COLAB_RUNTIME_INSTANCE_ID = uuid.uuid4().hex
-PROGRESS_HANDLE = None
-PROGRESS_BUFFER = BoundedProgressBuffer(max_events=5)
-def live_progress(record):
-    global PROGRESS_HANDLE
-    text = PROGRESS_BUFFER.append(record)
-    if PROGRESS_HANDLE is None:
-        PROGRESS_HANDLE = display(text, display_id=True)
-    else:
-        PROGRESS_HANDLE.update(text)
+DEBUG_LOGGING = False
+live_progress = ColabProgressDisplay(interval_seconds=7.0, debug_logging=DEBUG_LOGGING)
 
 def _api_stage_optional(_logical, _local):
     try:
@@ -1158,7 +1153,10 @@ STORAGE_ADAPTER.publish_file(
     LOGICAL_OUTPUT_ROOT / "diagnostics" / LEASE_DIAGNOSTIC_PATH.name,
 )
 print("READ-ONLY RUN/LEASE STATE; diagnostic report published through canonical OAuth API:", LEASE_DIAGNOSTIC_PATH)
-print(json.dumps(LEASE_RAM_DIAGNOSTIC, sort_keys=True, indent=2, default=str))
+print("Matrix lease:", MATRIX_LEASE["status"], "· Next run:", LEASE_RAM_DIAGNOSTIC["next_pending_run"])
+print("Run 1: finalized and skipped · Checkpoint payload hashes will be verified before resume.")
+if DEBUG_LOGGING:
+    print(json.dumps(LEASE_RAM_DIAGNOSTIC, sort_keys=True, indent=2, default=str))
 print("No lock was changed or recovered. No training was launched.")
 '''
 
@@ -1170,7 +1168,23 @@ from scripts.production_workflow import inspect_lease_readonly, continue_product
 
 LAUNCH_REMAINING_MATRIX = False
 ACKNOWLEDGE_NO_OTHER_COLAB_WORKER = False
-if not LAUNCH_REMAINING_MATRIX:
+PREPARE_EXISTING_CHECKPOINT_ONLY = False
+if PREPARE_EXISTING_CHECKPOINT_ONLY:
+    if LAUNCH_REMAINING_MATRIX:
+        raise RuntimeError("Preparation and training are separate steps; leave launch False for preparation.")
+    from scripts.production_recovery import prepare_pending_checkpoint_publication
+    if NEXT_PENDING_RECORD is None:
+        raise RuntimeError("No pending record; finalized runs must not be prepared again.")
+    PUBLICATION_PREPARATION = prepare_pending_checkpoint_publication(
+        RUNTIME_PLAN, NEXT_PENDING_RECORD, output_root=OUTPUT_ROOT,
+        checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
+        storage_adapter=STORAGE_ADAPTER, api_factory=STORAGE_API_FACTORY,
+        acknowledge_no_other_worker=ACKNOWLEDGE_NO_OTHER_COLAB_WORKER,
+        progress_callback=live_progress,
+    )
+    print(json.dumps(PUBLICATION_PREPARATION, indent=2, sort_keys=True))
+    print("NO TRAINING: review verified generation/paths, rerun D, then separately enable F.")
+elif not LAUNCH_REMAINING_MATRIX:
     print("NOT_LAUNCHED: matrix switch is False. No production work occurred.")
 else:
     if ACKNOWLEDGE_NO_OTHER_COLAB_WORKER is not True:
@@ -1186,14 +1200,9 @@ else:
 
     def _matrix_progress(_event):
         if _event.get("stage") == "matrix_registry_verified":
-            print("CELL_F_CANONICAL_COMPLETION_REGISTRY:", json.dumps(
-                _event["matrix_registry_evidence"], sort_keys=True,
-            ))
-            print("CELL_F_RUN_SELECTION:", json.dumps({
-                "first_run_status": _event["first_run_status"],
-                "first_run_reused": _event["first_run_key"],
-                "next_pending_run_key": _event["next_pending_run_key"],
-            }, sort_keys=True))
+            print("Matrix registry verified · Run 1 skipped · Next:", _event["next_pending_run_key"])
+            if globals().get("DEBUG_LOGGING", False):
+                print("CELL_F_CANONICAL_COMPLETION_REGISTRY:", json.dumps(_event["matrix_registry_evidence"], sort_keys=True))
         live_progress(_event)
 
     MATRIX_RESULT = continue_production_matrix(
@@ -1209,10 +1218,10 @@ else:
         logical_output_root=LOGICAL_OUTPUT_ROOT,
         logical_checkpoint_root=LOGICAL_CHECKPOINT_ROOT,
     )
-    print("CELL_F_REGISTRY_EVIDENCE_AT_START:", json.dumps(
-        MATRIX_RESULT.get("matrix_registry_evidence_at_start"), sort_keys=True,
-    ))
-    print(json.dumps(MATRIX_RESULT, sort_keys=True, indent=2, default=str))
+    print("Matrix status:", MATRIX_RESULT.get("status"))
+    if globals().get("DEBUG_LOGGING", False):
+        print("CELL_F_REGISTRY_EVIDENCE_AT_START:", json.dumps(MATRIX_RESULT.get("matrix_registry_evidence_at_start"), sort_keys=True))
+        print(json.dumps(MATRIX_RESULT, sort_keys=True, indent=2, default=str))
 '''
 
 

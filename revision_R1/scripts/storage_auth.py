@@ -31,10 +31,9 @@ def _default_credentials_factory(**kwargs):
 
 def _default_drive_service_builder(api_name: str, version: str, **kwargs):
     import threading
-    import httplib2
     import google_auth_httplib2
     from googleapiclient.discovery import build
-    from googleapiclient.http import HttpRequest
+    from googleapiclient.http import HttpRequest, build_http
 
     credentials = kwargs["credentials"]
     transports = threading.local()
@@ -42,8 +41,14 @@ def _default_drive_service_builder(api_name: str, version: str, **kwargs):
         # httplib2 connections may be reused sequentially, but never across
         # the training/progress and matrix/run heartbeat threads.
         if not hasattr(transports, "http"):
+            # The SDK's supported builder excludes HTTP 308 from ordinary
+            # redirects: Drive uses it for resumable-upload acknowledgements.
+            # A bare httplib2.Http treats a valid 308 without Location as an
+            # error before googleapiclient can inspect the Range header.
+            http = build_http()
+            http.timeout = 60
             transports.http = google_auth_httplib2.AuthorizedHttp(
-                credentials, http=httplib2.Http(timeout=60),
+                credentials, http=http,
             )
         return HttpRequest(transports.http, *args, **request_kwargs)
     kwargs["requestBuilder"] = build_thread_request

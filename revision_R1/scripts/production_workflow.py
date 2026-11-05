@@ -5989,14 +5989,25 @@ def execute_frozen_plan_record(
     prior_verified_drive_write_bytes = 0 if prior_progress is None else int(
         prior_progress.get("drive_checkpoint_write_bytes_total", 0)
     )
-    callback = progress_callback or (lambda row: print(json.dumps(row, sort_keys=True), flush=True))
+    if progress_callback is None:
+        from scripts.live_progress import ColabProgressDisplay
+        callback = ColabProgressDisplay(display_fn=False)
+    else:
+        callback = progress_callback
     attempt_id = f"{time.time_ns()}-{os.getpid()}"
     attempt_started = time.monotonic()
-    progress_throttle = ProgressThrottle(interval_seconds=12.0)
+    progress_throttle = ProgressThrottle(interval_seconds=7.0)
+    persistence_throttle = ProgressThrottle(interval_seconds=60.0)
     phase_rate = PhaseRateEstimator(stale_after_seconds=120.0)
     event_log_path = progress_file.parent / "events" / f"{record['run_key']}_{record['config_sha256'][:12]}_{attempt_id}.jsonl"
     last_progress_record: dict[str, Any] | None = None
     progress_observer_overhead_seconds = 0.0
+    observer_components = {name: 0.0 for name in ("memory", "formatting", "local_logging", "rendering", "drive_sync")}
+    memory_cache = {}
+    memory_sampled_at = float("-inf")
+    completed_task_summaries = set()
+    observer_has_seen_state = False
+    latest_upload = None
 
     def latest_local_checkpoint_metadata() -> dict[str, Any] | None:
         recovery = local_namespace / "recovery"
@@ -6030,9 +6041,13 @@ def execute_frozen_plan_record(
                 "path": str(payload), "payload_bytes": payload_bytes,
                 "payload_sha256": manifest.get("payload_sha256"),
                 "manifest_sha256": file_sha256(manifest_path),
-                "publication_status": "RUNNER_SAVE_GENERATION_VALIDATED_AT_PUBLICATION",
+                "publication_status": "METADATA_ONLY_PENDING_RUNNER_VERIFICATION",
             }
         return None
+
+    # Scan once before execution, then observe successful serializer returns.
+    # UI refreshes never scan checkpoint directories or read manifests.
+    local_checkpoint_cache = latest_local_checkpoint_metadata()
 
     if matrix_lease is None and storage_adapter is not None:
         storage_adapter.ensure_lease_record(storage_adapter.logical_path_for_local(matrix_lock_path))
@@ -6044,6 +6059,19 @@ def execute_frozen_plan_record(
         previous_mirror = runner_module.mirror_checkpoint_generations
         previous_run_registry = runner_module.RunRegistry
         previous_run_lease = runner_module.RunLease
+        previous_save_generation = runner_module.save_generation
+
+        def observed_save_generation(directory, state, identity, kind, **kwargs):
+            nonlocal local_checkpoint_cache
+            manifest = previous_save_generation(directory, state, identity, kind, **kwargs)
+            if Path(directory).resolve() == (local_namespace / "recovery").resolve():
+                local_checkpoint_cache = {
+                    "generation": manifest["generation"], "kind": manifest["kind"],
+                    "path": str(Path(directory) / manifest["payload_file"]),
+                    "payload_bytes": manifest["payload_bytes"], "payload_sha256": manifest["payload_sha256"],
+                    "publication_status": "RUNNER_SAVE_GENERATION_VALIDATED_AT_PUBLICATION",
+                }
+            return manifest
 
         if storage_adapter is not None:
             from revision_r1.drive_storage import DriveApiLease
@@ -6070,10 +6098,7 @@ def execute_frozen_plan_record(
                 storage_adapter.ensure_lease_record(logical)
                 return DriveApiLease(storage_adapter, logical, ttl_seconds=ttl_seconds)
 
-            runner_module.RunRegistry = ApiRunRegistry
-            runner_module.RunLease = api_run_lease
-
-        def instrumented_mirror(local_path, drive_path, identity, **kwargs):
+        def _instrumented_mirror_impl(local_path, drive_path, identity, **kwargs):
             nonlocal latest_drive, drive_write_bytes, drive_write_seconds
             started = time.perf_counter()
             destination = Path(drive_path).resolve()
@@ -6137,28 +6162,87 @@ def execute_frozen_plan_record(
                 drive_write_timings["upload_seconds"] += elapsed
             return copied
 
-        runner_module.mirror_checkpoint_generations = instrumented_mirror
+        def upload_event(status, generation, values=None):
+            nonlocal latest_upload, progress_observer_overhead_seconds
+            latest_upload = {"generation": generation, "status": status, **(values or {})}
+            event = {**_run_progress_identity(plan, record), "run_key": record["run_key"],
+                     "status": "CHECKPOINT_" + status.upper(), "checkpoint_upload": latest_upload}
+            if last_progress_record and last_progress_record.get("live_progress"):
+                event["live_progress"] = last_progress_record["live_progress"]
+            logging_started = time.perf_counter()
+            try:
+                _append_progress_jsonl(event_log_path, event)
+            except Exception:
+                # Observation must not abort publication or mask its exception.
+                pass
+            finally:
+                observer_components["local_logging"] += time.perf_counter() - logging_started
+            rendering_started = time.perf_counter()
+            try:
+                callback(event)
+            except Exception:
+                pass
+            finally:
+                observer_components["rendering"] += time.perf_counter() - rendering_started
+                progress_observer_overhead_seconds = sum(
+                    value for name, value in observer_components.items() if name != "drive_sync"
+                )
+
+        def instrumented_mirror(local_path, drive_path, identity, **kwargs):
+            if storage_adapter is None or not Path(drive_path).resolve().is_relative_to(checkpoints.resolve()):
+                return _instrumented_mirror_impl(local_path, drive_path, identity, **kwargs)
+            generation = kwargs.get("generation")
+            previous_upload_callback = None if storage_adapter is None else storage_adapter.progress_callback
+            upload_event("uploading", generation)
+            if storage_adapter is not None:
+                storage_adapter.progress_callback = lambda values: upload_event("uploading", generation, values)
+            try:
+                result = _instrumented_mirror_impl(local_path, drive_path, identity, **kwargs)
+            except Exception as error:
+                from revision_r1.drive_storage import describe_upload_failure
+                details = describe_upload_failure(error)
+                upload_event("failed", generation, {"error_type": type(error).__name__,
+                             "http_status": details["http_status"], "diagnostics": details})
+                raise
+            else:
+                upload_event("verified", generation)
+                return result
+            finally:
+                if storage_adapter is not None:
+                    storage_adapter.progress_callback = previous_upload_callback
 
         def live_stop_hook(state):
             nonlocal last_progress_record, progress_observer_overhead_seconds
+            nonlocal memory_cache, memory_sampled_at
+            nonlocal observer_has_seen_state
             if lease.lost.is_set():
                 return True
             now = time.monotonic()
             task_id = min(11, int(state.cursor.task_index) + 1)
             signature = (int(record["run_index"]), task_id, state.cursor.phase)
+            if not observer_has_seen_state:
+                completed_task_summaries.update(
+                    int(row["task_id"]) for row in state.extra.get("runtime", {}).get("task_rows", [])
+                    if int(row["task_id"]) <= int(state.cursor.task_index)
+                )
+                observer_has_seen_state = True
             if progress_throttle.should_emit(signature, now):
-                observer_started = time.perf_counter()
-                memory = read_host_memory_snapshot()
-                try:
-                    import torch
-                    if torch.cuda.is_available():
-                        # These allocator queries do not synchronize the CUDA stream.
-                        memory["gpu_allocated_bytes"] = int(torch.cuda.memory_allocated())
-                        memory["gpu_reserved_bytes"] = int(torch.cuda.memory_reserved())
-                        memory["gpu_peak_allocated_bytes"] = int(torch.cuda.max_memory_allocated())
-                        memory["gpu_peak_reserved_bytes"] = int(torch.cuda.max_memory_reserved())
-                except Exception as exc:
-                    memory["gpu_memory_status"] = f"unavailable:{type(exc).__name__}"
+                if now - memory_sampled_at >= 30.0:
+                    memory_started = time.perf_counter()
+                    memory_cache = read_host_memory_snapshot()
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            memory_cache["gpu_allocated_bytes"] = int(torch.cuda.memory_allocated())
+                            memory_cache["gpu_reserved_bytes"] = int(torch.cuda.memory_reserved())
+                            memory_cache["gpu_peak_allocated_bytes"] = int(torch.cuda.max_memory_allocated())
+                            memory_cache["gpu_peak_reserved_bytes"] = int(torch.cuda.max_memory_reserved())
+                    except Exception as exc:
+                        memory_cache["gpu_memory_status"] = f"unavailable:{type(exc).__name__}"
+                    memory_sampled_at = now
+                    observer_components["memory"] += time.perf_counter() - memory_started
+                memory = dict(memory_cache)
+                formatting_started = time.perf_counter()
                 attempt_elapsed = max(0.0, time.monotonic() - attempt_started)
                 event = {
                     "status": "RUNNING", "attempt_id": attempt_id,
@@ -6171,7 +6255,7 @@ def execute_frozen_plan_record(
                     "class_order": record.get("class_order", []),
                     "update_budgets_by_task": record["update_budgets_by_task"],
                     "last_verified_drive_checkpoint": latest_drive,
-                    "latest_local_checkpoint": latest_local_checkpoint_metadata(),
+                    "latest_local_checkpoint": local_checkpoint_cache,
                     "drive_checkpoint_write_bytes_this_attempt": drive_write_bytes,
                     "drive_checkpoint_write_bytes_total": prior_verified_drive_write_bytes + drive_write_bytes,
                     "drive_checkpoint_write_seconds_this_attempt": drive_write_seconds,
@@ -6190,6 +6274,8 @@ def execute_frozen_plan_record(
                     event, state, attempt_elapsed_seconds=attempt_elapsed,
                     matrix_counts=matrix, memory_snapshot=memory,
                 )
+                if latest_upload:
+                    formatted["checkpoint"]["upload"] = dict(latest_upload)
                 phase_progress = formatted.get("phase_progress", {})
                 eta = phase_rate.estimate(
                     (record["run_key"], task_id, state.cursor.phase),
@@ -6197,6 +6283,7 @@ def execute_frozen_plan_record(
                 )
                 formatted["time"]["phase_eta_seconds"] = eta
                 formatted["time"]["phase_eta_status"] = "measured_within_current_attempt_and_phase" if eta is not None else "awaiting_observed_progress_within_this_attempt_and_phase"
+                observer_components["formatting"] += time.perf_counter() - formatting_started
                 update = {
                     "status": "RUNNING", "attempt_id": attempt_id,
                     **_run_progress_identity(plan, record),
@@ -6220,23 +6307,48 @@ def execute_frozen_plan_record(
                     "training_source_sha256": plan["training_source_sha256"],
                     "event_log_path": str(event_log_path),
                     "live_progress": formatted,
+                    "progress_observer_components_seconds": dict(observer_components),
+                    "progress_drive_sync_seconds": observer_components["drive_sync"],
+                    "observer_timing_scope": "local monitoring; Drive persistence reported separately",
                     "matrix_lock_is_best_effort": storage_adapter is None,
                     "matrix_lock_backend": (
                         "canonical_drive_v2_etag_if_match" if storage_adapter is not None
                         else "local_filesystem_lock"
                     ),
                 }
+                local_log_started = time.perf_counter()
                 _append_progress_jsonl(event_log_path, update)
                 _atomic_json(progress_file, update)
-                if storage_adapter is not None:
-                    _api_publish_file(storage_adapter, event_log_path)
-                    _api_publish_file(storage_adapter, progress_file)
+                observer_components["local_logging"] += time.perf_counter() - local_log_started
+                render_started = time.perf_counter()
                 callback(update)
-                progress_observer_overhead_seconds += time.perf_counter() - observer_started
+                runtime = state.extra.get("runtime", {})
+                for row in runtime.get("task_rows", []):
+                    evaluated = int(row["task_id"])
+                    if evaluated <= int(state.cursor.task_index) and evaluated not in completed_task_summaries:
+                        completed_task_summaries.add(evaluated)
+                        completed_progress = {**formatted, "task": {**formatted["task"], "number": evaluated}}
+                        summary = {**update, "status": "TASK_COMPLETED", "live_progress": completed_progress}
+                        _append_progress_jsonl(event_log_path, summary)
+                        callback(summary)
+                observer_components["rendering"] += time.perf_counter() - render_started
+                progress_observer_overhead_seconds = sum(value for name, value in observer_components.items() if name != "drive_sync")
+                if storage_adapter is not None and persistence_throttle.should_emit(signature, now):
+                    sync_started = time.perf_counter()
+                    try:
+                        _api_publish_file(storage_adapter, event_log_path)
+                        _api_publish_file(storage_adapter, progress_file)
+                    finally:
+                        observer_components["drive_sync"] += time.perf_counter() - sync_started
                 last_progress_record = update
             return bool(stop_hook(state)) if stop_hook is not None else False
 
         try:
+            runner_module.save_generation = observed_save_generation
+            runner_module.mirror_checkpoint_generations = instrumented_mirror
+            if storage_adapter is not None:
+                runner_module.RunRegistry = ApiRunRegistry
+                runner_module.RunLease = api_run_lease
             result = runner_module.run_one(
                 config, bundle, output, stop_hook=live_stop_hook,
                 update_schedule_path=schedule_for_runner, update_counts=update_counts,
@@ -6257,6 +6369,8 @@ def execute_frozen_plan_record(
                 "attempt_id": attempt_id, "event_log_path": str(event_log_path),
                 "attempt_elapsed_seconds": max(0.0, time.monotonic() - attempt_started),
                 "progress_observer_overhead_seconds": progress_observer_overhead_seconds,
+                "progress_observer_components_seconds": dict(observer_components),
+                "progress_drive_sync_seconds": observer_components["drive_sync"],
                 "error_type": type(exc).__name__, "error": str(exc),
                 "drive_checkpoint_write_bytes_this_attempt": drive_write_bytes,
                 "drive_checkpoint_write_bytes_total": prior_verified_drive_write_bytes + drive_write_bytes,
@@ -6279,6 +6393,7 @@ def execute_frozen_plan_record(
             raise
         finally:
             runner_module.mirror_checkpoint_generations = previous_mirror
+            runner_module.save_generation = previous_save_generation
             if storage_adapter is not None:
                 runner_module.RunRegistry = previous_run_registry
                 runner_module.RunLease = previous_run_lease
@@ -6291,6 +6406,8 @@ def execute_frozen_plan_record(
                 "attempt_id": attempt_id, "event_log_path": str(event_log_path),
                 "attempt_elapsed_seconds": max(0.0, time.monotonic() - attempt_started),
                 "progress_observer_overhead_seconds": progress_observer_overhead_seconds,
+                "progress_observer_components_seconds": dict(observer_components),
+                "progress_drive_sync_seconds": observer_components["drive_sync"],
                 "cursor": result.get("cursor"), "last_verified_drive_checkpoint": latest_drive,
                 "drive_checkpoint_write_bytes_this_attempt": drive_write_bytes,
                 "drive_checkpoint_write_bytes_total": prior_verified_drive_write_bytes + drive_write_bytes,
@@ -6329,6 +6446,8 @@ def execute_frozen_plan_record(
             "attempt_id": attempt_id, "event_log_path": str(event_log_path),
             "attempt_elapsed_seconds": max(0.0, time.monotonic() - attempt_started),
             "progress_observer_overhead_seconds": progress_observer_overhead_seconds,
+            "progress_observer_components_seconds": dict(observer_components),
+            "progress_drive_sync_seconds": observer_components["drive_sync"],
             "run_key": record["run_key"], "run_index": int(record["run_index"]),
             "output_path": str(output), "config_sha256": record["config_sha256"],
             "training_source_sha256": plan["training_source_sha256"],

@@ -7,10 +7,12 @@ It formats values already persisted in RunState and frozen plan records.
 from __future__ import annotations
 
 import math
+import time
 from typing import Any
 
 
 _SOURCE_NAMES = ("current", "anchor", "generated")
+DEBUG_LOGGING = False
 
 
 def _safe_number(value: Any) -> int | float | None:
@@ -149,9 +151,22 @@ def format_live_progress_event(
                                and row.get("kind") == kind), None)
             if latest_gan is not None:
                 losses[f"{kind}_latest"] = _safe_number(latest_gan.get("loss"))
-    task_row = _latest_for_task(runtime.get("task_rows"), task_number)
-    task_detail = _latest_for_task(runtime.get("task_details"), task_number)
+    # These are completed evaluations, not necessarily the cursor's current task.
+    evaluation_ids = [row["task_id"] for name in ("task_rows", "task_details")
+                      for row in runtime.get(name, [])
+                      if isinstance(row, dict) and isinstance(row.get("task_id"), int)
+                      and row["task_id"] <= task_number]
+    evaluation_task = max(evaluation_ids, default=None)
+    task_row = _latest_for_task(runtime.get("task_rows"), evaluation_task)
+    task_detail = _latest_for_task(runtime.get("task_details"), evaluation_task)
     metrics = task_detail.get("metrics") if isinstance(task_detail, dict) else None
+    if not isinstance(metrics, dict):
+        metrics = {}
+    metrics = dict(metrics)
+    for source, target in (("seen_accuracy", "accuracy"), ("macro_f1", "macro_f1"),
+                           ("weighted_f1", "weighted_f1"), ("balanced_accuracy", "balanced_accuracy")):
+        if target not in metrics and task_row and source in task_row:
+            metrics[target] = task_row[source]
 
     arm = str(event.get("arm", "unknown"))
     gan = {"status": "N/A", "reason": "arm has no GAN component"}
@@ -260,7 +275,12 @@ def format_live_progress_event(
         "gan": gan,
         "losses": losses,
         "source_sampling": source_sampling,
-        "metrics": {"latest_task": _safe_mapping(metrics), "task_row": _safe_mapping(task_row)},
+        "metrics": {"latest_task": _safe_mapping(metrics), "task_row": _safe_mapping(task_row),
+                    "task_id": evaluation_task,
+                    "classes_seen": ((task_row or {}).get("classes_seen")
+                                     if (task_row or {}).get("classes_seen") is not None
+                                     else (sum(task_sizes[:evaluation_task]) if evaluation_task else None)),
+                    "scope": "all seen test classes"},
         "training_accuracy": {"status": "N/A", "reason": "not stored by the runner"},
         "resources": resources,
         "time": time_info,
@@ -269,83 +289,228 @@ def format_live_progress_event(
     }
 
 
+def _duration(value: Any) -> str:
+    value = _safe_number(value)
+    if value is None:
+        return "N/A"
+    seconds = max(0, int(value))
+    return f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
+
+
+def _bytes(value: Any) -> str:
+    value = _safe_number(value)
+    if value is None:
+        return "N/A"
+    unit, scale = ("GiB", 1024 ** 3) if value >= 1024 ** 3 else ("MiB", 1024 ** 2)
+    return f"{value / scale:.1f} {unit}"
+
+
+def _value(value: Any, *, percent: bool = False) -> str:
+    number = _safe_number(value)
+    if number is None:
+        return "N/A"
+    return f"{number * 100:.2f}%" if percent else f"{number:.4g}"
+
+
+def _pairs(values: Any, *, percent: bool = False) -> str:
+    if not isinstance(values, dict):
+        return "N/A"
+    return ", ".join(f"{key}: {_value(value, percent=percent)}"
+                     for key, value in values.items() if _safe_number(value) is not None) or "N/A"
+
+
+def _upload_text(record: dict[str, Any], progress: dict[str, Any]) -> str:
+    upload = record.get("checkpoint_upload") or progress.get("checkpoint", {}).get("upload")
+    if not isinstance(upload, dict):
+        return ""
+    uploaded, total = _safe_number(upload.get("uploaded_bytes")), _safe_number(upload.get("total_bytes"))
+    percentage = _value(uploaded / total, percent=True) if uploaded is not None and total and total > 0 else "N/A"
+    text = (f"Checkpoint upload: {record.get('status', upload.get('status', 'unknown'))} | "
+            f"{upload.get('status', 'unknown')} | generation {upload.get('generation', 'N/A')} | "
+            f"{upload.get('filename', 'N/A')} | {percentage} | {_bytes(uploaded)}/{_bytes(total)}")
+    for key in ("error_type", "http_status"):
+        if upload.get(key) is not None:
+            text += f" | {key}: {upload[key]}"
+    return text
+
+
 def render_progress_line(record: dict[str, Any]) -> str:
-    """Render one concise text-only dashboard update from an observer event."""
+    """Render a latest-state panel as actual multiline plain text."""
     progress = record.get("live_progress") or {}
+    status = str(record.get("status", progress.get("status", "RUNNING")))
+    stage = str(record.get("stage", ""))
+    error = record.get("error") or record.get("reason")
+    header = f"{status} | {stage}".rstrip(" |")
+    if isinstance(error, str):
+        header += f" | {error}"
     if not progress:
         elapsed = record.get("preparation_elapsed_seconds")
-        elapsed_text = "" if elapsed is None else f" | preparation elapsed {float(elapsed):.1f}s"
-        memory = record.get("memory", {})
-        ram = memory.get("effective_available_bytes", memory.get("host_available_bytes")) if isinstance(memory, dict) else None
-        ram_text = "" if ram is None else f" | host/cgroup available {ram} bytes"
-        return f"{record.get('status', record.get('stage', 'progress'))} | {record.get('stage', '')} {record.get('error', '')}{elapsed_text}{ram_text}".strip()
-    ident = progress.get("identity", {})
-    task = progress.get("task", {})
+        if elapsed is not None:
+            header += f" | elapsed {_duration(elapsed)}"
+        memory = record.get("memory") or {}
+        available = memory.get("effective_available_bytes", memory.get("host_available_bytes"))
+        if available is not None:
+            header += f" | RAM available {_bytes(available)}"
+        upload = _upload_text(record, progress)
+        return header + ("\n" + upload if upload else "")
+    ident, task = progress.get("identity", {}), progress.get("task", {})
+    phase = task.get("phase")
+    phase_name = {"classifier": "classifier training", "gan_critic": "GAN training",
+                  "evaluation": "task evaluation"}.get(phase, phase)
+    lines = [header,
+             f"Run {ident.get('run_index')}/{ident.get('run_count')} | {ident.get('dataset')} | "
+             f"{ident.get('arm')} | seed {ident.get('seed')}",
+             f"Task {task.get('number')}/{task.get('count')} | new classes {task.get('new_class_count')} | "
+             f"seen classes {task.get('seen_class_count')} | {phase_name}"]
+    classifier = progress.get("classifier", {})
+    completed = _safe_number(classifier.get("task_updates_completed"))
+    total = _safe_number(classifier.get("task_updates_total"))
+    percentage = f" ({100 * completed / total:.1f}%)" if completed is not None and total is not None and total > 0 else ""
+    lines.append(f"Classifier updates {classifier.get('task_updates_completed')}/"
+                 f"{classifier.get('task_updates_total')}{percentage} | batch 256 | latest classifier loss "
+                 f"{_value(progress.get('losses', {}).get('classifier_latest'))}")
     phase_progress = progress.get("phase_progress", {})
-    fraction = "N/A"
-    if phase_progress.get("total"):
-        fraction = f"{phase_progress.get('completed')}/{phase_progress.get('total')} {phase_progress.get('unit')}"
-    time_info = progress.get("time", {})
-    eta = time_info.get("phase_eta_seconds")
-    eta_text = "ETA N/A" if eta is None else f"ETA ~{float(eta) / 60:.1f} min (this attempt/phase)"
-    losses = progress.get("losses", {})
+    if ident.get("arm") in {"full_hybrid", "generated_only"}:
+        gan = progress.get("gan", {})
+        lines.append(f"GAN epoch {gan.get('epoch_number')}/{gan.get('epoch_count')} | "
+                     f"batch {gan.get('batch_number')}/{gan.get('batches_in_epoch')} | "
+                     f"critic steps {gan.get('critic_steps_completed_this_task')}/"
+                     f"{gan.get('critic_steps_total_this_task')} | generator updates "
+                     f"{gan.get('generator_updates_completed_this_task')}/{gan.get('generator_updates_total_this_task')}")
+        losses = progress.get("losses", {})
+        lines.append(f"Latest generator loss {_value(losses.get('generator_latest'))} | "
+                     f"latest critic loss {_value(losses.get('critic_latest'))}")
+    elif phase_progress.get("total") is not None and phase != "classifier":
+        lines.append(f"Progress {phase_progress.get('completed')}/{phase_progress.get('total')} "
+                     f"{phase_progress.get('unit')}")
     sampling = progress.get("source_sampling", {})
-    metrics = progress.get("metrics", {}).get("latest_task", {})
-    attempt = time_info.get("attempt_elapsed_seconds")
-    dataset = {"ember": "EMBER", "az_class": "AZ-Class"}.get(ident.get("dataset"), ident.get("dataset", "N/A"))
-    arm = {"current_only": "Current-only", "anchor_only": "Anchor-only",
-           "generated_only": "Generated-only", "full_hybrid": "Full Hybrid",
-           "derpp_matched": "DER++-matched"}.get(ident.get("arm"), ident.get("arm", "N/A"))
-    human_phase = {
-        "scaler": "data preparation/scaler", "gan_critic": "GAN training",
-        "classifier": "classifier training", "evaluation": "task evaluation",
-        "memory": "replay memory update", "generation": "replay generation",
-        "selection": "replay selection", "refresh": "stored-logit refresh",
-        "export": "final export",
-    }.get(task.get("phase"), task.get("phase", "unknown"))
-    gan = progress.get("gan", {})
-    gan_label = ""
-    if gan.get("status") == "N/A":
-        gan_label = " | GAN: N/A (arm has no GAN component)"
-    task_line = (
-        f"Task {task.get('number')}/{task.get('count')} | new classes: {task.get('new_class_count')} | "
-        f"seen classes: {task.get('seen_class_count')} | Phase: {human_phase}: {fraction} | {eta_text}{gan_label}"
-    )
-    if gan.get("status") == "available" and task.get("phase") == "gan_critic":
-        task_line += (
-            f" | Epoch {phase_progress.get('epoch_number')}/{phase_progress.get('epoch_count')}"
-            f" | batch {phase_progress.get('batch_number')}/{phase_progress.get('batches_in_epoch')}"
-            f" | generator updates {phase_progress.get('generator_updates_completed')}/"
-            f"{phase_progress.get('generator_updates_total')}"
-            f" | critic substep {phase_progress.get('critic_substep_completed')}/"
-            f"{phase_progress.get('critic_substeps_per_batch')}"
-        )
-    matrix = progress.get("matrix", {})
-    time_info = progress.get("time", {})
-    resources = progress.get("resources", {})
-    memory = resources.get("memory", {})
+    lines.append("Source draws: " + _pairs(sampling.get("latest_draws")) +
+                 " | realized: " + _pairs(sampling.get("latest_draw_proportions"), percent=True))
+    evaluation = progress.get("metrics", {})
+    metrics = evaluation.get("latest_task", {})
+    labels = (("accuracy", "accuracy"), ("macro_f1", "macro F1"),
+              ("weighted_f1", "weighted F1"), ("balanced_accuracy", "balanced accuracy"))
+    available_metrics = [f"{label} {_value(metrics[key], percent=True)}"
+                         for key, label in labels if _safe_number(metrics.get(key)) is not None]
+    if available_metrics:
+        lines.append(f"Latest completed evaluation: task {evaluation.get('task_id')} | "
+                     f"{evaluation.get('scope', 'all seen test classes')} | "
+                     f"classes {evaluation.get('classes_seen', 'N/A')} | " + " | ".join(available_metrics))
+    else:
+        lines.append("Latest completed evaluation: N/A")
+    timing, resources = progress.get("time", {}), progress.get("resources", {})
+    memory = resources.get("memory", progress.get("memory", {}))
+    eta = timing.get("phase_eta_seconds")
+    eta_text = _duration(eta) if _safe_number(eta) is not None else "estimating"
+    lines.append(f"Time: attempt {_duration(timing.get('attempt_elapsed_seconds'))} | active "
+                 f"{_duration(timing.get('cumulative_active_seconds'))} | Phase ETA {eta_text}")
+    lines.append(f"RAM available {_bytes(memory.get('effective_available_bytes', memory.get('host_available_bytes')))} | "
+                 f"GPU allocated {_bytes(memory.get('gpu_allocated_bytes'))}")
     checkpoint = progress.get("checkpoint", {})
-    local_checkpoint = checkpoint.get("local_saved", {})
-    elapsed = time_info.get("attempt_elapsed_seconds")
-    cumulative = time_info.get("cumulative_active_seconds")
-    return (
-        f"Run {ident.get('run_index')}/{ident.get('run_count')} | {dataset} | {arm} | seed {ident.get('seed')}\n"
-        f"{task_line}\n"
-        f"Losses: classifier {losses.get('classifier_latest', 'N/A')} | generator {losses.get('generator_latest', 'N/A')} | critic {losses.get('critic_latest', 'N/A')} | gradient penalty {losses.get('gradient_penalty', {}).get('status', 'N/A')}\n"
-        f"Source draws: {sampling.get('latest_draws', 'N/A')} | expected proportions: {sampling.get('expected_pool_proportions', 'N/A')} | "
-        f"realized proportions: {sampling.get('latest_draw_proportions', 'N/A')} | metrics: {metrics or 'N/A'}\n"
-        f"Time: this attempt {elapsed}s | cumulative active {cumulative}s | "
-        f"observer overhead {resources.get('progress_observer_overhead_seconds', 'N/A')}s | "
-        f"RAM available {memory.get('effective_available_bytes', memory.get('host_available_bytes', 'N/A'))} bytes | "
-        f"GPU allocated {memory.get('gpu_allocated_bytes', 'N/A')} bytes\n"
-        f"Local checkpoint: generation {local_checkpoint.get('generation', 'N/A')} | "
-        f"Drive verified: generation {checkpoint.get('generation', 'N/A')} | "
-        f"sync age {checkpoint.get('age_seconds', 'N/A')}s | writes this attempt {checkpoint.get('write_bytes_this_attempt', 'N/A')} bytes\n"
-        f"Matrix: validated {matrix.get('completed', 'N/A')}/{matrix.get('total', 'N/A')} | "
-        f"not yet validated {matrix.get('not_yet_validated', 'N/A')} | "
-        f"failed count {matrix.get('failed_count', 'N/A')} ({matrix.get('failed_count_status', 'unknown')})"
-    )
+    lines.append(f"Checkpoint: local generation {checkpoint.get('local_saved', {}).get('generation', 'N/A')} | "
+                 f"Drive verified generation {checkpoint.get('generation', 'N/A')} | "
+                 f"sync age {_duration(checkpoint.get('age_seconds'))} | "
+                 f"writes {_bytes(checkpoint.get('write_bytes_this_attempt'))}")
+    matrix = progress.get("matrix", {})
+    lines.append(f"Matrix validated {matrix.get('completed', 'N/A')}/{matrix.get('total', 'N/A')}")
+    upload = _upload_text(record, progress)
+    if upload:
+        lines.append(upload)
+    return "\n".join(lines)
 
+
+class ColabProgressDisplay:
+    """Callable observer for records containing live_progress.
+
+    Inject display_fn/update_fn with IPython display/update_display signatures,
+    print_fn and a monotonic clock. Pass display_fn=False for plain text output.
+    An injected display_fn without update_fn also uses compact plain text output.
+    No records or panel history are retained.
+    """
+
+    def __init__(self, *, display_fn=None, update_fn=None, print_fn=print,
+                 clock=time.monotonic, interval_seconds=7.0, debug_logging=DEBUG_LOGGING):
+        if not 5 <= interval_seconds <= 7:
+            raise ValueError("display interval must be between 5 and 7 seconds")
+        if display_fn is None:
+            try:
+                from IPython import get_ipython
+                from IPython.display import display, update_display
+                if get_ipython() is not None:
+                    display_fn, update_fn = display, update_display
+            except ImportError:
+                pass
+        self.display_fn, self.update_fn = display_fn, update_fn
+        self.print_fn, self.clock = print_fn, clock
+        self.debug_logging = debug_logging
+        self.throttle = ProgressThrottle(interval_seconds)
+        self.latest_text = ""
+        self._display_id = None
+        # Task completion keys are bounded to the current run.
+        self._run_key = None
+        self._summaries = set()
+
+    def __call__(self, record: dict[str, Any]) -> None:
+        progress = record.get("live_progress") or {}
+        ident, task = progress.get("identity", {}), progress.get("task", {})
+        run_key = record.get("run_key", ident.get("run_key"))
+        if run_key is not None and run_key != self._run_key:
+            self._run_key = run_key
+            self._summaries.clear()
+        status = str(record.get("status", progress.get("status", "RUNNING")))
+        stage = str(record.get("stage", ""))
+        marker = (status + " " + stage).lower()
+        completion = (any(word in marker for word in ("task_complete", "run_complete"))
+                      or status in {"FIRST_COUNTED_PRODUCTION_RUN_VALIDATED",
+                                    "SYNTHETIC_VALIDATED_NON_REPORTABLE", "VALIDATED",
+                                    "COMPLETED_VALIDATED"})
+        important = completion or status.startswith("CHECKPOINT_") or any(
+            word in marker for word in ("fail", "error", "interrupt", "blocked"))
+        if not progress and not important and not self.debug_logging:
+            return
+        upload = record.get("checkpoint_upload") or progress.get("checkpoint", {}).get("upload") or {}
+        signature = (run_key, task.get("number"), task.get("phase"), status,
+                     upload.get("generation"), upload.get("filename"), upload.get("status"))
+        due = self.throttle.should_emit(signature, self.clock())
+        if completion:
+            kind = "task" if "task_complet" in marker else "run"
+            key = (kind, task.get("number") if kind == "task" else None)
+            if key not in self._summaries:
+                self._summaries.add(key)
+                summary = f"Completed run {run_key}"
+                if kind == "task":
+                    summary = f"Completed task {task.get('number')} | run {run_key}"
+                    evaluation = progress.get("metrics", {})
+                    if evaluation.get("task_id") == task.get("number"):
+                        metrics = evaluation.get("latest_task", {})
+                        measured = [f"{label} {_value(metrics[name], percent=True)}"
+                                    for name, label in (("accuracy", "accuracy"), ("macro_f1", "macro F1"))
+                                    if _safe_number(metrics.get(name)) is not None]
+                        if measured:
+                            summary += " | all seen test classes | " + " | ".join(measured)
+                self.print_fn(f"{summary} | {status}")
+        if not due:
+            return
+        self.latest_text = render_progress_line(record)
+        if self.display_fn and self.update_fn:
+            try:
+                mime = {"text/plain": self.latest_text}
+                if self._display_id is None:
+                    handle = self.display_fn(mime, raw=True, display_id=True)
+                    self._display_id = getattr(handle, "display_id", handle)
+                    if self._display_id is None:
+                        self.display_fn = False
+                else:
+                    self.update_fn(mime, raw=True, display_id=self._display_id)
+                return
+            except Exception:
+                self.display_fn = False
+        # A compact current snapshot; never replay past panels in a terminal.
+        compact = " | ".join(self.latest_text.splitlines()[:3])
+        upload = _upload_text(record, progress)
+        if upload and upload not in compact:
+            compact += " | " + upload
+        self.print_fn(compact)
 
 class BoundedProgressBuffer:
     """Keep only the most recent few rendered lines for a single notebook display."""

@@ -54,6 +54,75 @@ def test_default_drive_builder_isolates_real_http_requests_by_thread(monkeypatch
     assert len({transport for _thread, transport in transports}) == 2
 
 
+@pytest.mark.parametrize("transient_status", [None, 503])
+def test_real_resumable_308_without_location_uses_sdk_upload_transport(monkeypatch, transient_status):
+    import io
+    import httplib2
+    import google_auth_httplib2
+    from google.auth.credentials import AnonymousCredentials
+    from googleapiclient import discovery
+    from googleapiclient.http import HttpRequest, MediaIoBaseUpload
+    from scripts import storage_auth
+    from revision_r1.drive_storage import _execute_media_request
+
+    chunks, sessions = [], []
+    retry = {"enabled": False, "sent": False}
+    def endpoint(http, conn, request_uri, method, body, headers):
+        if method == "POST":
+            sessions.append(request_uri)
+            return httplib2.Response({"status": "200", "location": "https://upload.invalid/session?upload_id=PRIVATE"}), b""
+        if retry["enabled"] and transient_status and not retry["sent"]:
+            retry["sent"] = True
+            return httplib2.Response({"status": str(transient_status)}), b"temporary"
+        chunks.append(headers.get("Content-Range", headers.get("content-range")))
+        if len(chunks) == 1:
+            return httplib2.Response({"status": "308", "range": "bytes=0-262143"}), b""
+        return httplib2.Response({"status": "200"}), b'{"id":"checkpoint-id"}'
+    monkeypatch.setattr(httplib2.Http, "_conn_request", endpoint)
+    def media():
+        return MediaIoBaseUpload(io.BytesIO(b"x" * (512 << 10)), "application/octet-stream", chunksize=256 << 10, resumable=True)
+    legacy = HttpRequest(
+        google_auth_httplib2.AuthorizedHttp(AnonymousCredentials(), http=httplib2.Http()),
+        lambda _resp, payload: json.loads(payload), "https://upload.invalid/files", method="POST", resumable=media(),
+    )
+    with pytest.raises(httplib2.RedirectMissingLocation) as original:
+        _execute_media_request(legacy, legacy.resumable)
+    assert original.value.response.status == 308
+    assert "location" not in original.value.response
+    chunks.clear()
+    sessions.clear()
+    retry["enabled"] = True
+    captured = {}
+    monkeypatch.setattr(discovery, "build", lambda *_a, **kw: captured.update(kw))
+    storage_auth._default_drive_service_builder("drive", "v3", credentials=AnonymousCredentials(), cache_discovery=False)
+    upload = media()
+    request = captured["requestBuilder"](
+        None, lambda _resp, payload: json.loads(payload), "https://upload.invalid/files", method="POST", resumable=upload,
+    )
+    request._sleep = lambda _seconds: None
+    progress = []
+    assert _execute_media_request(request, upload, progress.append) == {"id": "checkpoint-id"}
+    assert len(chunks) == 2
+    assert len(sessions) == 1  # Retry continues the same resumable session.
+    assert retry["sent"] is bool(transient_status)
+    assert progress == [{"uploaded_bytes": 262144, "total_bytes": 524288}]
+
+
+def test_upload_diagnostics_use_actual_status_without_credentials_or_session_urls():
+    import httplib2
+    from revision_r1.drive_storage import describe_upload_failure
+    response = httplib2.Response({"status": "308", "range": "bytes=0-99",
+                                "authorization": "Bearer PRIVATE", "set-cookie": "PRIVATE",
+                                "location": "https://upload.invalid/session?upload_id=PRIVATE"})
+    error = httplib2.RedirectMissingLocation("missing Location", response, b"PRIVATE BODY")
+    report = describe_upload_failure(error)
+    assert report["http_status"] == 308 and report["http_status_observed"] is True
+    assert report["exception_chain"][0]["response_headers"]["range"] == "bytes=0-99"
+    assert report["exception_chain"][0]["response_headers"]["location_present"] is True
+    assert "PRIVATE" not in json.dumps(report)
+    assert "upload.invalid" not in json.dumps(report)
+
+
 class _FakeCredentials:
     def __init__(self, **kwargs):
         self.kwargs = kwargs

@@ -1,7 +1,7 @@
 # revision_R1 production Colab handoff
 
 The single stable notebook in `My Drive/ReVision` is
-`Revision_R1_Production_Colab_d6c99c94.ipynb`. The runner code is fetched
+`Revision_R1_Production_Colab.ipynb`. The runner code is fetched
 from the explicitly pinned GitHub commit; the notebook does not depend on a
 code ZIP in Drive.
 
@@ -10,7 +10,8 @@ code ZIP in Drive.
 Run Cells A → B → C → D. A fetches one detached, pinned commit and verifies
 both package manifests, the frozen schedule/training identity, and the
 canonical Drive storage identity. B checks the passed preflight and exact
-Drive dataset paths or verified local caches; it does not download datasets.
+Drive dataset files or verified local caches; uncached files are staged once
+through the canonical API, and verified mmap caches are reused.
 C checks only the next pending run's incremental capacity plus reserve, shows
 the full-matrix projection as informational, and skips the already-finalized
 Run 1 after reusing its existing registered measurement. D is read-only.
@@ -62,3 +63,35 @@ account; all task-boundary files remain. Mixed-owner historical generations
 are preserved even when `canDelete` is true, so protected legacy files may
 temporarily exceed the recovery count target. No old research artifacts are
 automatically migrated, rewritten, transferred, or deleted.
+
+## Existing-runtime upload recovery and display
+
+Do not reset the VM or delete local checkpoints after an upload failure.
+After updating the pin and running the matching A–D, set Cell F's
+`PREPARE_EXISTING_CHECKPOINT_ONLY = True`, keep `LAUNCH_REMAINING_MATRIX = False`,
+and acknowledge no other worker only after checking Manage sessions.
+The standalone `Prepare_Checkpoint_Publication.py` cell is an equivalent option.
+It holds the canonical matrix lease, checks existing checkpoint identities and
+payload hashes, selects the newest valid local/staged/Drive generation, and
+publishes payload before manifest with API read-back. It does not construct a
+model, load tensor state, prune files, or initialize an experiment. Review its
+generation, exact local/Drive paths, hashes and IDs before separately enabling F.
+After preparation, rerun D, set preparation False and only then explicitly
+set the launch/acknowledgement switches True if ready to resume training.
+The resume cursor is reported as unknown until the runner restores the payload.
+Finalized Run 1 remains skipped. Run 2 is not marked complete by publication.
+
+The matching Cell D installs `ColabProgressDisplay`, a single updating raw-text
+panel with real line breaks. `DEBUG_LOGGING = False` hides verbose dictionaries;
+structured local/API logs remain. UI refresh is seven seconds plus transitions.
+Permanent task summaries show only actual evaluations. The renderer performs no
+Drive reads, checkpoint scans or GPU synchronization. Local checkpoint metadata
+is cached from successful saves; memory is sampled at most every 30 seconds.
+Progress-file API persistence is separate, every 60 seconds or transition.
+Local observation components and API synchronization time are reported separately.
+
+Resumable uploads use Google's supported `googleapiclient.http.build_http()`
+transport, which leaves HTTP 308 acknowledgements to the upload state machine.
+Chunk retries are bounded; neither global transport patches nor dependency
+downgrades are used. Sanitized exception diagnostics expose observed HTTP status
+and allowlisted response headers, never credentials, bodies or session URLs.
