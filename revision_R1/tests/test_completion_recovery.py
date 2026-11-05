@@ -1,5 +1,6 @@
 """Real exported files, registry/checkpoint serialization; external Drive only is fake."""
 import json
+import hashlib
 from pathlib import Path
 import shutil
 
@@ -11,17 +12,29 @@ from scripts import production_workflow as workflow
 from revision_r1.registry import RunRegistry
 from revision_r1.state import RunState, PhaseCursor
 from revision_r1.checkpointing import save_generation
+from revision_r1.drive_storage import DriveStorageError
 from test_drive_api_storage import _FakeService, _storage
 from test_production_workflow import _identity, _write_completed_production_fixture
 
 
 def _checkpoints(root, identity):
     for task in range(1, 12):
-        save_generation(root / "task_boundaries", RunState(identity=identity, cursor=PhaseCursor(task_index=task, phase="scaler")),
-                        identity, kind="task-boundary", retain_generations=None)
-    for kind in ("task-boundary", "complete"):
-        save_generation(root / "recovery", RunState(identity=identity, cursor=PhaseCursor(task_index=11, phase="complete")),
-                        identity, kind=kind, retain_generations=None)
+        state = RunState(
+            identity=identity,
+            cursor=PhaseCursor(task_index=task, phase="export" if task == 11 else "scaler"),
+            extra={"runtime": {"task_rows": [{"task_id": value} for value in range(1, task + 1)]}},
+        )
+        save_generation(root / "task_boundaries", state, identity,
+                        kind="task-boundary", retain_generations=None)
+    for kind in ("recovery", "complete"):
+        state = RunState(
+            identity=identity,
+            cursor=PhaseCursor(task_index=11, phase="complete" if kind == "complete" else "export"),
+            resources={"classifier_updates": 11},
+            predictions={"y_true_global": [0], "y_pred_global": [0]},
+            extra={"runtime": {"task_rows": [{"task_id": value} for value in range(1, 12)]}},
+        )
+        save_generation(root / "recovery", state, identity, kind=kind, retain_generations=None)
 
 
 def _setup(tmp_path, monkeypatch):
@@ -80,8 +93,8 @@ def test_failed_final_publication_completion_only_retry_and_fresh_stage_skip(tmp
     service.files().fail_create_name = None
     artifact_hashes = {path.name: workflow._hash_file_stream(path) for path in output.iterdir() if path.is_file()}
     checkpoint_hashes = {str(path): workflow._hash_file_stream(path) for path in checkpoints.rglob("*.pt")}
-    # Completion must not create a model, load tensor state, or execute any task.
-    monkeypatch.setattr(torch, "load", lambda *_a, **_kw: pytest.fail("completion must not load model/checkpoint state"))
+    # Completion may read serialized cursor state, but must not construct a
+    # model or execute any task.
     import revision_r1.runner as runner
     monkeypatch.setattr(runner, "run_one", lambda *_a, **_kw: pytest.fail("must not retrain"))
     args = dict(output_root=root, checkpoint_root=checkpoints, local_checkpoint_root=tmp_path / "local",
@@ -91,6 +104,7 @@ def test_failed_final_publication_completion_only_retry_and_fresh_stage_skip(tmp
     assert result["next_pending_run"] == "ember_seed42_anchor_only"
     assert result["training_launched"] is False
     assert len(result["checkpoint_evidence"]) == 13
+    assert sorted(row["task_id"] for row in result["checkpoint_evidence"] if row.get("kind") == "task-boundary") == list(range(1, 12))
     assert {path.name: workflow._hash_file_stream(path) for path in output.iterdir() if path.is_file()} == artifact_hashes
     assert all(workflow._hash_file_stream(Path(path)) == digest for path, digest in checkpoint_hashes.items())
     entry = RunRegistry(output / "registry").status(run_id)
@@ -170,6 +184,306 @@ def _failed_exports(tmp_path, monkeypatch):
     return setup, args
 
 
+def _remove_boundary(checkpoint_root, record, generation):
+    boundary_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "task_boundaries"
+    (boundary_dir / f"generation-{generation:06d}.pt").unlink()
+    (boundary_dir / f"generation-{generation:06d}.manifest.json").unlink()
+    return boundary_dir
+
+
+def test_completion_reconciles_boundary_11_from_runtime_local_checkpoints(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, _root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    staged = workflow.run_checkpoint_root(checkpoint_root, record) / "task_boundaries"
+    local_root = workflow.run_checkpoint_root(tmp_path / "local", record) / "task_boundaries"
+    local_root.mkdir(parents=True)
+    for suffix in ("pt", "manifest.json"):
+        shutil.copyfile(staged / f"generation-000011.{suffix}", local_root / f"generation-000011.{suffix}")
+    _remove_boundary(checkpoint_root, record, 11)
+    result = recovery.complete_exported_run(
+        plan, record, **{**args, "local_checkpoint_root": tmp_path / "local"},
+    )
+    final_boundary = next(row for row in result["checkpoint_evidence"]
+                          if row.get("kind") == "task-boundary" and row.get("task_id") == 11)
+    assert final_boundary["generation"] == 11
+    assert final_boundary["source_provenance"]["runtime_local"] is True
+    assert result["next_pending_run"] == "ember_seed42_anchor_only"
+
+
+def test_completion_repairs_partial_staging_from_verified_runtime_payload(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, _root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    boundary_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "task_boundaries"
+    local_payload = workflow.run_checkpoint_root(tmp_path / "local", record) / "task_boundaries" / "generation-000011.pt"
+    local_payload.parent.mkdir(parents=True)
+    shutil.copyfile(boundary_dir / local_payload.name, local_payload)
+    (boundary_dir / "generation-000011.pt").unlink()
+
+    result = recovery.complete_exported_run(
+        plan, record, **{**args, "local_checkpoint_root": tmp_path / "local"},
+    )
+
+    boundary = next(row for row in result["checkpoint_evidence"]
+                    if row.get("kind") == "task-boundary" and row.get("task_id") == 11)
+    assert boundary["source_provenance"]["runtime_local"] is True
+    assert boundary["source_provenance"]["api_staging_before_reconciliation"] is False
+    assert (boundary_dir / "generation-000011.pt").is_file()
+    assert result["next_pending_run"] == "ember_seed42_anchor_only"
+
+
+def test_completion_repairs_corrupt_staging_manifest_from_verified_runtime_copy(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, _root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    boundary_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "task_boundaries"
+    local_dir = workflow.run_checkpoint_root(tmp_path / "local", record) / "task_boundaries"
+    local_dir.mkdir(parents=True)
+    for suffix in ("pt", "manifest.json"):
+        source = boundary_dir / f"generation-000011.{suffix}"
+        shutil.copyfile(source, local_dir / source.name)
+    (boundary_dir / "generation-000011.manifest.json").write_text("{truncated", encoding="utf-8")
+
+    result = recovery.complete_exported_run(
+        plan, record, **{**args, "local_checkpoint_root": tmp_path / "local"},
+    )
+
+    boundary = next(row for row in result["checkpoint_evidence"]
+                    if row.get("kind") == "task-boundary" and row.get("task_id") == 11)
+    assert boundary["source_provenance"]["runtime_local"] is True
+    assert boundary["task_id"] == 11
+    assert (boundary_dir / "generation-000011.manifest.json").is_file()
+    assert "generation-000011.manifest.json" in str(result["checkpoint_source_inventory"]["task_boundaries"]["staging_quarantined_paths"][0])
+
+
+def test_completion_reconciles_boundary_11_from_canonical_drive(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, _root, checkpoint_root, adapter, _service, _output, _registry = setup
+    staged = workflow.run_checkpoint_root(checkpoint_root, record) / "task_boundaries"
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    workflow._api_publish_checkpoint_generation(adapter, staged, identity, 11)
+    _remove_boundary(checkpoint_root, record, 11)
+    result = recovery.complete_exported_run(plan, record, **args)
+    final_boundary = next(row for row in result["checkpoint_evidence"]
+                          if row.get("kind") == "task-boundary" and row.get("task_id") == 11)
+    assert final_boundary["source_provenance"]["canonical_drive"] is True
+    assert final_boundary["source_provenance"]["drive_file_ids"]
+    assert result["next_pending_run"] == "ember_seed42_anchor_only"
+
+
+def test_completion_derives_only_final_boundary_from_valid_terminal_recovery(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, _root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    boundary_dir = _remove_boundary(checkpoint_root, record, 11)
+    result = recovery.complete_exported_run(plan, record, **args)
+    final_boundary = next(row for row in result["checkpoint_evidence"]
+                          if row.get("kind") == "task-boundary" and row.get("task_id") == 11)
+    assert final_boundary["recovery_provenance"] == {
+        "source_kind": "complete", "source_generation": 2, "task_id": 11,
+        "validated_cursor": {"task_index": 11, "phase": "complete"},
+    }
+    assert (boundary_dir / f"generation-{final_boundary['generation']:06d}.manifest.json").is_file()
+    assert result["next_pending_run"] == "ember_seed42_anchor_only"
+
+
+def test_completion_derives_final_boundary_from_canonical_terminal_recovery(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, _root, checkpoint_root, adapter, _service, _output, _registry = setup
+    boundary_dir = _remove_boundary(checkpoint_root, record, 11)
+    recovery_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "recovery"
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    workflow._api_publish_checkpoint_generation(adapter, recovery_dir, identity, 2)
+    (recovery_dir / "generation-000002.pt").unlink()
+    (recovery_dir / "generation-000002.manifest.json").unlink()
+
+    result = recovery.complete_exported_run(plan, record, **args)
+
+    final_boundary = next(row for row in result["checkpoint_evidence"]
+                          if row.get("kind") == "task-boundary" and row.get("task_id") == 11)
+    assert final_boundary["recovery_provenance"]["source_generation"] == 2
+    assert final_boundary["source_provenance"]["recovery_source_provenance"]["canonical_drive"] is True
+    assert (boundary_dir / f"generation-{final_boundary['generation']:06d}.pt").is_file()
+    assert result["completion_registry_added_now"] is True
+
+
+def test_completion_reports_missing_earlier_boundary_without_registration(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, _root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    _remove_boundary(checkpoint_root, record, 5)
+    with pytest.raises(ValueError, match=r'"missing_task_ids": \[5\]') as error:
+        recovery.complete_exported_run(plan, record, **args)
+    message = str(error.value)
+    assert '"task_id": 5' in message
+    assert '"identity_sha256"' in message
+    assert '"payload_integrity": "NO_AUTHENTICATED_TASK_BOUNDARY"' in message
+
+
+def test_terminal_recovery_with_wrong_task_rows_cannot_supply_final_boundary(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    boundary_dir = _remove_boundary(checkpoint_root, record, 11)
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    recovery_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "recovery"
+    (recovery_dir / "generation-000002.pt").unlink()
+    (recovery_dir / "generation-000002.manifest.json").unlink()
+    state = RunState(
+        identity=identity,
+        cursor=PhaseCursor(task_index=11, phase="complete"),
+        resources={"classifier_updates": 11},
+        predictions={"y_true_global": [0], "y_pred_global": [0]},
+        extra={"runtime": {"task_rows": [{"task_id": value} for value in range(1, 11)]}},
+    )
+    save_generation(recovery_dir, state, identity, kind="complete", retain_generations=None)
+
+    with pytest.raises(ValueError, match="cursor/task-row provenance mismatch"):
+        recovery.complete_exported_run(plan, record, **args)
+
+    assert not (boundary_dir / "generation-000011.manifest.json").exists()
+    assert record["run_key"] not in workflow._read_matrix_registry(root, plan)["completed_runs"]
+
+
+def test_missing_task_eleven_reports_explicit_gap_without_terminal_recovery(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    _remove_boundary(checkpoint_root, record, 11)
+    recovery_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "recovery"
+    (recovery_dir / "generation-000002.pt").unlink()
+    (recovery_dir / "generation-000002.manifest.json").unlink()
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    save_generation(
+        recovery_dir,
+        RunState(identity=identity, cursor=PhaseCursor(task_index=11, phase="complete"),
+                 resources={"classifier_updates": 11}, predictions={"y_true_global": [0], "y_pred_global": [0]},
+                 extra={"runtime": {"task_rows": [{"task_id": value} for value in range(1, 12)]}}),
+        identity, kind="recovery", retain_generations=None,
+    )
+
+    with pytest.raises(ValueError, match=r'"missing_task_ids": \[11\]') as error:
+        recovery.complete_exported_run(plan, record, **args)
+    message = str(error.value)
+    assert '"task_id": 11' in message
+    assert '"payload_integrity": "NO_AUTHENTICATED_TASK_BOUNDARY"' in message
+    assert record["run_key"] not in workflow._read_matrix_registry(root, plan)["completed_runs"]
+
+
+def test_recovered_final_boundary_requires_its_exact_terminal_source_generation(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, root, checkpoint_root, adapter, service, _output, _registry = setup
+    _remove_boundary(checkpoint_root, record, 11)
+    original_validate = recovery._validate_export_evidence
+    calls = {"count": 0}
+
+    def interrupt_after_checkpoint_publication(*values):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("interrupted after checkpoint publication")
+        return original_validate(*values)
+
+    monkeypatch.setattr(recovery, "_validate_export_evidence", interrupt_after_checkpoint_publication)
+    with pytest.raises(OSError, match="interrupted after checkpoint publication"):
+        recovery.complete_exported_run(plan, record, **args)
+    assert record["run_key"] not in workflow._read_matrix_registry(root, plan)["completed_runs"]
+    monkeypatch.setattr(recovery, "_validate_export_evidence", original_validate)
+
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    recovery_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "recovery"
+    terminal = recovery._manifest(recovery_dir / "generation-000002.manifest.json", identity)
+    from revision_r1.checkpointing import copy_generation_payload
+    copy_generation_payload(recovery_dir, terminal, recovery_dir, identity,
+                            kind="complete", retain_generations=None, generation=3)
+    workflow._api_publish_checkpoint_generation(adapter, recovery_dir, identity, 3)
+    for suffix in ("pt", "manifest.json"):
+        (recovery_dir / f"generation-000002.{suffix}").unlink()
+        remote = adapter.exact_file(adapter.logical_path_for_local(recovery_dir / f"generation-000002.{suffix}"))
+        del service.records[remote["id"]]
+
+    with pytest.raises(ValueError, match="terminal recovery source generation 2 is unavailable"):
+        recovery.complete_exported_run(plan, record, **args)
+    assert record["run_key"] not in workflow._read_matrix_registry(root, plan)["completed_runs"]
+
+
+def test_nonintegral_boundary_cursor_is_rejected_before_completion_registration(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    boundary_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "task_boundaries"
+    manifest_path = boundary_dir / "generation-000001.manifest.json"
+    manifest = recovery._manifest(manifest_path, workflow._expected_plan_runner_identity(plan, record))
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    state = RunState(
+        identity=identity,
+        cursor=PhaseCursor(task_index=1.5, phase="scaler", item_index=0.5),
+        extra={"runtime": {"task_rows": [{"task_id": 1}]}},
+    )
+    payload_path = boundary_dir / manifest["payload_file"]
+    torch.save(state, payload_path)
+    manifest["payload_bytes"] = payload_path.stat().st_size
+    manifest["payload_sha256"] = workflow._hash_file_stream(payload_path)
+    workflow._atomic_json(manifest_path, manifest)
+
+    with pytest.raises(ValueError, match="cursor fields must be exact integers"):
+        recovery.complete_exported_run(plan, record, **args)
+    assert record["run_key"] not in workflow._read_matrix_registry(root, plan)["completed_runs"]
+
+
+def test_checkpoint_publication_interruption_retries_without_duplicate_file_or_registration(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, root, checkpoint_root, adapter, service, _output, _registry = setup
+    staged = workflow.run_checkpoint_root(checkpoint_root, record) / "task_boundaries"
+    local_root = workflow.run_checkpoint_root(tmp_path / "local", record) / "task_boundaries"
+    local_root.mkdir(parents=True)
+    for suffix in ("pt", "manifest.json"):
+        shutil.copyfile(staged / f"generation-000011.{suffix}", local_root / f"generation-000011.{suffix}")
+    _remove_boundary(checkpoint_root, record, 11)
+    original_publish = adapter.publish_file
+    fail_once = {"armed": True}
+
+    def interrupt_manifest(local_path, logical_path, **kwargs):
+        if Path(local_path).name == "generation-000011.manifest.json" and fail_once["armed"]:
+            fail_once["armed"] = False
+            raise OSError("interrupted final-boundary manifest publication")
+        return original_publish(local_path, logical_path, **kwargs)
+
+    monkeypatch.setattr(adapter, "publish_file", interrupt_manifest)
+    retry_args = {**args, "local_checkpoint_root": tmp_path / "local"}
+    with pytest.raises(OSError, match="interrupted final-boundary manifest publication"):
+        recovery.complete_exported_run(plan, record, **retry_args)
+    assert record["run_key"] not in workflow._read_matrix_registry(root, plan)["completed_runs"]
+    assert len([row for row in service.records.values() if row.get("name") == "generation-000011.pt"]) == 1
+    result = recovery.complete_exported_run(plan, record, **retry_args)
+    assert result["completion_registry_added_now"] is True
+    assert any(row.get("kind") == "task-boundary" and row.get("task_id") == 11
+               for row in result["checkpoint_evidence"])
+    assert len([row for row in service.records.values() if row.get("name") == "generation-000011.pt"]) == 1
+    assert result["next_pending_run"] == "ember_seed42_anchor_only"
+
+
+@pytest.mark.parametrize("fault", ["wrong_identity", "corrupt_payload"])
+def test_invalid_task_boundary_blocks_completion_without_modifying_canonical_checkpoint(tmp_path, monkeypatch, fault):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, root, checkpoint_root, adapter, service, _output, _registry = setup
+    boundary_dir = workflow.run_checkpoint_root(checkpoint_root, record) / "task_boundaries"
+    manifest = boundary_dir / "generation-000011.manifest.json"
+    payload = boundary_dir / "generation-000011.pt"
+    remote_payload = workflow._api_publish_file(adapter, payload)
+    remote_before = bytes(service.records[remote_payload["file_id"]]["content"])
+    if fault == "wrong_identity":
+        value = json.loads(manifest.read_text())
+        value["identity"]["code_sha256"] = "0" * 64
+        manifest.write_text(json.dumps(value))
+        with pytest.raises(ValueError):
+            recovery.complete_exported_run(plan, record, **args)
+    else:
+        payload.write_bytes(b"corrupt-local-payload")
+        remote_record = service.records[remote_payload["file_id"]]
+        remote_record["content"] = b"corrupt-canonical-payload"
+        remote_record["size"] = str(len(remote_record["content"]))
+        remote_record["md5Checksum"] = hashlib.md5(remote_record["content"], usedforsecurity=False).hexdigest()
+        remote_record["quotaBytesUsed"] = remote_record["size"]
+        remote_before = bytes(remote_record["content"])
+        with pytest.raises((ValueError, DriveStorageError)):
+            recovery.complete_exported_run(plan, record, **args)
+    assert record["run_key"] not in workflow._read_matrix_registry(root, plan)["completed_runs"]
+    assert bytes(service.records[remote_payload["file_id"]]["content"]) == remote_before
+
+
 def test_matrix_publication_failure_fresh_retry_preserves_canonical_marker(tmp_path, monkeypatch):
     setup, args = _failed_exports(tmp_path, monkeypatch)
     plan, record, root, ckpt, adapter, service, output, _registry = setup
@@ -188,7 +502,6 @@ def test_matrix_publication_failure_fresh_retry_preserves_canonical_marker(tmp_p
     fresh = _storage(service, stage, monkeypatch)
     fresh.bind_root("/drive/MyDrive/ReVision/production/results", stage / "results")
     fresh.bind_root("/drive/MyDrive/ReVision/production/checkpoints", stage / "checkpoints")
-    monkeypatch.setattr(torch, "load", lambda *_a, **_kw: pytest.fail("no model deserialization"))
     result = recovery.complete_exported_run(plan, record, **{**args, "storage_adapter": fresh,
         "output_root": stage / "results", "checkpoint_root": stage / "checkpoints"})
     assert result["completion_registry_added_now"] is True
@@ -257,7 +570,6 @@ def test_actual_notebook_completion_only_cell_uses_existing_exports(tmp_path, mo
         if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
             if node.targets[0].id in {"COMPLETE_EXPORTED_RUN_ONLY", "ACKNOWLEDGE_NO_OTHER_COLAB_WORKER"}:
                 node.value = ast.Constant(True)
-    monkeypatch.setattr(torch, "load", lambda *_a, **_kw: pytest.fail("no tensor deserialization"))
     namespace = {"RUNTIME_PLAN": plan, "OUTPUT_ROOT": root, "CHECKPOINT_ROOT": ckpt,
         "LOCAL_CHECKPOINT_ROOT": tmp_path / "local", "STORAGE_ADAPTER": adapter,
         "STORAGE_API_FACTORY": lambda: service}
