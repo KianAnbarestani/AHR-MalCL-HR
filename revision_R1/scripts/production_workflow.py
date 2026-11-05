@@ -3288,9 +3288,19 @@ def _validate_completed_run(
     return {"validation": validation, "run_id": run_id, "artifact_manifest_sha256": manifest_hash, "summary": summary}
 
 
-def _checkpoint_tree_measurement(root: Path, expected_identity: dict[str, Any], *, kind: str, expected_count: int) -> dict[str, Any]:
+def _checkpoint_tree_measurement(
+    root: Path,
+    expected_identity: dict[str, Any],
+    *,
+    kind: str,
+    expected_count: int,
+    allow_recovery_overflow: bool = False,
+) -> dict[str, Any]:
     directory = root / kind
     manifests = sorted(directory.glob("generation-*.manifest.json"))
+    if allow_recovery_overflow and kind != "recovery":
+        raise ValueError("additional checkpoint generations are allowed only for recovery evidence")
+    exact_count_required = kind != "recovery" or not allow_recovery_overflow
     if len(manifests) < expected_count or (kind != "recovery" and len(manifests) != expected_count):
         raise ValueError(
             f"production checkpoint retention mismatch at {directory}: "
@@ -3353,7 +3363,7 @@ def _checkpoint_tree_measurement(root: Path, expected_identity: dict[str, Any], 
         generations.append(generation)
         referenced_payload_names.add(payload_name)
         kinds.append(str(manifest.get("kind")))
-    if len(generations) != expected_count:
+    if len(generations) < expected_count or (exact_count_required and len(generations) != expected_count):
         raise ValueError(
             f"production checkpoint retention mismatch at {directory}: "
             f"expected {expected_count}, found {len(generations)} complete generations"
@@ -3380,6 +3390,9 @@ def _checkpoint_tree_measurement(root: Path, expected_identity: dict[str, Any], 
         raise ValueError("task-boundary checkpoint directory contains a non-boundary generation")
     return {
         "generation_count": len(generations), "generations": sorted(generations),
+        "expected_generation_count": expected_count,
+        "retention_overflow_count": max(0, len(generations) - expected_count),
+        "additional_generations_allowed": allow_recovery_overflow,
         "payload_bytes": sum(payload_bytes),
         "max_payload_bytes": max(payload_bytes, default=0), "manifest_bytes": manifest_bytes,
         "generation_kinds": kinds,
@@ -3392,6 +3405,7 @@ def _checkpoint_tree_measurement(root: Path, expected_identity: dict[str, Any], 
 
 def measure_completed_production_run(
     plan: dict[str, Any], record: dict[str, Any], bundle, output: str | Path, checkpoint_root: str | Path,
+    *, allow_recovery_overflow: bool = False,
 ) -> dict[str, Any]:
     """Measure exact run artifacts/checkpoint retention after validating completion."""
     from revision_r1.registry import RunRegistry
@@ -3401,7 +3415,10 @@ def measure_completed_production_run(
     validated = _validate_completed_run(plan, record, bundle, output_path, synthetic=False)
     run_state = RunRegistry(output_path / "registry").status(validated["run_id"])
     identity = run_state["identity"]
-    recovery = _checkpoint_tree_measurement(checkpoint_path, identity, kind="recovery", expected_count=2)
+    recovery = _checkpoint_tree_measurement(
+        checkpoint_path, identity, kind="recovery", expected_count=2,
+        allow_recovery_overflow=allow_recovery_overflow,
+    )
     boundaries = _checkpoint_tree_measurement(checkpoint_path, identity, kind="task_boundaries", expected_count=11)
     output_bytes = sum(path.stat().st_size for path in output_path.rglob("*") if path.is_file() and not path.is_symlink())
     try:

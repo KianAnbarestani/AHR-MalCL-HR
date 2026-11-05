@@ -195,7 +195,13 @@ def _prepare_completion_checkpoints(storage, staged_root, local_root, identity):
             _hydrate_missing(storage, storage.logical_path_for_local(staged), staged)
         except FileNotFoundError:
             pass
-        measured = workflow._checkpoint_tree_measurement(staged_root, identity, kind=kind, expected_count=count)
+        measured = workflow._checkpoint_tree_measurement(
+            staged_root,
+            identity,
+            kind=kind,
+            expected_count=count,
+            allow_recovery_overflow=(kind == "recovery"),
+        )
         for generation in measured["generations"]:
             path = staged / f"generation-{generation:06d}.manifest.json"
             value = _manifest(path, identity)
@@ -318,7 +324,14 @@ def complete_exported_run(plan, record, *, output_root, checkpoint_root,
                 else:
                     _publish_existing_completion_registry(storage_adapter, registry, run_id, identity)
                 validated = workflow._validate_completed_run(plan, record, None, output, synthetic=False)
-                measurement = workflow.measure_completed_production_run(plan, record, None, output, checkpoints)
+                measurement = workflow.measure_completed_production_run(
+                    plan,
+                    record,
+                    None,
+                    output,
+                    checkpoints,
+                    allow_recovery_overflow=True,
+                )
                 if lease.lost.is_set() or run_lease.lost.is_set():
                     raise RuntimeError("completion matrix lease lost before registration")
                 print_fn("Registering completion: validated artifacts only")

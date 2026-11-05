@@ -116,6 +116,51 @@ def test_failed_final_publication_completion_only_retry_and_fresh_stage_skip(tmp
     assert set(rerun["completed_run_keys"]) == {"ember_seed42_full_hybrid", "ember_seed42_current_only"}
 
 
+def test_completion_only_validates_and_preserves_fifteen_recovery_generations(tmp_path, monkeypatch):
+    setup, args = _failed_exports(tmp_path, monkeypatch)
+    plan, record, root, checkpoint_root, _adapter, _service, _output, _registry = setup
+    checkpoint_namespace = workflow.run_checkpoint_root(checkpoint_root, record)
+    recovery_dir = checkpoint_namespace / "recovery"
+    for path in recovery_dir.iterdir():
+        path.unlink()
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    for index in range(15):
+        save_generation(
+            recovery_dir,
+            RunState(identity=identity, cursor=PhaseCursor(task_index=11, phase="complete")),
+            identity,
+            kind="complete" if index == 14 else "recovery",
+            retain_generations=None,
+        )
+    checkpoint_hashes = {
+        str(path): workflow._hash_file_stream(path)
+        for path in checkpoint_namespace.rglob("*") if path.is_file()
+    }
+
+    # The ordinary production measurement remains strict; only completion
+    # recovery may account for a verified overflow without pruning it.
+    with pytest.raises(ValueError, match=r"recovery: expected 2, found 15"):
+        workflow._checkpoint_tree_measurement(
+            checkpoint_namespace, identity, kind="recovery", expected_count=2,
+        )
+
+    result = recovery.complete_exported_run(plan, record, **args)
+
+    assert result["status"] == "COMPLETED_VALIDATED"
+    assert result["training_launched"] is False
+    assert result["files_deleted"] is False
+    assert result["next_pending_run"] == "ember_seed42_anchor_only"
+    assert len(result["checkpoint_evidence"]) == 26
+    measurement = workflow._read_matrix_registry(root, plan)["completed_runs"][record["run_key"]]["storage_measurement"]
+    assert measurement["recovery_checkpoints"]["generation_count"] == 15
+    assert measurement["recovery_checkpoints"]["generations"] == list(range(1, 16))
+    assert measurement["task_boundary_checkpoints"]["generation_count"] == 11
+    assert {
+        str(path): workflow._hash_file_stream(path)
+        for path in checkpoint_namespace.rglob("*") if path.is_file()
+    } == checkpoint_hashes
+
+
 def _failed_exports(tmp_path, monkeypatch):
     setup = _setup(tmp_path, monkeypatch)
     plan, record, root, ckpt, adapter, service, output, registry = setup
