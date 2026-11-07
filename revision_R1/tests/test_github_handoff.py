@@ -196,9 +196,25 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "finalize_completed_production_run(" not in all_source
     assert "execute_first_production_run(" not in all_source
     assert "continue_production_matrix(" in cells[6]
-    assert "CELL_F_CANONICAL_COMPLETION_REGISTRY" in cells[6]
-    assert "Matrix registry verified · Run 1 skipped · Next:" in cells[6]
-    assert 'globals().get("DEBUG_LOGGING", False)' in cells[6]
+    assert "CLEAN_RESTART_RUN2 = True" in cells[6]
+    assert "ACKNOWLEDGE_NO_OTHER_COLAB_WORKER = False" in cells[6]
+    assert "clean_restart_run2=CLEAN_RESTART_RUN2" in cells[6]
+    assert "acknowledge_no_other_worker=ACKNOWLEDGE_NO_OTHER_COLAB_WORKER" in cells[6]
+    assert "Run 1 remains finalized/skipped" in cells[6]
+    assert "complete_exported_run(" not in cells[6]
+    assert "prepare_pending_checkpoint_publication(" not in cells[6]
+    assert "resolve_matrix_run_paths" in cells[3]
+    assert "replacement_completion_matches_route" in cells[3]
+    assert "CELL_C_EFFECTIVE_RUN2_DISPOSITION" in cells[3]
+    assert "resolve_matrix_run_paths" in cells[4]
+    assert "run2_registry_disposition" in cells[4]
+    assert "registered_run_output_path" in cells[7]
+    assert "registered_run_checkpoint_path" in cells[7]
+    assert "clean_replacement_run2=True" in cells[7]
+    assert "EFFECTIVE_COMPLETED_RUN_KEYS" in cells[7]
+    assert "STORAGE_ADAPTER.publish_file(" not in cells[4]
+    assert "Diagnostic saved locally:" in cells[4]
+    assert "ColabProgressDisplay(" in cells[4]
     assert "training_source_sha256" in cells[3]
     assert "selected_git_commit" in cells[3]
     assert "fine-grained read-only" in cells[0]
@@ -207,6 +223,26 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "REVISION_R1_STORAGE_OAUTH_CLIENT_ID" in cells[0]
     assert "REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET" in cells[0]
     assert "dedicated user-OAuth refresh token" in cells[0]
+
+
+def test_notebook_builder_uses_saved_drive_notebook_without_temporary_recovery_cells():
+    saved_drive_sha256 = "a220a08e0ff472876a479eaded35cd7946bc5d0c35ec245a7203c33a42ff3f9d"
+    template_path = ROOT / "notebooks" / "Revision_R1_Production_Colab_Saved_Drive_Base.ipynb"
+    template = json.loads(template_path.read_text(encoding="utf-8"))
+    assert template["metadata"]["revision_r1_saved_drive_source_sha256"] == saved_drive_sha256
+    assert len(template["cells"]) == 8
+
+    generated = notebook_document("0123456789abcdef0123456789abcdef01234567")
+    cells = ["".join(cell.get("source", [])) for cell in generated["cells"]]
+    assert len(cells) == 8
+    assert "PINNED_GIT_COMMIT = \"0123456789abcdef0123456789abcdef01234567\"" in cells[1]
+    assert "stage_canonical_preflight_artifacts(" in cells[2]
+    assert "ColabProgressDisplay(" in cells[4]
+    assert "ALREADY_FINALIZED_COMPLETED_RUN" in cells[5]
+    assert "continue_production_matrix(" in cells[6]
+    assert "COMPLETE_EXPORTED_RUN_ONLY" not in "\n".join(cells)
+    assert "_r1_helpers" not in "\n".join(cells)
+    assert "revision_R1_saved_drive_source_sha256" not in "\n".join(cells)
 
 
 def test_cell_b_preflight_uses_api_staging_and_frozen_schedule_digest():
@@ -226,74 +262,31 @@ def test_cell_b_preflight_uses_api_staging_and_frozen_schedule_digest():
     assert "Cells A through C require no DriveFS mount" in cells[0]
 
 
-def test_generated_cell_f_preparation_only_never_launches_matrix(monkeypatch, tmp_path):
-    import ast
-    from scripts import production_recovery, production_workflow
+def test_generated_cell_f_is_one_disabled_launch_resume_path():
     from scripts.build_github_handoff import _github_matrix_cell
-    calls = []
-    monkeypatch.setattr(production_recovery, "prepare_pending_checkpoint_publication",
-                        lambda *args, **kwargs: calls.append((args, kwargs)) or {"generation": 3, "no_training": True})
-    monkeypatch.setattr(production_workflow, "continue_production_matrix",
-                        lambda *_a, **_kw: pytest.fail("preparation must not launch training"))
-    tree = ast.parse(_github_matrix_cell())
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
-            if node.targets[0].id in {"PREPARE_EXISTING_CHECKPOINT_ONLY", "ACKNOWLEDGE_NO_OTHER_COLAB_WORKER"}:
-                node.value = ast.Constant(True)
-    namespace = {"NEXT_PENDING_RECORD": {"run_key": "ember_seed42_current_only"},
-                 "RUNTIME_PLAN": {}, "OUTPUT_ROOT": tmp_path / "out", "CHECKPOINT_ROOT": tmp_path / "remote",
-                 "LOCAL_CHECKPOINT_ROOT": tmp_path / "local", "STORAGE_ADAPTER": object(),
-                 "STORAGE_API_FACTORY": object(), "live_progress": lambda _row: None}
-    exec(compile(ast.fix_missing_locations(tree), "delivered-cell-F-preparation", "exec"), namespace)
-    assert len(calls) == 1
-    assert calls[0][1]["acknowledge_no_other_worker"] is True
-    assert namespace["LAUNCH_REMAINING_MATRIX"] is False
-    assert namespace["PUBLICATION_PREPARATION"]["generation"] == 3
+    source = _github_matrix_cell()
+    assert "LAUNCH_REMAINING_MATRIX = False" in source
+    assert "ACKNOWLEDGE_NO_OTHER_COLAB_WORKER = False" in source
+    assert "CLEAN_RESTART_RUN2 = True" in source
+    assert "continue_production_matrix(" in source
+    assert "clean_restart_run2=CLEAN_RESTART_RUN2" in source
+    assert "PREPARE_EXISTING_CHECKPOINT_ONLY" not in source
+    assert "complete_exported_run(" not in source
+    assert "Run interrupted safely. Re-run Cell D, then rerun this same Cell F" in source
 
 
-def test_generated_cell_d_callback_publishes_raw_multiline_current_panel(monkeypatch):
-    import ast
-    from types import SimpleNamespace
-    from scripts.build_github_handoff import _github_diagnostic_cell
-    frames, updates = [], []
-    fake_ipython = types.ModuleType("IPython")
-    fake_ipython.get_ipython = lambda: object()
-    fake_display = types.ModuleType("IPython.display")
-    def display(mime, **kwargs):
-        frames.append((mime, kwargs))
-        return SimpleNamespace(display_id="single-production-panel")
-    fake_display.display = display
-    fake_display.update_display = lambda mime, **kwargs: updates.append((mime, kwargs))
-    monkeypatch.setitem(sys.modules, "IPython", fake_ipython)
-    monkeypatch.setitem(sys.modules, "IPython.display", fake_display)
-    # Execute the actual callback setup from the delivered Cell D, excluding
-    # its later diagnostic API reads. No alternate hand-written callback.
-    tree = ast.parse(_github_diagnostic_cell())
-    setup = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_api_stage_optional":
-            break
-        setup.append(node)
-    namespace = {}
-    exec(compile(ast.Module(body=setup, type_ignores=[]), "delivered-cell-D-callback", "exec"), namespace)
-    event = {"status": "RUNNING", "live_progress": {
-        "identity": {"run_index": 2, "run_count": 100, "dataset": "ember", "arm": "current_only", "seed": 42},
-        "task": {"number": 1, "count": 11, "phase": "classifier", "new_class_count": 50, "seen_class_count": 50},
-        "phase_progress": {"completed": 100, "total": 1971},
-        "classifier": {"task_updates_completed": 100, "task_update_budget": 1971},
-    }}
-    namespace["live_progress"](event)
-    event["live_progress"]["task"]["phase"] = "evaluation"
-    namespace["live_progress"](event)
-    assert namespace["DEBUG_LOGGING"] is False
-    assert len(frames) == 1 and len(updates) == 1
-    for mime, kwargs in (frames[0], updates[0]):
-        text = mime["text/plain"]
-        assert kwargs["raw"] is True
-        assert "\n" in text and "\\n" not in text
-        assert any(line.startswith("Run 2/100") for line in text.splitlines()[:2])
-        assert "GAN" not in text and "gradient penalty" not in text
-        assert text.count("Run 2/100") == 1
+def test_user_edited_cell_d_is_local_only_and_keeps_readable_progress():
+    cells = ["".join(cell.get("source", [])) for cell in notebook_document(
+        "0123456789abcdef0123456789abcdef01234567"
+    )["cells"]]
+    diagnostic = cells[4]
+    assert "ColabProgressDisplay(" in diagnostic
+    assert "live_progress =" in diagnostic
+    assert "Diagnostic saved locally:" in diagnostic
+    assert "STORAGE_ADAPTER.publish_file(" not in diagnostic
+    assert "resolve_matrix_run_paths" in diagnostic
+    assert "_next_progress_relative" in diagnostic
+    assert "next_run_recovery_checkpoint_metadata_only" in diagnostic
 
 
 def test_production_readme_has_one_github_execution_order_and_no_zip_setup():

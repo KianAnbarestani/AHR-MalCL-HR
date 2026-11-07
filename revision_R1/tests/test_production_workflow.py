@@ -305,7 +305,8 @@ def test_readonly_lease_inspector_accepts_only_valid_inactive_drive_lease_docume
     assert incomplete_active["lease_acquisition_allowed"] is False
 
 
-def test_first_run_lease_diagnostic_preserves_lock_and_verifies_recent_checkpoint(tmp_path):
+def test_first_run_lease_diagnostic_preserves_lock_and_verifies_recent_checkpoint(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     from scripts.production_workflow import inspect_first_run_lease_and_progress, run_checkpoint_root, run_output_root
     from revision_r1.checkpointing import save_generation
     from revision_r1.state import PhaseCursor, RunState
@@ -363,7 +364,8 @@ def test_first_run_lease_diagnostic_preserves_lock_and_verifies_recent_checkpoin
     assert report["remote_colab_process_visibility"].startswith("UNAVAILABLE")
 
 
-def test_first_run_resume_gate_requires_exact_hashed_v13_recovery(tmp_path):
+def test_first_run_resume_gate_requires_exact_hashed_v13_recovery(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     from revision_r1.checkpointing import save_generation
     from revision_r1.state import PhaseCursor, RunState
     from revision_r1.checkpointing import CheckpointError, load_latest_valid
@@ -414,7 +416,8 @@ def test_first_run_resume_gate_requires_exact_hashed_v13_recovery(tmp_path):
     assert rejected["automatic_fresh_start_allowed"] is False
 
 
-def test_first_run_resume_gate_accepts_verified_candidate_with_protected_extra_manifests(tmp_path):
+def test_first_run_resume_gate_accepts_verified_candidate_with_protected_extra_manifests(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     from revision_r1.checkpointing import save_generation
     from revision_r1.state import PhaseCursor, RunState
     from scripts.production_workflow import inspect_first_run_resume_checkpoint
@@ -447,7 +450,8 @@ def test_first_run_resume_gate_accepts_verified_candidate_with_protected_extra_m
     assert result["selected_integrity_verified_candidate"]["generation"] == 3
 
 
-def test_first_run_resume_gate_still_rejects_wrong_identity_in_excess_manifest(tmp_path):
+def test_first_run_resume_gate_still_rejects_wrong_identity_in_excess_manifest(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     from revision_r1.checkpointing import save_generation
     from revision_r1.state import PhaseCursor, RunState
     from scripts.production_workflow import inspect_first_run_resume_checkpoint
@@ -500,6 +504,7 @@ def test_matrix_completion_registries_are_plan_scoped_and_legacy_path_is_preserv
 
 
 def test_first_run_holds_matrix_lease_before_and_during_dataset_load(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     from types import SimpleNamespace
     from revision_r1 import resources
     from revision_r1.data import DatasetBundle
@@ -1102,6 +1107,7 @@ def test_canonical_storage_session_binds_main_account_exact_folder_and_mount_pro
 
 def test_canonical_storage_account_survives_compute_account_switch_with_same_resume_identity(tmp_path, monkeypatch):
     """Runtime billing identity is not part of the persistent run/checkpoint identity."""
+    _allow_test_checkpoint_memory(monkeypatch)
     from revision_r1.checkpointing import save_generation, load_latest_valid
     from revision_r1.state import PhaseCursor, RunState
 
@@ -1154,6 +1160,7 @@ def test_canonical_storage_account_survives_compute_account_switch_with_same_res
 def test_checkpoint_publication_uses_real_serialization_verifies_shortcut_owner_and_prunes_after_api_readback(
     tmp_path, monkeypatch,
 ):
+    _allow_test_checkpoint_memory(monkeypatch)
     from revision_r1.checkpointing import mirror_checkpoint_generations, save_generation
     from revision_r1.state import PhaseCursor, RunState
 
@@ -1241,6 +1248,7 @@ def test_checkpoint_publication_uses_real_serialization_verifies_shortcut_owner_
 
 
 def test_checkpoint_publication_retries_partial_drive_copy_and_idempotent_replay(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     import errno
     import shutil
     from revision_r1 import checkpointing
@@ -1312,6 +1320,7 @@ def test_checkpoint_publication_retries_partial_drive_copy_and_idempotent_replay
 
 
 def test_checkpoint_publication_capacity_rejects_before_serialized_bytes_are_copied(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     from revision_r1.checkpointing import save_generation, mirror_checkpoint_generations
     from revision_r1.state import PhaseCursor, RunState
 
@@ -1428,7 +1437,12 @@ def test_matrix_capacity_gate_requires_only_next_run_incremental_storage_and_res
 
 
 def test_dataset_bundle_reuses_verified_local_cache_when_drive_npz_is_missing(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     import revision_r1.data as data_module
+    if not hasattr(np.lib.format, "_read_array_header"):
+        # NumPy 2.5 moved this unchanged parser; Colab pins NumPy 2.0.2.
+        from numpy.lib import _format_impl
+        monkeypatch.setattr(np.lib.format, "_read_array_header", _format_impl._read_array_header, raising=False)
 
     rng = np.random.default_rng(23)
     labels = np.arange(100, dtype=np.int64)
@@ -1942,6 +1956,7 @@ def test_drive_insufficient_quota_stops_with_reserve_preserved():
 
 
 def test_account_switch_keeps_existing_checkpoint_resume_identity(tmp_path, monkeypatch):
+    _allow_test_checkpoint_memory(monkeypatch)
     from revision_r1.checkpointing import save_generation
     from revision_r1.state import PhaseCursor, RunState
     from scripts.production_workflow import inspect_first_run_resume_checkpoint
@@ -2390,6 +2405,30 @@ def test_progress_export_counts_only_identity_bound_drive_mirror_readback_bytes(
     assert "partial failed-upload bytes" in exported["checkpoint_write_measurement_scope"]
 
 
+def test_progress_export_does_not_count_abandoned_run2_while_clean_replacement_is_pending(tmp_path):
+    plan = _production_source_plan()
+    root = tmp_path / "production-output"
+    for record, digest in ((plan["runs"][0], "a" * 64), (plan["runs"][1], "b" * 64)):
+        production_workflow._record_completed_run(
+            root, plan, record,
+            {
+                "run_id": production_workflow._run_id_for(record, synthetic=False),
+                "artifact_manifest_sha256": digest,
+            },
+            storage_measurement={"status": "MEASURED_VALIDATED_PRODUCTION_RUN"},
+        )
+
+    exported = export_production_progress(
+        plan, root, clean_replacement_run2=True,
+    )
+
+    assert exported["canonical_registry_completed_count"] == 2
+    assert exported["validated_completion_count"] == 1
+    assert exported["excluded_pending_replacement_run_keys"] == ["ember_seed42_current_only"]
+    assert exported["runs"][1]["status"] == "CLEAN_REPLACEMENT_PENDING"
+    assert exported["runs"][1]["progress_log"] is None
+
+
 def test_matrix_executor_refuses_an_existing_live_matrix_lease(tmp_path):
     from revision_r1.locking import LeaseError, RunLease
 
@@ -2489,7 +2528,10 @@ def one_torch_thread():
         torch.set_num_threads(previous)
 
 
-def test_frozen_plan_record_executes_real_run_one_and_completion_registration_is_idempotent(tmp_path, one_torch_thread):
+def test_frozen_plan_record_executes_real_run_one_and_completion_registration_is_idempotent(
+    tmp_path, one_torch_thread, monkeypatch,
+):
+    _allow_test_checkpoint_memory(monkeypatch)
     plan = _production_source_plan()
     record = plan["runs"][0]
     events = []
@@ -2528,7 +2570,10 @@ def test_frozen_plan_record_executes_real_run_one_and_completion_registration_is
         production_workflow._validate_completed_run(plan, record, _small_synthetic_bundle(), output, synthetic=True)
 
 
-def test_frozen_record_interruption_resumes_same_identity_and_does_not_register_early(tmp_path, one_torch_thread):
+def test_frozen_record_interruption_resumes_same_identity_and_does_not_register_early(
+    tmp_path, one_torch_thread, monkeypatch,
+):
+    _allow_test_checkpoint_memory(monkeypatch)
     plan = _production_source_plan()
     record = plan["runs"][0]
     root = tmp_path / "SYNTHETIC_NONREPORTABLE_TEST_ONLY"

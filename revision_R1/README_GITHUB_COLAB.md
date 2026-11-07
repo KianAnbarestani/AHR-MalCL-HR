@@ -1,6 +1,6 @@
 # GitHub-pinned Colab runner
 
-The single stable production notebook is `My Drive/ReVision/Revision_R1_Production_Colab_d6c99c94.ipynb`. It fetches exactly the full commit SHA in Cell A, checks out detached into a commit-versioned local directory, verifies package/build manifests, checkpoint compatibility, the training-source hash, and the frozen schedule, then reuses that checkout for the whole Colab session. It never fetches a branch head automatically or downloads runner code per matrix run.
+The single stable production notebook is `My Drive/ReVision/Revision_R1_Production_Colab.ipynb`. It is generated from the latest saved Drive notebook after removing temporary recovery-only cells, and pins exactly one full commit SHA in Cell A. It checks out detached into a commit-versioned local directory, verifies package/build manifests, checkpoint compatibility, the training-source hash, and the frozen schedule, then reuses that checkout for the whole Colab session. It never fetches a branch head automatically or downloads runner code per matrix run.
 
 ## Canonical storage account and authentication
 
@@ -33,6 +33,16 @@ The GitHub repository is public, so no token is currently needed. If the owner l
 Run Cells A → B → C → D. Cell A pins code and verifies the canonical storage session. Cell B verifies the Drive preflight/effective schedule and uses only the existing Drive NPZs or checksum-verified local caches; external dataset downloads are disabled. Cell C validates the frozen plan, reads the canonical completion registry, confirms Run 1 is already finalized and registered, reuses its existing storage measurement without recomputing it, checks only the next pending run's incremental capacity plus reserve, and records an immutable selected-commit/protocol binding. The full-matrix projection is informational. Cell D is read-only and reports lease/progress/checkpoint state.
 
 Cell E is a deliberate no-op for Run 1: it does not load a model, train, measure storage, register completion, or rerun finalization. Cell F is the remaining-matrix continuation; its launch switch defaults to `False`. If explicitly enabled after review, it preserves the single-worker lease, skips identity-validated completions, and resumes interrupted runs only from compatible verified checkpoints. Changing compute account does not change Drive paths or run/checkpoint identities. A live lease is never bypassed because the runtime account changed. Cell G exports lightweight results; checkpoint backup is off by default.
+
+## Proven checkpoint workflow reused
+
+The first-paper V15.5 Standard-A Colab builder (`runners/v15_5_standard_a/tools/build_colab_notebook.py`) mounted Drive once, pointed the launcher at a fixed output root, and reran the same registry-backed launcher. Its launcher (`launch_v15_5_standard_a.py`) skipped completed rows and marked interrupted/failed attempts; `v15_5_runner/checkpointing.py` wrote a temporary checkpoint then atomically replaced `checkpoint/latest.pt`. `v15_5_runner/training.py` saved after each task and restored the saved `next_task` cursor and RNG before continuing. Revision_R1 reuses those operational ideas—one predictable run namespace, atomic task-boundary recovery, and same-run resume—but retains its own checkpoint format and explicit OAuth API/local-staging backend because the Drive mount can belong to a different account. It does not restore from V15.5 checkpoint files.
+
+### Clean Run 2 launch and resume
+
+Run Cells A → B → C → D and review the storage identity, frozen schedule, Run 1 skip, and fresh lease diagnostic. In the single Cell F, change both `LAUNCH_REMAINING_MATRIX` and `ACKNOWLEDGE_NO_OTHER_WORKER` to `True`; leave `CLEAN_RESTART_RUN2 = True`. The first enabled invocation records an immutable, API-verified replacement route for `ember_seed42_current_only`, checks that its old worker is inactive, and starts that route at Task 1. Existing Run 2 output/checkpoint files are left untouched. If an abandoned ordinary-namespace Run 2 completion record exists, Cell F preserves it under `superseded_runs` and removes it only from the active completion set before launching; it is never counted as the replacement.
+
+Cell F is also the only resume action. If execution is interrupted, do not change the route or run another recovery/preparation cell: rerun Cell D, confirm no other Colab worker is active, then rerun Cell F with the same three settings. The immutable route makes it resume the same replacement namespace from the latest compatible, integrity-verified recovery point. It cannot create a second replacement. After Run 2 finalizes, the same Cell F proceeds in the frozen order through Run 100; Run 1 remains validated and skipped. Production remains off until both launch confirmations are explicitly changed.
 
 ## Frozen identities and checkpoint behavior
 

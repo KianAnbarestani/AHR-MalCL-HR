@@ -343,6 +343,10 @@ def test_npz_preflight_fails_closed_for_hash_shape_labels_and_ambiguous_keys(tmp
 def test_npz_cache_streams_compressed_members_without_decoding_full_archive(tmp_path, monkeypatch):
     import numpy.lib.npyio
     import revision_r1.resources as resources
+    if not hasattr(np.lib.format, "_read_array_header"):
+        # NumPy 2.5 moved this unchanged parser; Colab pins NumPy 2.0.2.
+        from numpy.lib import _format_impl
+        monkeypatch.setattr(np.lib.format, "_read_array_header", _format_impl._read_array_header, raising=False)
 
     # This small fixture validates streaming behavior, not the host's live RAM
     # capacity; keep it deterministic while production reserve checks remain intact.

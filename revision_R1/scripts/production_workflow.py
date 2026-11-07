@@ -2076,6 +2076,263 @@ def run_checkpoint_root(
     )
 
 
+_CLEAN_REPLACEMENT_RUN_KEY = "ember_seed42_current_only"
+
+
+def _replacement_route_path(output_root: Path, plan: dict[str, Any], run_key: str) -> Path:
+    if not _is_sha256(plan.get("plan_sha256")) or not re.fullmatch(r"[a-z0-9_]+", run_key):
+        raise ValueError("replacement route requires frozen plan/run identities")
+    return output_root / "registry" / plan["plan_sha256"] / "replacement_routes" / f"{run_key}.json"
+
+
+def _replacement_route_document(plan: dict[str, Any], record: dict[str, Any], *,
+                                output_root: Path, checkpoint_root: Path,
+                                local_checkpoint_root: Path, restart_number: int = 1) -> dict[str, Any]:
+    if (record.get("run_key") != _CLEAN_REPLACEMENT_RUN_KEY
+            or int(record.get("run_index", -1)) != 2
+            or len(plan.get("runs", [])) < 2 or plan["runs"][1] != record):
+        raise ValueError("a clean replacement namespace is defined only for frozen Run 2")
+    if restart_number != 1:
+        raise ValueError("only the one-time first replacement namespace is supported")
+    old_output = run_output_root(output_root, record)
+    old_checkpoint = run_checkpoint_root(checkpoint_root, record)
+    relative = Path("replacements") / plan["plan_sha256"][:16] / record["run_key"] / "attempt-001"
+    replacement_output = Path("runs") / relative
+    replacement_checkpoint = Path("replacements") / plan["plan_sha256"][:16] / record["run_key"] / "attempt-001"
+    replacement_progress = Path("progress") / "replacements" / plan["plan_sha256"][:16] / record["run_key"] / "attempt-001"
+    body = {
+        "schema_version": 1,
+        "kind": "one_time_clean_run_replacement",
+        "status": "ACTIVE_RESUMABLE_NAMESPACE",
+        "restart_number": restart_number,
+        "run_key": record["run_key"],
+        "run_index": int(record["run_index"]),
+        "run_id": _run_id_for(record, synthetic=False),
+        "config_sha256": record["config_sha256"],
+        "dataset_identity": record.get("dataset_identity"),
+        "plan_sha256": plan["plan_sha256"],
+        "training_source_sha256": plan["training_source_sha256"],
+        "schedule_sha256": plan["schedule_sha256"],
+        "class_order_sha256": record["class_order_sha256"],
+        "initial_task_index": 0,
+        "abandoned_namespace": {
+            "output_relative_path": old_output.relative_to(output_root).as_posix(),
+            "checkpoint_relative_path": old_checkpoint.relative_to(checkpoint_root).as_posix(),
+            "preservation": "left unchanged and excluded from completion discovery",
+        },
+        "replacement_namespace": {
+            "output_relative_path": replacement_output.as_posix(),
+            "checkpoint_relative_path": replacement_checkpoint.as_posix(),
+            "local_checkpoint_relative_path": relative.as_posix(),
+            "progress_relative_path": replacement_progress.as_posix(),
+        },
+    }
+    return {**body, "route_sha256": _sha256_json(body)}
+
+
+def _validate_replacement_route(route: Any, expected: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(route, dict):
+        raise ValueError("replacement route is not a JSON object")
+    observed_hash = route.get("route_sha256")
+    body = {key: value for key, value in route.items() if key != "route_sha256"}
+    if observed_hash != _sha256_json(body):
+        raise ValueError("replacement route integrity hash is invalid")
+    for key in (
+        "schema_version", "kind", "status", "restart_number", "run_key", "run_index",
+        "run_id", "config_sha256", "dataset_identity", "plan_sha256",
+        "training_source_sha256", "schedule_sha256", "class_order_sha256", "initial_task_index",
+        "abandoned_namespace", "replacement_namespace",
+    ):
+        if body.get(key) != expected.get(key):
+            raise ValueError(f"replacement route conflicts with the frozen Run 2 identity/namespace: {key}")
+    for value in body["replacement_namespace"].values():
+        relative = Path(value)
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise ValueError("replacement route contains an unsafe relative path")
+    return route
+
+
+def _read_replacement_route(storage_adapter, logical_route: Path, local_route: Path,
+                            expected: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    try:
+        metadata = storage_adapter.exact_file(logical_route)
+    except FileNotFoundError:
+        return None
+    if metadata is None:
+        return None
+    if metadata.get("name") != logical_route.name or not metadata.get("id"):
+        raise StorageCapacityError("replacement route Drive metadata lacks its exact file identity")
+    storage_adapter.download_file(logical_route, local_route)
+    try:
+        route = json.loads(local_route.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StorageCapacityError("canonical replacement route is unreadable; preserved") from exc
+    _validate_replacement_route(route, expected)
+    return route, metadata
+
+
+def _assert_old_run_worker_inactive(storage_adapter, output_root: Path, record: dict[str, Any],
+                                    *, acknowledge_no_other_worker: bool) -> dict[str, Any]:
+    if acknowledge_no_other_worker is not True:
+        raise RuntimeError("clean Run 2 replacement requires explicit confirmation that no other Colab worker is active")
+    old_output = run_output_root(output_root, record)
+    old_lock = old_output / ".run.lease.json"
+    logical_lock = storage_adapter.logical_path_for_local(old_lock)
+    try:
+        metadata = storage_adapter.exact_file(logical_lock)
+    except FileNotFoundError:
+        metadata = None
+    if metadata is None:
+        return {"status": "missing", "logical_path": str(logical_lock)}
+    diagnostic = output_root / "diagnostics" / "abandoned_run2_lease.json"
+    storage_adapter.download_file(logical_lock, diagnostic)
+    state = inspect_lease_readonly(diagnostic)
+    # An expired record may be retained as evidence, but this operation never
+    # mutates/reclaims the abandoned namespace. The caller's explicit session
+    # confirmation plus the owned matrix lease are required before proceeding.
+    if state.get("status") not in {"inactive", "expired"}:
+        raise RuntimeError(
+            "abandoned Run 2 lease is not safely inactive; refusing replacement: "
+            + json.dumps(state, sort_keys=True, default=str)
+        )
+    return {"status": state["status"], "logical_path": str(logical_lock),
+            "file_id": metadata.get("id"), "owner_process_visibility": state.get("owner_process_visibility")}
+
+
+def _assert_replacement_namespace_pristine(storage_adapter, output_root: Path,
+                                           checkpoint_root: Path,
+                                           local_checkpoint_root: Path,
+                                           route: dict[str, Any]) -> None:
+    replacement = route["replacement_namespace"]
+    local_paths = (
+        output_root / replacement["output_relative_path"],
+        checkpoint_root / replacement["checkpoint_relative_path"],
+        local_checkpoint_root / replacement["local_checkpoint_relative_path"],
+    )
+    for path in local_paths:
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(f"replacement Run 2 namespace is not pristine; preserved: {path}")
+    for root, relative in (
+        (output_root, replacement["output_relative_path"]),
+        (checkpoint_root, replacement["checkpoint_relative_path"]),
+    ):
+        logical_path = storage_adapter.logical_path_for_local(root / relative)
+        try:
+            storage_adapter.folder_id(logical_path, create=False)
+        except FileNotFoundError:
+            continue
+        raise FileExistsError(f"canonical replacement namespace already exists; preserved: {logical_path}")
+
+
+def resolve_matrix_run_paths(
+    plan: dict[str, Any], record: dict[str, Any], *, output_root: str | Path,
+    checkpoint_root: str | Path, local_checkpoint_root: str | Path,
+    storage_adapter, clean_restart_run2: bool = False, create_route: bool = False,
+    acknowledge_no_other_worker: bool = False, matrix_lease=None,
+) -> dict[str, Any]:
+    """Resolve ordinary paths or the immutable one-time clean Run 2 namespace.
+
+    Creation is deliberately explicit and happens only after the matrix lease
+    is held. Subsequent fresh sessions read the same API-published route.
+    """
+    output_root = Path(output_root).expanduser().resolve()
+    checkpoint_root = Path(checkpoint_root).expanduser().resolve()
+    local_checkpoint_root = Path(local_checkpoint_root).expanduser().resolve()
+    ordinary = {
+        "output": run_output_root(output_root, record),
+        "checkpoints": run_checkpoint_root(checkpoint_root, record),
+        "local_checkpoints": run_checkpoint_root(local_checkpoint_root, record),
+        "restart_status": "ORDINARY_NAMESPACE",
+        "logical_route_path": None,
+        "route_file_id": None,
+        "route": None,
+    }
+    if record.get("run_key") != _CLEAN_REPLACEMENT_RUN_KEY:
+        if create_route:
+            raise ValueError("replacement route creation was requested for a non-Run-2 record")
+        return ordinary
+    expected = _replacement_route_document(
+        plan, record, output_root=output_root, checkpoint_root=checkpoint_root,
+        local_checkpoint_root=local_checkpoint_root,
+    )
+    route_local = _replacement_route_path(output_root, plan, record["run_key"])
+    if storage_adapter is None:
+        raise StorageCapacityError("clean Run 2 routing requires canonical OAuth API storage")
+    logical_route = storage_adapter.logical_path_for_local(route_local)
+    observed = _read_replacement_route(storage_adapter, logical_route, route_local, expected)
+    if observed is not None:
+        route, metadata = observed
+        status = "CLEAN_REPLACEMENT_RESUME"
+    elif not clean_restart_run2:
+        raise RuntimeError(
+            "Run 2 has no durable clean-replacement route; enable the one-time clean Run 2 option in Cell F. "
+            "The abandoned namespace remains untouched."
+        )
+    else:
+        if not create_route:
+            _assert_replacement_namespace_pristine(
+                storage_adapter, output_root, checkpoint_root, local_checkpoint_root, expected,
+            )
+            return {
+                **ordinary,
+                "output": output_root / expected["replacement_namespace"]["output_relative_path"],
+                "checkpoints": checkpoint_root / expected["replacement_namespace"]["checkpoint_relative_path"],
+                "local_checkpoints": local_checkpoint_root / expected["replacement_namespace"]["local_checkpoint_relative_path"],
+                "restart_status": "CLEAN_REPLACEMENT_READY",
+                "logical_route_path": logical_route,
+                "route_file_id": None,
+                "route": expected,
+            }
+        registered_run2 = _read_matrix_registry(output_root, plan)["completed_runs"].get(record["run_key"])
+        if isinstance(registered_run2, dict) and registered_run2.get("execution_namespace") is not None:
+            raise ValueError(
+                "Run 2 registry names a replacement namespace but its durable route is missing; "
+                "preserving all evidence and refusing to create a second replacement"
+            )
+        expected_matrix_lock = storage_adapter.logical_path_for_local(
+            output_root / ".matrix_execution.lease.json",
+        )
+        if (not isinstance(matrix_lease, _MatrixLeaseHeartbeat)
+                or not matrix_lease.owns_canonical_lock(storage_adapter, expected_matrix_lock)):
+            raise RuntimeError("clean replacement route creation requires the acquired canonical matrix lease for this results root")
+        old_lease = _assert_old_run_worker_inactive(
+            storage_adapter, output_root, record,
+            acknowledge_no_other_worker=acknowledge_no_other_worker,
+        )
+        expected["restart_evidence"] = {
+            "explicit_no_other_colab_worker_acknowledged": True,
+            "abandoned_run_lease": old_lease,
+        }
+        body = {key: value for key, value in expected.items() if key != "route_sha256"}
+        expected = {**body, "route_sha256": _sha256_json(body)}
+        _assert_replacement_namespace_pristine(
+            storage_adapter, output_root, checkpoint_root, local_checkpoint_root, expected,
+        )
+        _atomic_json(route_local, expected)
+        published = storage_adapter.publish_file(route_local, logical_route)
+        if published.get("status") != "PASS":
+            raise StorageCapacityError("replacement route publication was not verified")
+        readback = output_root / "diagnostics" / f"replacement_route_readback_{expected['route_sha256'][:12]}.json"
+        storage_adapter.download_file(logical_route, readback)
+        if readback.read_bytes() != route_local.read_bytes():
+            raise StorageCapacityError("replacement route API read-back differs; local and Drive evidence preserved")
+        metadata = storage_adapter.exact_file(logical_route)
+        if metadata is None or metadata.get("id") != published.get("file_id"):
+            raise StorageCapacityError("replacement route exact file ID read-back mismatch")
+        route = expected
+        status = "CLEAN_REPLACEMENT_PREPARED"
+    replacement = route["replacement_namespace"]
+    return {
+        "output": output_root / replacement["output_relative_path"],
+        "checkpoints": checkpoint_root / replacement["checkpoint_relative_path"],
+        "local_checkpoints": local_checkpoint_root / replacement["local_checkpoint_relative_path"],
+        "restart_status": status,
+        "logical_route_path": logical_route,
+        "route_file_id": metadata.get("id"),
+        "route": route,
+    }
+
+
 def _utc_iso(unix_time: float | None) -> str | None:
     if unix_time is None:
         return None
@@ -3234,7 +3491,170 @@ def _read_matrix_registry(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"matrix completion registry artifact identity is malformed for {key}")
         if entry.get("storage_measurement") is not None and not isinstance(entry.get("storage_measurement"), dict):
             raise ValueError(f"matrix completion registry measurement is malformed for {key}")
+        execution_namespace = entry.get("execution_namespace")
+        if execution_namespace is not None:
+            if (not isinstance(execution_namespace, dict)
+                    or not _is_sha256(execution_namespace.get("route_sha256"))):
+                raise ValueError(f"matrix completion registry execution namespace is malformed for {key}")
+            for field in ("output_relative_path", "checkpoint_relative_path", "progress_relative_path"):
+                relative = execution_namespace.get(field)
+                if (not isinstance(relative, str) or not relative
+                        or Path(relative).is_absolute() or ".." in Path(relative).parts):
+                    raise ValueError(f"matrix completion registry has an unsafe {field} for {key}")
+    superseded = document.get("superseded_runs", {})
+    if not isinstance(superseded, dict):
+        raise ValueError("matrix completion registry superseded_runs is malformed")
+    for key, archive in superseded.items():
+        if key not in by_key or not isinstance(archive, dict):
+            raise ValueError("matrix completion registry contains a malformed superseded-run record")
+        original = archive.get("entry")
+        row = by_key[key]
+        expected_identity = {
+            "run_key": row["run_key"], "run_index": int(row["run_index"]),
+            "config_sha256": row["config_sha256"],
+            "training_source_sha256": plan["training_source_sha256"],
+            "schedule_sha256": plan["schedule_sha256"],
+            "class_order_sha256": row["class_order_sha256"],
+            "dataset_identity": row.get("dataset_identity"),
+            "run_id": _run_id_for(row, synthetic=synthetic_test_root),
+        }
+        if (archive.get("reason") != "explicit_clean_replacement_requested"
+                or not _is_sha256(archive.get("replacement_route_sha256"))
+                or not isinstance(archive.get("archived_at_utc"), str)
+                or not isinstance(original, dict)
+                or any(original.get(name) != value for name, value in expected_identity.items())
+                or not _is_sha256(original.get("artifact_manifest_sha256"))
+                or (original.get("storage_measurement") is not None
+                    and not isinstance(original.get("storage_measurement"), dict))):
+            raise ValueError(f"matrix completion registry superseded identity is malformed for {key}")
     return document
+
+
+def _archive_superseded_run2_completion(
+    storage_adapter, output_root: Path, plan: dict[str, Any], record: dict[str, Any],
+    route: dict[str, Any],
+) -> bool:
+    """Move an ordinary Run 2 registry claim out of active completions.
+
+    The old output/checkpoint files and their exact registry entry are preserved;
+    only a verified clean-replacement namespace can make Run 2 pending again.
+    """
+    if record.get("run_key") != _CLEAN_REPLACEMENT_RUN_KEY:
+        raise ValueError("only the frozen Run 2 entry can be superseded by this policy")
+    route_sha = route.get("route_sha256")
+    if not _is_sha256(route_sha):
+        raise ValueError("Run 2 completion archival requires a verified replacement route")
+    registry = _read_matrix_registry(output_root, plan)
+    entry = registry["completed_runs"].get(record["run_key"])
+    if entry is None or replacement_completion_matches_route(entry, route):
+        return False
+    if entry.get("execution_namespace") is not None:
+        raise ValueError(
+            "Run 2 has a completion claim for a different replacement namespace; "
+            "preserving it and refusing to overwrite or restart"
+        )
+    archives = registry.setdefault("superseded_runs", {})
+    previous_archive = archives.get(record["run_key"])
+    if previous_archive is not None:
+        if (previous_archive.get("entry") != entry
+                or previous_archive.get("reason") != "explicit_clean_replacement_requested"
+                or previous_archive.get("replacement_route_sha256") != route_sha):
+            raise ValueError("Run 2 superseded registry evidence conflicts with the current entry or route")
+    else:
+        archives[record["run_key"]] = {
+            "entry": entry,
+            "reason": "explicit_clean_replacement_requested",
+            "replacement_route_sha256": route_sha,
+            "archived_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+    del registry["completed_runs"][record["run_key"]]
+    registry_path = _matrix_registry_path(output_root, plan)
+    _atomic_json(registry_path, registry)
+    published = _api_publish_file(storage_adapter, registry_path)
+    if published.get("status") != "PASS":
+        raise StorageCapacityError("superseded Run 2 registry publication was not verified; no run was started")
+    evidence = matrix_registry_evidence(storage_adapter, output_root, plan)
+    if (record["run_key"] in evidence["completed_run_keys"]
+            or record["run_key"] not in evidence.get("superseded_run_keys", [])):
+        raise StorageCapacityError("Run 2 superseded registry read-back did not verify; no run was started")
+    return True
+
+
+def replacement_completion_matches_route(entry: Any, route: Any) -> bool:
+    """Return whether a Run 2 completion is bound to the verified route.
+
+    An ordinary-namespace entry is deliberately not a completion for the
+    one-time clean replacement. A registry that names a replacement without
+    its immutable route, or names a different route, is inconsistent and must
+    stop rather than be counted or silently replaced.
+    """
+    if not isinstance(entry, dict):
+        return False
+    namespace = entry.get("execution_namespace")
+    if namespace is None:
+        return False
+    if not isinstance(route, dict) or not _is_sha256(route.get("route_sha256")):
+        raise ValueError("Run 2 registry claims a replacement completion but the immutable route is unavailable")
+    replacement = route.get("replacement_namespace")
+    if not isinstance(replacement, dict):
+        raise ValueError("Run 2 replacement route has no namespace record")
+    expected = {
+        "output_relative_path": replacement.get("output_relative_path"),
+        "checkpoint_relative_path": replacement.get("checkpoint_relative_path"),
+        "progress_relative_path": replacement.get("progress_relative_path"),
+        "route_sha256": route["route_sha256"],
+    }
+    if namespace != expected:
+        raise ValueError("Run 2 completion is bound to a different replacement namespace; preserving it")
+    return True
+
+
+def registered_run_output_path(root: str | Path, record: dict[str, Any],
+                               entry: dict[str, Any] | None = None) -> Path:
+    """Resolve a registered run output without falling back from a recorded namespace."""
+    results_root = Path(root).expanduser().resolve()
+    namespace = None if not isinstance(entry, dict) else entry.get("execution_namespace")
+    if namespace is None:
+        return run_output_root(results_root, record)
+    relative = Path(namespace["output_relative_path"])
+    target = (results_root / relative).resolve()
+    if not target.is_relative_to(results_root):
+        raise ValueError("registered run output namespace escapes the results root")
+    return target
+
+
+def registered_run_checkpoint_path(root: str | Path, record: dict[str, Any],
+                                   entry: dict[str, Any] | None = None) -> Path:
+    checkpoint_root = Path(root).expanduser().resolve()
+    namespace = None if not isinstance(entry, dict) else entry.get("execution_namespace")
+    if namespace is None:
+        return run_checkpoint_root(checkpoint_root, record)
+    target = (checkpoint_root / Path(namespace["checkpoint_relative_path"])).resolve()
+    if not target.is_relative_to(checkpoint_root):
+        raise ValueError("registered run checkpoint namespace escapes the checkpoint root")
+    return target
+
+
+def registered_run_progress_path(root: str | Path, plan: dict[str, Any], record: dict[str, Any],
+                                 entry: dict[str, Any] | None = None,
+                                 replacement_route: dict[str, Any] | None = None) -> Path:
+    results_root = Path(root).expanduser().resolve()
+    namespace = None if not isinstance(entry, dict) else entry.get("execution_namespace")
+    if namespace is not None:
+        relative_progress = Path(namespace["progress_relative_path"])
+    elif replacement_route is not None:
+        replacement = replacement_route.get("replacement_namespace")
+        if not isinstance(replacement, dict):
+            raise ValueError("replacement route is missing its progress namespace")
+        relative_progress = Path(replacement.get("progress_relative_path", ""))
+    else:
+        relative_progress = Path("progress") / plan["plan_sha256"]
+    if relative_progress.is_absolute() or ".." in relative_progress.parts or not relative_progress.parts:
+        raise ValueError("registered run progress namespace is unsafe")
+    directory = results_root / relative_progress
+    if not directory.resolve().is_relative_to(results_root):
+        raise ValueError("registered run progress namespace escapes the results root")
+    return directory / f"{record['run_key']}_{record['config_sha256'][:12]}.json"
 
 
 def _validate_completed_run(
@@ -5401,6 +5821,7 @@ def finalize_completed_production_run(
 def _record_completed_run(
     root: Path, plan: dict[str, Any], record: dict[str, Any], validated: dict[str, Any],
     *, storage_measurement: dict[str, Any] | None = None,
+    execution_namespace: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     registry = _read_matrix_registry(root, plan)
     identity = {
@@ -5414,6 +5835,8 @@ def _record_completed_run(
         "artifact_manifest_sha256": validated["artifact_manifest_sha256"],
         "storage_measurement": storage_measurement,
     }
+    if execution_namespace is not None:
+        identity["execution_namespace"] = dict(execution_namespace)
     existing = registry["completed_runs"].get(record["run_key"])
     if existing is not None:
         if existing != identity:
@@ -5567,6 +5990,19 @@ class _MatrixLeaseHeartbeat:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
+    def owns_canonical_lock(self, storage_adapter, logical_lock_path: str | Path) -> bool:
+        """Prove route creation is inside this acquired API-backed matrix lease."""
+        from revision_r1.drive_storage import DriveApiLease
+
+        expected = Path(os.path.abspath(str(Path(logical_lock_path).expanduser())))
+        return (
+            isinstance(self.lease, DriveApiLease)
+            and self.lease._held is True
+            and self.lease.storage is storage_adapter
+            and self.lease.logical_path == expected
+            and not self.lost.is_set()
+        )
+
     def __enter__(self):
         self.lease.acquire()
         self._thread = threading.Thread(target=self._heartbeat_loop, name="revision-r1-matrix-lease", daemon=True)
@@ -5629,7 +6065,97 @@ def _hydrate_api_run_state(storage_adapter, root: Path, plan: dict[str, Any], re
     if include_recovery:
         logical_recovery = storage_adapter.logical_path_for_local(checkpoints / "recovery")
         _hydrate_api_folder(storage_adapter, logical_recovery, checkpoints / "recovery")
+        _hydrate_task_boundary_manifests(storage_adapter, plan, record, checkpoints)
     _rebind_staged_completion_paths(output)
+
+
+def _hydrate_task_boundary_manifests(storage_adapter, plan: dict[str, Any], record: dict[str, Any],
+                                     checkpoints: Path) -> dict[str, Any]:
+    """Stage small boundary manifests (not multi-GB payloads) to reserve generations.
+
+    A new Colab local checkpoint directory must know the durable task-boundary
+    generation floor. Payload bytes remain on canonical Drive; the runner
+    still writes and verifies each new boundary through its ordinary API path.
+    """
+    local_directory = checkpoints / "task_boundaries"
+    logical_directory = storage_adapter.logical_path_for_local(local_directory)
+    try:
+        remote_files = storage_adapter.list_files(logical_directory)
+    except FileNotFoundError:
+        return {"status": "NO_REMOTE_TASK_BOUNDARIES", "manifest_count": 0}
+    by_name: dict[str, dict[str, Any]] = {}
+    for item in remote_files:
+        name = str(item.get("name", ""))
+        if name.startswith("generation-"):
+            if name in by_name:
+                raise StorageCapacityError(f"duplicate remote task-boundary checkpoint filename; preserved: {name}")
+            by_name[name] = item
+    manifest_names = {name for name in by_name if re.fullmatch(r"generation-\d{6}\.manifest\.json", name)}
+    payload_names = {name for name in by_name if re.fullmatch(r"generation-\d{6}\.pt", name)}
+    orphan_payloads = sorted(name for name in payload_names
+                             if name.removesuffix(".pt") + ".manifest.json" not in manifest_names)
+    if orphan_payloads:
+        raise StorageCapacityError(
+            "canonical Drive has task-boundary payloads without manifests; refusing generation reuse: "
+            + ", ".join(orphan_payloads)
+        )
+    expected_identity = _expected_plan_runner_identity(plan, record)
+    local_directory.mkdir(parents=True, exist_ok=True)
+    staged = []
+    for name in sorted(manifest_names):
+        local_manifest = local_directory / name
+        storage_adapter.download_file(logical_directory / name, local_manifest)
+        try:
+            document = json.loads(local_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise StorageCapacityError(f"task-boundary manifest is unreadable; preserved: {name}") from exc
+        generation = int(name.split("-")[1].split(".")[0])
+        expected_payload = f"generation-{generation:06d}.pt"
+        payload_metadata = by_name.get(expected_payload)
+        if (not isinstance(document, dict) or document.get("generation") != generation
+                or document.get("identity") != expected_identity
+                or document.get("identity_sha256") != _sha256_json(expected_identity)
+                or document.get("kind") != "task-boundary"
+                or document.get("payload_file") != expected_payload
+                or type(document.get("payload_bytes")) is not int
+                or document["payload_bytes"] <= 0 or not _is_sha256(document.get("payload_sha256"))):
+            raise StorageCapacityError(f"remote task-boundary manifest identity/integrity metadata is invalid: {name}")
+        if not isinstance(payload_metadata, dict) or not payload_metadata.get("id"):
+            raise StorageCapacityError(
+                f"durable task-boundary payload is missing for manifest {name}; "
+                "preserving the generation and refusing to continue"
+            )
+        if (payload_metadata.get("mimeType") == DRIVE_FOLDER_MIME
+                or str(payload_metadata.get("size")) != str(document["payload_bytes"])):
+            raise StorageCapacityError(f"task-boundary payload size differs from manifest metadata: {expected_payload}")
+        staged.append({
+            "generation": generation, "manifest": name,
+            "payload_present_on_drive": payload_metadata is not None,
+            "payload_bytes": document["payload_bytes"],
+        })
+    return {"status": "MANIFESTS_STAGED_ONLY", "manifest_count": len(staged), "generations": staged}
+
+
+def _guard_no_silent_fresh_start(output: Path, checkpoints: Path, local_checkpoints: Path,
+                                 progress_file: Path) -> None:
+    """Refuse to restart an attempted run when no resumable recovery exists."""
+    recovery_manifests = list((local_checkpoints / "recovery").glob("generation-*.manifest.json"))
+    recovery_manifests += list((checkpoints / "recovery").glob("generation-*.manifest.json"))
+    if recovery_manifests:
+        return
+    roots = (output, checkpoints, local_checkpoints)
+    existing = []
+    for root in roots:
+        if root.exists():
+            existing.extend(str(path) for path in root.rglob("*") if path.is_file() or path.is_symlink())
+    if progress_file.is_file():
+        existing.append(str(progress_file))
+    if existing:
+        raise RuntimeError(
+            "run namespace contains prior output/checkpoint/progress artifacts but no recovery manifest; "
+            "refusing to initialize a fresh run. Existing evidence is preserved. "
+            f"First paths: {sorted(existing)[:8]}"
+        )
 
 
 def _hydrate_api_matrix_registry(storage_adapter, root: Path, plan: dict[str, Any]) -> None:
@@ -5717,6 +6243,10 @@ def matrix_registry_evidence(
         "registry_bytes": local_size,
         "registry_md5": local_md5,
         "completed_run_keys": completed_keys,
+        "superseded_run_keys": [
+            row["run_key"] for row in plan["runs"]
+            if row["run_key"] in registry.get("superseded_runs", {})
+        ],
     }
 
 
@@ -5869,6 +6399,12 @@ def execute_frozen_plan_record(
     storage_adapter=None,
     logical_output_root: str | Path | None = None,
     logical_checkpoint_root: str | Path | None = None,
+    run_output_path: str | Path | None = None,
+    run_checkpoint_path: str | Path | None = None,
+    run_local_checkpoint_path: str | Path | None = None,
+    progress_relative_path: str | Path | None = None,
+    execution_namespace: dict[str, Any] | None = None,
+    api_state_preloaded: bool = False,
 ) -> dict[str, Any]:
     """Execute exactly one plan record through the unmodified runner.
 
@@ -5956,15 +6492,30 @@ def execute_frozen_plan_record(
     root = Path(output_root).expanduser().resolve()
     if synthetic and (not test_only or root.name != "SYNTHETIC_NONREPORTABLE_TEST_ONLY"):
         raise ValueError("synthetic output root must be explicitly named SYNTHETIC_NONREPORTABLE_TEST_ONLY")
-    output = run_output_root(root, record, test_only=False)
-    checkpoints = run_checkpoint_root(checkpoint_root, record, test_only=False)
-    local_namespace = run_checkpoint_root(local_checkpoint_root, record, test_only=False)
+    output = (Path(run_output_path).expanduser().resolve() if run_output_path is not None
+              else run_output_root(root, record, test_only=False))
+    checkpoint_base = Path(checkpoint_root).expanduser().resolve()
+    local_base = Path(local_checkpoint_root).expanduser().resolve()
+    checkpoints = (Path(run_checkpoint_path).expanduser().resolve() if run_checkpoint_path is not None
+                   else run_checkpoint_root(checkpoint_base, record, test_only=False))
+    local_namespace = (Path(run_local_checkpoint_path).expanduser().resolve() if run_local_checkpoint_path is not None
+                       else run_checkpoint_root(local_base, record, test_only=False))
+    if (not output.is_relative_to(root) or not checkpoints.is_relative_to(checkpoint_base)
+            or not local_namespace.is_relative_to(local_base)):
+        raise ValueError("run-specific output/checkpoint paths escape their configured roots")
+    if synthetic and any(value is not None for value in (
+        run_output_path, run_checkpoint_path, run_local_checkpoint_path,
+        progress_relative_path, execution_namespace,
+    )):
+        raise ValueError("run-specific production namespaces are not accepted by the synthetic runner")
+    if api_state_preloaded and (synthetic or storage_adapter is None):
+        raise ValueError("preloaded API state is valid only for a production run with its canonical storage adapter")
     if synthetic:
         output = root / "runs" / record["run_key"] / record["training_source_sha256"][:16] / record["config_sha256"][:16]
         checkpoints = root / "checkpoints" / record["run_key"] / record["config_sha256"][:16]
         local_namespace = Path(local_checkpoint_root).expanduser().resolve() / record["run_key"] / record["config_sha256"][:16]
 
-    if storage_adapter is not None:
+    if storage_adapter is not None and not api_state_preloaded:
         _hydrate_api_run_state(storage_adapter, root, plan, record, output, checkpoints)
         # The matrix registry is the authoritative cross-session completion
         # index. Refresh it before counting or registering this run so a fresh
@@ -5996,7 +6547,22 @@ def execute_frozen_plan_record(
     drive_write_bytes = 0
     drive_write_seconds = 0.0
     drive_write_timings = {"upload_seconds": 0.0, "verification_seconds": 0.0, "pruning_seconds": 0.0}
-    progress_file = root / "progress" / plan["plan_sha256"] / f"{record['run_key']}_{record['config_sha256'][:12]}.json"
+    if progress_relative_path is None:
+        progress_directory = root / "progress" / plan["plan_sha256"]
+    else:
+        relative_progress = Path(progress_relative_path)
+        if relative_progress.is_absolute() or ".." in relative_progress.parts or not relative_progress.parts:
+            raise ValueError("progress namespace must be a safe path relative to the production results root")
+        progress_directory = root / relative_progress
+        if not progress_directory.resolve().is_relative_to(root):
+            raise ValueError("progress namespace escapes the production results root")
+    progress_file = progress_directory / f"{record['run_key']}_{record['config_sha256'][:12]}.json"
+    if storage_adapter is not None and progress_relative_path is not None:
+        try:
+            storage_adapter.download_file(storage_adapter.logical_path_for_local(progress_file), progress_file)
+        except FileNotFoundError:
+            pass
+    _guard_no_silent_fresh_start(output, checkpoints, local_namespace, progress_file)
     completion_count = len(_read_matrix_registry(root, plan)["completed_runs"])
     prior_progress = load_run_progress(progress_file, plan, record)
     prior_verified_drive_write_bytes = 0 if prior_progress is None else int(
@@ -6436,6 +7002,7 @@ def execute_frozen_plan_record(
         )
         matrix_registry, added = _record_completed_run(
             root, plan, record, validated, storage_measurement=storage_measurement,
+            execution_namespace=execution_namespace,
         )
         if storage_adapter is not None:
             _api_publish_file(storage_adapter, _matrix_registry_path(root, plan))
@@ -6460,6 +7027,7 @@ def execute_frozen_plan_record(
             "completion_count": len(matrix_registry["completed_runs"]),
             "completion_registry_added_now": added,
             "storage_measurement": storage_measurement,
+            "execution_namespace": execution_namespace,
         }
         _append_progress_jsonl(event_log_path, final_progress)
         _atomic_json(progress_file, final_progress)
@@ -6781,6 +7349,8 @@ def continue_production_matrix(
     launch_enabled: bool = False, progress_callback=None, api_factory=None,
     storage_adapter=None, logical_output_root: str | Path | None = None,
     logical_checkpoint_root: str | Path | None = None,
+    clean_restart_run2: bool = False,
+    acknowledge_no_other_worker: bool = False,
 ) -> dict[str, Any]:
     """Continue/resume records 2–100 sequentially, skipping only validated completions."""
     if launch_enabled is not True:
@@ -6810,13 +7380,26 @@ def continue_production_matrix(
         # This prevents a worker that waited for the lease from acting on
         # registry bytes staged before the preceding owner completed.
         _hydrate_api_matrix_registry(storage_adapter, root, plan)
+        first_measurement = reuse_validated_first_run_measurement(plan, first, root)
+        run2 = plan["runs"][1]
+        run2_paths = resolve_matrix_run_paths(
+            plan, run2, output_root=root, checkpoint_root=checkpoint_root,
+            local_checkpoint_root=local_checkpoint_root, storage_adapter=storage_adapter,
+            clean_restart_run2=clean_restart_run2,
+            create_route=clean_restart_run2,
+            acknowledge_no_other_worker=acknowledge_no_other_worker,
+            matrix_lease=lease,
+        )
+        if run2_paths.get("route") is not None:
+            _archive_superseded_run2_completion(
+                storage_adapter, root, plan, run2, run2_paths["route"],
+            )
         registry_evidence = matrix_registry_evidence(storage_adapter, root, plan)
         registry = _read_matrix_registry(root, plan)
         next_pending_record = next((
             row for row in plan["runs"][1:]
             if row["run_key"] not in registry["completed_runs"]
         ), None)
-        first_measurement = reuse_validated_first_run_measurement(plan, first, root)
         if progress_callback is not None:
             progress_callback({
                 "status": "MATRIX_REGISTRY_VERIFIED",
@@ -6837,8 +7420,28 @@ def continue_production_matrix(
         for record in plan["runs"][1:]:
             if lease.lost.is_set():
                 raise RuntimeError("matrix ownership heartbeat was lost; no new run was started")
-            output = run_output_root(root, record)
-            checkpoints = run_checkpoint_root(checkpoint_root, record)
+            run_paths = run2_paths if record is run2 else resolve_matrix_run_paths(
+                plan, record, output_root=root, checkpoint_root=checkpoint_root,
+                local_checkpoint_root=local_checkpoint_root, storage_adapter=storage_adapter,
+                clean_restart_run2=False, create_route=False,
+                acknowledge_no_other_worker=acknowledge_no_other_worker,
+                matrix_lease=lease,
+            )
+            output = run_paths["output"]
+            checkpoints = run_paths["checkpoints"]
+            local_run_checkpoints = run_paths["local_checkpoints"]
+            route = run_paths.get("route")
+            execution_namespace = None
+            progress_relative_path = None
+            if route is not None:
+                replacement = route["replacement_namespace"]
+                progress_relative_path = replacement["progress_relative_path"]
+                execution_namespace = {
+                    "output_relative_path": output.relative_to(root).as_posix(),
+                    "checkpoint_relative_path": checkpoints.relative_to(Path(checkpoint_root).expanduser().resolve()).as_posix(),
+                    "progress_relative_path": progress_relative_path,
+                    "route_sha256": route["route_sha256"],
+                }
             _hydrate_api_run_state(
                 storage_adapter, root, plan, record, output, checkpoints,
                 include_recovery=True,
@@ -6860,6 +7463,11 @@ def continue_production_matrix(
             if validated is not None:
                 existing_registry = _read_matrix_registry(root, plan)
                 existing_entry = existing_registry["completed_runs"].get(record["run_key"])
+                if route is not None and not replacement_completion_matches_route(existing_entry, route):
+                    raise ValueError(
+                        "Run 2 completion is not bound to the one-time clean replacement route; "
+                        "the abandoned attempt is not counted or overwritten"
+                    )
                 if (
                     not isinstance(existing_entry, dict)
                     or existing_entry.get("artifact_manifest_sha256") != validated["artifact_manifest_sha256"]
@@ -6881,6 +7489,13 @@ def continue_production_matrix(
                     })
                 continue
 
+            existing_entry = _read_matrix_registry(root, plan)["completed_runs"].get(record["run_key"])
+            if existing_entry is not None:
+                raise ValueError(
+                    f"matrix registry contains {record['run_key']} but its registered output is not valid; "
+                    "refusing to retrain or overwrite completion evidence"
+                )
+
             max_checkpoint = max(row["max_checkpoint_payload_bytes"] for row in observed_measurements)
             max_output = max(row["run_output_bytes"] for row in observed_measurements)
             latest_projection = project_storage(
@@ -6892,7 +7507,7 @@ def continue_production_matrix(
                 api_factory=api_factory, storage_adapter=storage_adapter,
                 current_run_output_path=output,
                 current_run_checkpoint_path=checkpoints,
-                current_run_local_checkpoint_path=run_checkpoint_root(local_checkpoint_root, record),
+                current_run_local_checkpoint_path=local_run_checkpoints,
                 expected_run_identity=_expected_plan_runner_identity(plan, record),
                 verified_dataset_cache_bytes=_preflight_addressed_cache_bytes(preflight, cache_root),
             )
@@ -6908,7 +7523,7 @@ def continue_production_matrix(
                 api_factory=api_factory, storage_adapter=storage_adapter,
                 current_run_output_path=output,
                 current_run_checkpoint_path=checkpoints,
-                current_run_local_checkpoint_path=run_checkpoint_root(local_checkpoint_root, record),
+                current_run_local_checkpoint_path=local_run_checkpoints,
                 expected_run_identity=_expected_runner_identity(plan, record, bundle),
                 verified_dataset_cache_bytes=max(
                     _preflight_addressed_cache_bytes(preflight, cache_root),
@@ -6928,6 +7543,12 @@ def continue_production_matrix(
                 api_factory=api_factory,
                 storage_adapter=storage_adapter, logical_output_root=logical_output_root,
                 logical_checkpoint_root=logical_checkpoint_root,
+                run_output_path=output,
+                run_checkpoint_path=checkpoints,
+                run_local_checkpoint_path=local_run_checkpoints,
+                progress_relative_path=progress_relative_path,
+                execution_namespace=execution_namespace,
+                api_state_preloaded=True,
             )
             if result.get("status") == "INTERRUPTED_RESUMABLE":
                 return {
@@ -6962,26 +7583,51 @@ def continue_production_matrix(
         }
 
 
-def export_production_progress(plan: dict[str, Any], output_root: str | Path) -> dict[str, Any]:
+def export_production_progress(
+    plan: dict[str, Any], output_root: str | Path, *,
+    replacement_routes: dict[str, dict[str, Any]] | None = None,
+    clean_replacement_run2: bool = False,
+) -> dict[str, Any]:
     """Export compact registry/log status without rescanning run artifacts."""
     validate_frozen_plan(plan, expected_source_sha256=training_source_sha256(Path(__file__).resolve().parents[1]))
     root = Path(output_root).expanduser().resolve()
     registry = _read_matrix_registry(root, plan)
-    completed = registry["completed_runs"]
+    canonical_completed = registry["completed_runs"]
+    completed = dict(canonical_completed)
+    route_overrides = replacement_routes or {}
+    excluded_replacement_keys: list[str] = []
+    if clean_replacement_run2:
+        run2 = plan["runs"][1]
+        run2_entry = canonical_completed.get(run2["run_key"])
+        if (run2_entry is not None
+                and not replacement_completion_matches_route(
+                    run2_entry, route_overrides.get(run2["run_key"]),
+                )):
+            completed.pop(run2["run_key"], None)
+            excluded_replacement_keys.append(run2["run_key"])
     rows = []
     verified_drive_checkpoint_write_bytes = 0
     progress_records_found = 0
     for record in plan["runs"]:
         entry = completed.get(record["run_key"])
-        progress_path = root / "progress" / plan["plan_sha256"] / f"{record['run_key']}_{record['config_sha256'][:12]}.json"
-        progress = load_run_progress(progress_path, plan, record)
+        excluded_pending_replacement = record["run_key"] in excluded_replacement_keys
+        progress = None if excluded_pending_replacement else load_run_progress(
+            registered_run_progress_path(
+                root, plan, record, entry,
+                replacement_route=route_overrides.get(record["run_key"]),
+            ),
+            plan, record,
+        )
         if progress is not None:
             progress_records_found += 1
             verified_drive_checkpoint_write_bytes += int(progress.get("drive_checkpoint_write_bytes_total", 0))
         rows.append({
             "run_index": record["run_index"], "run_key": record["run_key"],
             "dataset": record["dataset"], "seed": record["seed"], "arm": record["arm"],
-            "status": "REGISTERED_COMPLETION" if entry else "NOT_VALIDATED",
+            "status": (
+                "CLEAN_REPLACEMENT_PENDING" if excluded_pending_replacement
+                else "REGISTERED_COMPLETION" if entry else "NOT_VALIDATED"
+            ),
             "validation_freshness": "VALIDATED_AT_REGISTRATION_NOT_RECHECKED" if entry else None,
             "config_sha256": record["config_sha256"],
             "training_source_sha256": plan["training_source_sha256"],
@@ -6999,7 +7645,10 @@ def export_production_progress(plan: dict[str, Any], output_root: str | Path) ->
         "artifact_validation_freshness": "completions were validated when registered; this export does not rehash run outputs",
         "plan_sha256": plan["plan_sha256"], "schedule_sha256": plan["schedule_sha256"],
         "training_source_sha256": plan["training_source_sha256"],
-        "run_count": EXPECTED_RUN_COUNT, "validated_completion_count": len(completed),
+        "run_count": EXPECTED_RUN_COUNT,
+        "canonical_registry_completed_count": len(canonical_completed),
+        "validated_completion_count": len(completed),
+        "excluded_pending_replacement_run_keys": excluded_replacement_keys,
         "progress_records_found": progress_records_found,
         "successfully_mirrored_checkpoint_payload_and_manifest_bytes": verified_drive_checkpoint_write_bytes,
         "checkpoint_write_measurement_scope": "successful mirror read-back payload+manifest bytes; partial failed-upload bytes, Drive metadata overhead, result archives, and progress JSON writes excluded",
@@ -7135,18 +7784,25 @@ def export_lightweight_results(
     validate_frozen_plan(plan, expected_source_sha256=training_source_sha256(Path(__file__).resolve().parents[1]))
     root = Path(output_root).expanduser().resolve()
     target_candidate = Path(output_zip).expanduser().resolve()
-    if any(target_candidate.is_relative_to(run_output_root(root, row)) for row in plan["runs"]):
+    planned_run_roots = [run_output_root(root, row) for row in plan["runs"]]
+    if any(target_candidate.is_relative_to(run_root) for run_root in planned_run_roots):
         raise ValueError("lightweight results archive must be outside every run-artifact namespace")
     registry = _read_matrix_registry(root, plan)
     if not registry["completed_runs"]:
         raise ValueError("no identity-registered production results are available for lightweight export")
+    registered_roots = [
+        registered_run_output_path(root, row, registry["completed_runs"].get(row["run_key"]))
+        for row in plan["runs"] if row["run_key"] in registry["completed_runs"]
+    ]
+    if any(target_candidate.is_relative_to(run_root) for run_root in registered_roots):
+        raise ValueError("lightweight results archive must be outside every registered run-artifact namespace")
     run_roots = []
     raw_bytes = 0
     for record in plan["runs"]:
         entry = registry["completed_runs"].get(record["run_key"])
         if entry is None:
             continue
-        run_root = run_output_root(root, record)
+        run_root = registered_run_output_path(root, record, entry)
         _validate_registered_completion_for_export(plan, record, run_root, entry)
         run_roots.append(run_root)
         for source in run_root.rglob("*"):

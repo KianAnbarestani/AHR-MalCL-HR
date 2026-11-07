@@ -17,6 +17,7 @@ from revision_r1.compatibility import runtime_source_sha256, verify_checkpoint_c
 
 
 EXPECTED_TRAINING_SOURCE_SHA256 = "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
+SAVED_DRIVE_NOTEBOOK_SHA256 = "a220a08e0ff472876a479eaded35cd7946bc5d0c35ec245a7203c33a42ff3f9d"
 GITHUB_REPOSITORY = "KianAnbarestani/AHR-MalCL-HR"
 GITHUB_TOKEN_SECRET_NAME = "GITHUB_READ_TOKEN"
 PACKAGE_MANIFEST_NAME = "PACKAGE_MANIFEST.json"
@@ -40,6 +41,7 @@ EXTRA_FILES = (
     "requirements-colab.txt",
     "requirements-test.txt",
     "checkpoint_compatibility.json",
+    "notebooks/Revision_R1_Production_Colab_Saved_Drive_Base.ipynb",
 )
 SCRIPT_FILES = (
     "scripts/build_checkpoint_compatibility.py",
@@ -1163,61 +1165,35 @@ print("No lock was changed or recovered. No training was launched.")
 
 
 def _github_matrix_cell() -> str:
-    return '''# Cell F — continue/resume Runs 2–100; disabled until explicit review and enablement.
+    return '''# Cell F — one launch/resume path for the 99 pending frozen-plan records.
 import json, time
-from scripts.production_workflow import inspect_lease_readonly, continue_production_matrix, run_output_root
+from pathlib import Path
+from scripts.production_workflow import inspect_lease_readonly, continue_production_matrix
 
+# Leave False for setup and review. For the first launch, set both switches True.
+# CLEAN_RESTART_RUN2 stays True: its API-published one-time route makes reruns resume
+# the same clean Run 2 namespace instead of making another attempt.
 LAUNCH_REMAINING_MATRIX = False
 ACKNOWLEDGE_NO_OTHER_COLAB_WORKER = False
-PREPARE_EXISTING_CHECKPOINT_ONLY = False
-COMPLETE_EXPORTED_RUN_ONLY = False
-COMPLETION_RUN_KEY = "ember_seed42_current_only"
-if COMPLETE_EXPORTED_RUN_ONLY:
-    if LAUNCH_REMAINING_MATRIX or PREPARE_EXISTING_CHECKPOINT_ONLY:
-        raise RuntimeError("Completion-only recovery must not enable checkpoint preparation or training.")
-    from scripts.production_recovery import complete_exported_run
-    _completion_record = next(row for row in RUNTIME_PLAN["runs"] if row["run_key"] == COMPLETION_RUN_KEY)
-    COMPLETION_REPORT = complete_exported_run(
-        RUNTIME_PLAN, _completion_record, output_root=OUTPUT_ROOT,
-        checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
-        storage_adapter=STORAGE_ADAPTER, api_factory=STORAGE_API_FACTORY,
-        acknowledge_no_other_worker=ACKNOWLEDGE_NO_OTHER_COLAB_WORKER,
-    )
-    print("No training launched. Rerun C and D before separately enabling the remaining matrix.")
-elif PREPARE_EXISTING_CHECKPOINT_ONLY:
-    if LAUNCH_REMAINING_MATRIX:
-        raise RuntimeError("Preparation and training are separate steps; leave launch False for preparation.")
-    from scripts.production_recovery import prepare_pending_checkpoint_publication
-    if NEXT_PENDING_RECORD is None:
-        raise RuntimeError("No pending record; finalized runs must not be prepared again.")
-    PUBLICATION_PREPARATION = prepare_pending_checkpoint_publication(
-        RUNTIME_PLAN, NEXT_PENDING_RECORD, output_root=OUTPUT_ROOT,
-        checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
-        storage_adapter=STORAGE_ADAPTER, api_factory=STORAGE_API_FACTORY,
-        acknowledge_no_other_worker=ACKNOWLEDGE_NO_OTHER_COLAB_WORKER,
-        progress_callback=live_progress,
-    )
-    print(json.dumps(PUBLICATION_PREPARATION, indent=2, sort_keys=True))
-    print("NO TRAINING: review verified generation/paths, rerun D, then separately enable F.")
-elif not LAUNCH_REMAINING_MATRIX:
-    print("NOT_LAUNCHED: matrix switch is False. No production work occurred.")
+CLEAN_RESTART_RUN2 = True
+
+if not LAUNCH_REMAINING_MATRIX:
+    print("NOT_LAUNCHED: set LAUNCH_REMAINING_MATRIX and ACKNOWLEDGE_NO_OTHER_COLAB_WORKER to True after reviewing Cell D.")
+    print("Run 1 remains finalized/skipped; no production work occurred.")
 else:
     if ACKNOWLEDGE_NO_OTHER_COLAB_WORKER is not True:
-        raise RuntimeError("Blocked: review Colab Manage Sessions and explicitly confirm no other worker.")
+        raise RuntimeError("Blocked: inspect Colab Manage Sessions and explicitly confirm no other worker is active.")
     if not Path(LEASE_DIAGNOSTIC_PATH).is_file() or time.time() - Path(LEASE_DIAGNOSTIC_PATH).stat().st_mtime > 1800:
-        raise RuntimeError("Blocked: rerun Cell D and review a fresh lease diagnostic first.")
+        raise RuntimeError("Blocked: run Cell D and review its fresh read-only diagnostic first.")
     _matrix_lock_local = OUTPUT_ROOT / ".matrix_execution.lease.json"
     STORAGE_ADAPTER.download_file(LOGICAL_OUTPUT_ROOT / _matrix_lock_local.name, _matrix_lock_local)
     _matrix_lease_now = inspect_lease_readonly(_matrix_lock_local)
-    _blocking_statuses = {"live", "malformed", "unreadable", "expired_but_owner_process_may_be_alive"}
-    if _matrix_lease_now["status"] in _blocking_statuses:
+    if _matrix_lease_now["status"] in {"live", "malformed", "unreadable", "expired_but_owner_process_may_be_alive"}:
         raise RuntimeError("Blocked by matrix lease state: " + json.dumps(_matrix_lease_now, sort_keys=True))
 
     def _matrix_progress(_event):
         if _event.get("stage") == "matrix_registry_verified":
-            print("Matrix registry verified · Run 1 skipped · Next:", _event["next_pending_run_key"])
-            if globals().get("DEBUG_LOGGING", False):
-                print("CELL_F_CANONICAL_COMPLETION_REGISTRY:", json.dumps(_event["matrix_registry_evidence"], sort_keys=True))
+            print("Run 1 verified and skipped · first pending:", _event["next_pending_run_key"], flush=True)
         live_progress(_event)
 
     MATRIX_RESULT = continue_production_matrix(
@@ -1232,11 +1208,12 @@ else:
         storage_adapter=STORAGE_ADAPTER,
         logical_output_root=LOGICAL_OUTPUT_ROOT,
         logical_checkpoint_root=LOGICAL_CHECKPOINT_ROOT,
+        clean_restart_run2=CLEAN_RESTART_RUN2,
+        acknowledge_no_other_worker=ACKNOWLEDGE_NO_OTHER_COLAB_WORKER,
     )
-    print("Matrix status:", MATRIX_RESULT.get("status"))
-    if globals().get("DEBUG_LOGGING", False):
-        print("CELL_F_REGISTRY_EVIDENCE_AT_START:", json.dumps(MATRIX_RESULT.get("matrix_registry_evidence_at_start"), sort_keys=True))
-        print(json.dumps(MATRIX_RESULT, sort_keys=True, indent=2, default=str))
+    print("Matrix status:", MATRIX_RESULT.get("status"), "· registered:", MATRIX_RESULT.get("validated_completion_count"), "/ 100", flush=True)
+    if MATRIX_RESULT.get("status") == "INTERRUPTED_RESUMABLE":
+        print("Run interrupted safely. Re-run Cell D, then rerun this same Cell F; the replacement route/checkpoint will resume.", flush=True)
 '''
 
 
@@ -1320,23 +1297,296 @@ print("Full checkpoint archive: NOT_REQUESTED. No historical checkpoint was chan
 def notebook_document(commit_sha: str) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
         raise ValueError("the stable Colab notebook requires a lowercase full 40-character Git commit SHA")
-    document = zip_notebook_document("0" * 64)
-    document["cells"][0]["source"] = (
-        "# revision_R1 production — GitHub-pinned runner\n\n"
-        "Cells A–G use one explicitly selected full Git commit per Colab session. Cell A fetches it once and checks out detached into a commit-versioned local directory, then verifies both manifests, the compatible training-core hash, and frozen schedule.\n\n"
-        "Drive data and durable files use Drive API v3 with the dedicated user-OAuth refresh token from Colab Secrets for the canonical main account. Drive v2, built from those exact same credentials, is used only for lease ETag/If-Match compare-and-swap because v3 no longer exposes file ETags. Cell A verifies both API identities and runs a live stale-write rejection probe before any run; missing ETags or a stale update not returning HTTP 412 keeps production blocked. It never uses `google.auth.default()` for storage. Cell B fetches the canonical preflight JSON, effective schedule, matching manifest, recovery reference, and uncached datasets by verified Drive file IDs into local staging. Verified mmap caches are reused. Cells A through C require no DriveFS mount. Every durable output, checkpoint, progress record, manifest, registry, lease, journal, and export remains staged locally and written through the verified main-account Drive v3 API.\n\n"
-        "Before Cell A, complete the one-time OAuth setup in `README_GITHUB_COLAB.md` and add `REVISION_R1_STORAGE_OAUTH_CLIENT_ID`, `REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET`, and `REVISION_R1_STORAGE_REFRESH_TOKEN` to Colab Secrets with notebook access enabled. Never put secret values in notebook code or output.\n\n"
-        "The repository is currently public, so no GitHub token is required. If private later, use the fine-grained read-only Colab Secret `GITHUB_READ_TOKEN` (Contents: Read-only, restricted to this repo; enable notebook access). Never paste credentials into cells or outputs.\n\n"
-        "Run A → B → C → D. D does not change run state or locks; it writes its diagnostic report through the canonical API. B reads Drive datasets or checksum-verified local caches only; external downloads are disabled. Run 1 is already finalized/registered and is reused without remeasurement; E is a no-op. F remains disabled by default."
-    ).splitlines(keepends=True)
-    document["cells"][1]["source"] = _github_setup_cell(commit_sha).splitlines(keepends=True)
-    document["cells"][2]["source"] = _github_data_cell().splitlines(keepends=True)
-    document["cells"][3]["source"] = _github_readiness_cell().splitlines(keepends=True)
-    document["cells"][4]["source"] = _github_diagnostic_cell().splitlines(keepends=True)
-    document["cells"][5]["source"] = _github_completed_run_guard_cell().splitlines(keepends=True)
+    template_path = Path(__file__).resolve().parents[1] / "notebooks" / "Revision_R1_Production_Colab_Saved_Drive_Base.ipynb"
+    document = json.loads(template_path.read_text(encoding="utf-8"))
+    if len(document.get("cells", [])) != 8:
+        raise ValueError("saved user-edited notebook template must contain the opening cell and Cells A–G")
+    saved_drive_sha256 = document.get("metadata", {}).get("revision_r1_saved_drive_source_sha256")
+    if saved_drive_sha256 != SAVED_DRIVE_NOTEBOOK_SHA256:
+        raise ValueError("notebook template is not derived from the verified saved Drive notebook")
+    template_sources = "\n".join(
+        "".join(cell.get("source", [])) for cell in document.get("cells", [])
+    )
+    if "COMPLETE_EXPORTED_RUN_ONLY" in template_sources or "_r1_helpers" in template_sources:
+        raise ValueError("temporary recovery-only cells/patches must not be included in the production notebook template")
+
+    def replace_once(source: str, old: str, new: str, description: str) -> str:
+        if source.count(old) != 1:
+            raise ValueError(f"saved user notebook {description} changed; refusing a partial/stale rewrite")
+        return source.replace(old, new, 1)
+
+    for cell in document["cells"][1:]:
+        if cell.get("cell_type") == "code":
+            cell["execution_count"] = None
+            cell["outputs"] = []
+
+    markdown = "".join(document["cells"][0].get("source", []))
+    markdown = markdown.replace(
+        "F remains disabled by default.",
+        "Cell F is the only launch/resume path and remains disabled by default. On its first enabled launch it records one clean Run 2 replacement route; later notebook sessions resume that same route. The abandoned Run 2 namespace remains preserved and is never counted.",
+    )
+    document["cells"][0]["source"] = markdown.splitlines(keepends=True)
+
+    setup = "".join(document["cells"][1].get("source", []))
+    setup, count = re.subn(
+        r'PINNED_GIT_COMMIT\s*=\s*"[0-9a-f]{40}"',
+        f'PINNED_GIT_COMMIT = "{commit_sha}"', setup, count=1,
+    )
+    if count != 1:
+        raise ValueError("saved notebook Cell A does not contain exactly one supported full-commit pin")
+    document["cells"][1]["source"] = setup.splitlines(keepends=True)
+
+    readiness = "".join(document["cells"][3].get("source", []))
+    import_anchor = "reuse_validated_first_run_measurement, run_checkpoint_root, run_output_root,"
+    if readiness.count(import_anchor) != 1:
+        raise ValueError("saved Cell C import contract changed; refusing to lose user path edits")
+    readiness = readiness.replace(
+        import_anchor,
+        import_anchor + "\n    resolve_matrix_run_paths, replacement_completion_matches_route,",
+        1,
+    )
+    pending_line = 'NEXT_PENDING_RECORD = next((row for row in RUNTIME_PLAN["runs"][1:] if row["run_key"] not in COMPLETED_RUN_KEYS), None)'
+    if pending_line not in readiness:
+        raise ValueError("saved Cell C no longer exposes the frozen next-pending-record assignment")
+    readiness = readiness.replace(pending_line, '''RUN2_RECORD = RUNTIME_PLAN["runs"][1]
+RUN2_ENTRY = MATRIX_REGISTRY["completed_runs"].get(RUN2_RECORD["run_key"])
+RUN2_PATH_CANDIDATE = resolve_matrix_run_paths(
+    RUNTIME_PLAN, RUN2_RECORD, output_root=OUTPUT_ROOT,
+    checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
+    storage_adapter=STORAGE_ADAPTER, clean_restart_run2=True, create_route=False,
+    acknowledge_no_other_worker=False,
+)
+if RUN2_ENTRY is not None and not replacement_completion_matches_route(
+    RUN2_ENTRY, RUN2_PATH_CANDIDATE.get("route"),
+):
+    COMPLETED_RUN_KEYS.discard(RUN2_RECORD["run_key"])
+print("CELL_C_EFFECTIVE_RUN2_DISPOSITION:", json.dumps({
+    "registry_entry_exists": RUN2_ENTRY is not None,
+    "effective_completed": RUN2_RECORD["run_key"] in COMPLETED_RUN_KEYS,
+    "replacement_namespace_status": RUN2_PATH_CANDIDATE["restart_status"],
+    "note": "ordinary abandoned Run 2 evidence is preserved but excluded until the clean replacement is finalized",
+}, sort_keys=True))
+NEXT_PENDING_RECORD = next((row for row in RUNTIME_PLAN["runs"][1:] if row["run_key"] not in COMPLETED_RUN_KEYS), None)
+NEXT_RUN_PATHS = None if NEXT_PENDING_RECORD is None else resolve_matrix_run_paths(
+    RUNTIME_PLAN, NEXT_PENDING_RECORD, output_root=OUTPUT_ROOT,
+    checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
+    storage_adapter=STORAGE_ADAPTER, clean_restart_run2=True, create_route=False,
+    acknowledge_no_other_worker=False,
+)''', 1)
+    path_replacements = (
+        ("NEXT_OUTPUT = run_output_root(OUTPUT_ROOT, NEXT_PENDING_RECORD)",
+         'NEXT_OUTPUT = NEXT_RUN_PATHS["output"]'),
+        ("NEXT_CHECKPOINT = run_checkpoint_root(CHECKPOINT_ROOT, NEXT_PENDING_RECORD)",
+         'NEXT_CHECKPOINT = NEXT_RUN_PATHS["checkpoints"]'),
+        ("NEXT_LOCAL_CHECKPOINT = run_checkpoint_root(LOCAL_CHECKPOINT_ROOT, NEXT_PENDING_RECORD)",
+         'NEXT_LOCAL_CHECKPOINT = NEXT_RUN_PATHS["local_checkpoints"]'),
+    )
+    if any(readiness.count(old) != 1 for old, _new in path_replacements):
+        raise ValueError("saved Cell C run-path assignments changed; refusing to keep abandoned Run 2 paths")
+    for old, new in path_replacements:
+        readiness = readiness.replace(old, new, 1)
+    document["cells"][3]["source"] = readiness.splitlines(keepends=True)
+
+    diagnostic = "".join(document["cells"][4].get("source", []))
+    diagnostic = replace_once(
+        diagnostic,
+        "    run_checkpoint_root,\n    run_output_root,\n)",
+        "    run_checkpoint_root,\n    run_output_root,\n    resolve_matrix_run_paths, replacement_completion_matches_route,\n    _hydrate_api_matrix_registry, _read_matrix_registry,\n)",
+        "Cell D import contract",
+    )
+    diagnostic = replace_once(
+        diagnostic,
+        "MATRIX_LEASE_LOCAL = OUTPUT_ROOT / \".matrix_execution.lease.json\"",
+        '''# Refresh the registry from canonical API state before identifying the next run.
+_hydrate_api_matrix_registry(STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN)
+MATRIX_REGISTRY = _read_matrix_registry(OUTPUT_ROOT, RUNTIME_PLAN)
+COMPLETED_RUN_KEYS = set(MATRIX_REGISTRY["completed_runs"])
+RUN2_RECORD = RUNTIME_PLAN["runs"][1]
+RUN2_ENTRY = MATRIX_REGISTRY["completed_runs"].get(RUN2_RECORD["run_key"])
+RUN2_PATH_CANDIDATE = resolve_matrix_run_paths(
+    RUNTIME_PLAN, RUN2_RECORD, output_root=OUTPUT_ROOT,
+    checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
+    storage_adapter=STORAGE_ADAPTER, clean_restart_run2=True, create_route=False,
+    acknowledge_no_other_worker=False,
+)
+if RUN2_ENTRY is not None and not replacement_completion_matches_route(
+    RUN2_ENTRY, RUN2_PATH_CANDIDATE.get("route"),
+):
+    COMPLETED_RUN_KEYS.discard(RUN2_RECORD["run_key"])
+RUN2_REGISTRY_DISPOSITION = (
+    "CLEAN_REPLACEMENT_ALREADY_REGISTERED"
+    if RUN2_ENTRY is not None and RUN2_RECORD["run_key"] in COMPLETED_RUN_KEYS
+    else "ABANDONED_ENTRY_EXCLUDED_FROM_ACTIVE_COMPLETIONS"
+    if RUN2_ENTRY is not None
+    else "NO_RUN2_COMPLETION_ENTRY"
+)
+NEXT_PENDING_RECORD = next((row for row in RUNTIME_PLAN["runs"][1:]
+                            if row["run_key"] not in COMPLETED_RUN_KEYS), None)
+NEXT_RUN_PATHS = None if NEXT_PENDING_RECORD is None else resolve_matrix_run_paths(
+    RUNTIME_PLAN, NEXT_PENDING_RECORD, output_root=OUTPUT_ROOT,
+    checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
+    storage_adapter=STORAGE_ADAPTER, clean_restart_run2=True, create_route=False,
+    acknowledge_no_other_worker=False,
+)
+
+MATRIX_LEASE_LOCAL = OUTPUT_ROOT / ".matrix_execution.lease.json"''',
+        "Cell D registry/lease block",
+    )
+    diagnostic = replace_once(
+        diagnostic,
+        "_next_output_local = run_output_root(OUTPUT_ROOT, NEXT_PENDING_RECORD)",
+        '_next_output_local = NEXT_RUN_PATHS["output"]',
+        "Cell D next-output path",
+    )
+    diagnostic = replace_once(
+        diagnostic,
+        '''    _progress_dir = OUTPUT_ROOT / "progress" / RUNTIME_PLAN["plan_sha256"]
+    _progress_logical = LOGICAL_OUTPUT_ROOT / "progress" / RUNTIME_PLAN["plan_sha256"]''',
+        '''    _next_progress_relative = (
+        NEXT_RUN_PATHS["route"]["replacement_namespace"]["progress_relative_path"]
+        if NEXT_RUN_PATHS.get("route") is not None
+        else str(Path("progress") / RUNTIME_PLAN["plan_sha256"])
+    )
+    _progress_dir = OUTPUT_ROOT / _next_progress_relative
+    _progress_logical = LOGICAL_OUTPUT_ROOT / _next_progress_relative''',
+        "Cell D progress path",
+    )
+    diagnostic = replace_once(
+        diagnostic,
+        "_checkpoint_local = run_checkpoint_root(CHECKPOINT_ROOT, NEXT_PENDING_RECORD) / \"recovery\"",
+        '_checkpoint_local = NEXT_RUN_PATHS["checkpoints"] / "recovery"',
+        "Cell D checkpoint path",
+    )
+    diagnostic = replace_once(
+        diagnostic,
+        '    "next_pending_run": None if NEXT_PENDING_RECORD is None else NEXT_PENDING_RECORD["run_key"],',
+        '''    "next_pending_run": None if NEXT_PENDING_RECORD is None else NEXT_PENDING_RECORD["run_key"],
+    "next_run_namespace": None if NEXT_RUN_PATHS is None else {
+        "status": NEXT_RUN_PATHS["restart_status"],
+        "output": str(NEXT_RUN_PATHS["output"]),
+        "checkpoints": str(NEXT_RUN_PATHS["checkpoints"]),
+        "route_file_id": NEXT_RUN_PATHS.get("route_file_id"),
+    },''',
+        "Cell D namespace evidence",
+    )
+    diagnostic = replace_once(
+        diagnostic,
+        '    "next_pending_run": None if NEXT_PENDING_RECORD is None else NEXT_PENDING_RECORD["run_key"],',
+        '    "next_pending_run": None if NEXT_PENDING_RECORD is None else NEXT_PENDING_RECORD["run_key"],\n    "run2_registry_disposition": RUN2_REGISTRY_DISPOSITION,',
+        "Cell D Run 2 registry disposition",
+    )
+    document["cells"][4]["source"] = diagnostic.splitlines(keepends=True)
+
     document["cells"][6]["source"] = _github_matrix_cell().splitlines(keepends=True)
-    document["cells"][7]["source"] = _github_export_cell().splitlines(keepends=True)
-    document["cells"] = document["cells"][:8]  # opening markdown, then A–G; no Run 1 finalizer.
+
+    export = "".join(document["cells"][7].get("source", []))
+    export = replace_once(
+        export,
+        "from scripts.production_workflow import export_production_progress",
+        "from scripts.production_workflow import (\n    export_production_progress, registered_run_output_path,\n    registered_run_checkpoint_path, resolve_matrix_run_paths,\n    replacement_completion_matches_route, _hydrate_api_matrix_registry, _read_matrix_registry,\n)",
+        "Cell G workflow imports",
+    )
+    export = replace_once(
+        export,
+        "EXPORT_CHECKPOINT_BACKUP = False",
+        '''EXPORT_CHECKPOINT_BACKUP = False
+_hydrate_api_matrix_registry(STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN)
+MATRIX_REGISTRY = _read_matrix_registry(OUTPUT_ROOT, RUNTIME_PLAN)
+_run2 = RUNTIME_PLAN["runs"][1]
+_run2_entry = MATRIX_REGISTRY["completed_runs"].get(_run2["run_key"])
+RUN2_REPLACEMENT_ROUTE = None
+_run2_paths = resolve_matrix_run_paths(
+    RUNTIME_PLAN, _run2, output_root=OUTPUT_ROOT,
+    checkpoint_root=CHECKPOINT_ROOT, local_checkpoint_root=LOCAL_CHECKPOINT_ROOT,
+    storage_adapter=STORAGE_ADAPTER, clean_restart_run2=True,
+    create_route=False, acknowledge_no_other_worker=False,
+)
+if _run2_paths["restart_status"] == "CLEAN_REPLACEMENT_RESUME":
+    RUN2_REPLACEMENT_ROUTE = _run2_paths["route"]
+    if _run2_entry is not None:
+        replacement_completion_matches_route(_run2_entry, RUN2_REPLACEMENT_ROUTE)
+    _run2_progress_relative = RUN2_REPLACEMENT_ROUTE["replacement_namespace"]["progress_relative_path"]
+    _run2_progress_logical = LOGICAL_OUTPUT_ROOT / _run2_progress_relative
+    _run2_progress_local = OUTPUT_ROOT / _run2_progress_relative
+    try:
+        _run2_progress_children = STORAGE_ADAPTER.list_files(_run2_progress_logical)
+    except FileNotFoundError:
+        _run2_progress_children = []
+    for _item in _run2_progress_children:
+        if _item.get("mimeType") != "application/vnd.google-apps.folder":
+            STORAGE_ADAPTER.download_file(
+                _run2_progress_logical / _item["name"],
+                _run2_progress_local / _item["name"],
+            )''',
+        "Cell G route progress staging",
+    )
+    export = replace_once(
+        export,
+        'if _run2_paths["restart_status"] == "CLEAN_REPLACEMENT_RESUME":',
+        '''EFFECTIVE_COMPLETED_RUN_KEYS = set(MATRIX_REGISTRY["completed_runs"])
+if _run2_entry is not None and not replacement_completion_matches_route(
+    _run2_entry, _run2_paths.get("route"),
+):
+    EFFECTIVE_COMPLETED_RUN_KEYS.discard(_run2["run_key"])
+if _run2_paths["restart_status"] == "CLEAN_REPLACEMENT_RESUME":''',
+        "Cell G effective completion set",
+    )
+    export = replace_once(
+        export,
+        "run_output_root(OUTPUT_ROOT, _row).relative_to(OUTPUT_ROOT)",
+        'registered_run_output_path(OUTPUT_ROOT, _row, MATRIX_REGISTRY["completed_runs"].get(_row["run_key"])).relative_to(OUTPUT_ROOT)',
+        "Cell G output path",
+    )
+    export = replace_once(
+        export,
+        "PROGRESS_REPORT = export_production_progress(RUNTIME_PLAN, OUTPUT_ROOT)",
+        '''PROGRESS_REPORT = export_production_progress(
+    RUNTIME_PLAN, OUTPUT_ROOT,
+    replacement_routes=(
+        {_run2["run_key"]: RUN2_REPLACEMENT_ROUTE}
+        if RUN2_REPLACEMENT_ROUTE is not None else {}
+    ),
+    clean_replacement_run2=True,
+)''',
+        "Cell G progress export call",
+    )
+    export = replace_once(
+        export,
+        '_completed = [row for row in RUNTIME_PLAN["runs"] if row["run_key"] in MATRIX_REGISTRY["completed_runs"]]',
+        '_completed = [row for row in RUNTIME_PLAN["runs"] if row["run_key"] in EFFECTIVE_COMPLETED_RUN_KEYS]',
+        "Cell G effective completed outputs",
+    )
+    export = replace_once(
+        export,
+        "    from scripts.production_workflow import _hydrate_api_run_state, run_checkpoint_root\n    for _row in _completed:\n        _hydrate_api_run_state(\n            STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN, _row,\n            run_output_root(OUTPUT_ROOT, _row), run_checkpoint_root(CHECKPOINT_ROOT, _row),\n            include_recovery=False,\n        )",
+        '''    from scripts.production_workflow import _hydrate_api_run_state
+    for _row in _completed:
+        _entry = MATRIX_REGISTRY["completed_runs"][_row["run_key"]]
+        _hydrate_api_run_state(
+            STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN, _row,
+            registered_run_output_path(OUTPUT_ROOT, _row, _entry),
+            registered_run_checkpoint_path(CHECKPOINT_ROOT, _row, _entry),
+            include_recovery=False,
+        )''',
+        "Cell G registered output/checkpoint hydration",
+    )
+    document["cells"][7]["source"] = export.splitlines(keepends=True)
+
+    # The saved user notebook explicitly keeps Cell D diagnostics local-only.
+    # Enforce that contract so future builds cannot reintroduce a Drive write.
+    final_diagnostic = "".join(document["cells"][4].get("source", []))
+    if "STORAGE_ADAPTER.publish_file(" in final_diagnostic:
+        raise ValueError("Cell D is a local-only read-only diagnostic and must not publish its report")
+    if "live_progress = ColabProgressDisplay(" not in final_diagnostic:
+        raise ValueError("saved Cell D progress display edit was not preserved")
+    final_export = "".join(document["cells"][7].get("source", []))
+    for required in (
+        "registered_run_output_path", "registered_run_checkpoint_path",
+        "_hydrate_api_matrix_registry(STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN)",
+    ):
+        if required not in final_export:
+            raise ValueError(f"Cell G is missing route-aware registered export handling: {required}")
+
     for index, cell in enumerate(document["cells"]):
         if cell.get("cell_type") == "code":
             compile("".join(cell["source"]), f"notebook-cell-{index}", "exec")

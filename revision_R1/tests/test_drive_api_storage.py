@@ -609,8 +609,16 @@ def _seed_preflight_drive(service, *, schedule_bytes=None):
 def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount(tmp_path, monkeypatch, capsys):
     from scripts.build_github_handoff import notebook_document
     from scripts import production_workflow
+    from revision_r1 import resources
     from revision_r1.config import DATASETS
     import io
+    # This test validates generated Cell B against tiny synthetic NPZs. Keep
+    # the production RAM guard intact, but give fixture streaming deterministic
+    # headroom on constrained CI/agent hosts.
+    real_memory_snapshot = resources.read_host_memory_snapshot
+    monkeypatch.setattr(resources, "read_host_memory_snapshot", lambda: {
+        **real_memory_snapshot(), "effective_available_bytes": 8 << 30,
+    })
     if not hasattr(np.lib.format, "_read_array_header"):
         # Local NumPy 2.5 moved this unchanged parser; Colab pins NumPy 2.0.2.
         from numpy.lib import _format_impl
@@ -1841,6 +1849,7 @@ def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_on
         "registry_bytes": len(original_registry_bytes),
         "registry_md5": hashlib.md5(original_registry_bytes, usedforsecurity=False).hexdigest(),
         "completed_run_keys": ["ember_seed42_full_hybrid"],
+        "superseded_run_keys": [],
     }
 
     # Cell E is deliberately read-only and reuses the evidence from Cell C.
@@ -1867,6 +1876,9 @@ def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_on
     class TrackedLease:
         def __init__(self, *_args, **_kwargs):
             self.lost = threading.Event()
+
+        def owns_canonical_lock(self, _storage_adapter, _logical_lock_path):
+            return lease_state["acquired"] and not self.lost.is_set()
 
         def __enter__(self):
             lease_state["acquired"] = True
@@ -1941,6 +1953,8 @@ def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_on
         logical_checkpoint_root=Path(
             "/drive/MyDrive/ReVision/revision_R1/production/checkpoints"
         ),
+        clean_restart_run2=True,
+        acknowledge_no_other_worker=True,
     )
 
     assert result["status"] == "INTERRUPTED_RESUMABLE"
@@ -1974,3 +1988,503 @@ def test_fresh_api_registry_staging_reuses_run_one_and_cell_f_selects_current_on
         logical_registry, tmp_path / "registry-readback.json",
     )["bytes"] == len(original_registry_bytes)
     assert json.loads((tmp_path / "registry-readback.json").read_bytes()) == registry_document
+
+
+def test_clean_run2_replacement_route_is_durable_and_keeps_abandoned_namespace(tmp_path, monkeypatch):
+    from revision_r1.config import DATASETS
+    from scripts import production_workflow as workflow
+
+    package_root = Path(__file__).resolve().parents[1]
+    dataset_references = {
+        name: {
+            "train_md5": values["train"]["md5"],
+            "test_md5": values["test"]["md5"],
+            "feature_dim": values["feature_dim"],
+            "train_shape": list(values["train"]["shape"]),
+            "test_shape": list(values["test"]["shape"]),
+        }
+        for name, values in DATASETS.items()
+    }
+    plan = workflow.build_frozen_run_plan(
+        package_root,
+        schedule_sha256="7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
+        dataset_references=dataset_references,
+    )
+    run2 = plan["runs"][1]
+    assert run2["run_key"] == "ember_seed42_current_only"
+    logical_results = Path("/drive/MyDrive/ReVision/revision_R1/production/results")
+    logical_checkpoints = Path("/drive/MyDrive/ReVision/revision_R1/production/checkpoints")
+    service = _FakeService()
+
+    old_stage = tmp_path / "old-stage"
+    old_results = old_stage / "production" / "results"
+    old_checkpoints = old_stage / "production" / "checkpoints"
+    old_storage = _storage(service, old_stage, monkeypatch)
+    old_storage.bind_root(logical_results, old_results)
+    old_storage.bind_root(logical_checkpoints, old_checkpoints)
+    abandoned_output = workflow.run_output_root(old_results, run2)
+    abandoned_checkpoint = workflow.run_checkpoint_root(old_checkpoints, run2)
+    abandoned_output.mkdir(parents=True)
+    abandoned_checkpoint.mkdir(parents=True)
+    old_output_file = abandoned_output / "abandoned-attempt-marker.txt"
+    old_output_file.write_text("preserve abandoned Run 2", encoding="utf-8")
+    old_output_remote = old_storage.publish_file(
+        old_output_file, old_storage.logical_path_for_local(old_output_file),
+    )
+    old_checkpoint_file = abandoned_checkpoint / "abandoned-checkpoint-marker.txt"
+    old_checkpoint_file.write_text("preserve abandoned checkpoint", encoding="utf-8")
+    old_checkpoint_remote = old_storage.publish_file(
+        old_checkpoint_file, old_storage.logical_path_for_local(old_checkpoint_file),
+    )
+
+    stage = tmp_path / "clean-stage"
+    results = stage / "production" / "results"
+    checkpoints = stage / "production" / "checkpoints"
+    local_checkpoints = tmp_path / "local-checkpoints"
+    storage = _storage(service, stage, monkeypatch)
+    storage.bind_root(logical_results, results)
+    storage.bind_root(logical_checkpoints, checkpoints)
+
+    matrix_lock_local = results / ".matrix_execution.lease.json"
+    storage.ensure_lease_record(logical_results / matrix_lock_local.name)
+    unacquired_lease = workflow._MatrixLeaseHeartbeat(
+        matrix_lock_local, storage_adapter=storage,
+    )
+    with pytest.raises(RuntimeError, match="requires the acquired canonical matrix lease"):
+        workflow.resolve_matrix_run_paths(
+            plan, run2, output_root=results, checkpoint_root=checkpoints,
+            local_checkpoint_root=local_checkpoints, storage_adapter=storage,
+            clean_restart_run2=True, create_route=True,
+            acknowledge_no_other_worker=True, matrix_lease=unacquired_lease,
+        )
+    live_matrix_lease = workflow._MatrixLeaseHeartbeat(
+        matrix_lock_local, storage_adapter=storage,
+    )
+    with live_matrix_lease:
+        first = workflow.resolve_matrix_run_paths(
+            plan, run2, output_root=results, checkpoint_root=checkpoints,
+            local_checkpoint_root=local_checkpoints, storage_adapter=storage,
+            clean_restart_run2=True, create_route=True,
+            acknowledge_no_other_worker=True, matrix_lease=live_matrix_lease,
+        )
+    assert first["restart_status"] == "CLEAN_REPLACEMENT_PREPARED"
+    assert first["output"] != workflow.run_output_root(results, run2)
+    assert first["checkpoints"] != workflow.run_checkpoint_root(checkpoints, run2)
+    assert first["local_checkpoints"] != workflow.run_checkpoint_root(local_checkpoints, run2)
+    assert not first["output"].exists()
+    assert not first["checkpoints"].exists()
+    route_remote = storage.exact_file(first["logical_route_path"])
+    assert route_remote is not None
+    route_id = route_remote["id"]
+
+    # A fresh Colab stage discovers the durable route and cannot fall back to
+    # the abandoned namespace or create a second replacement attempt.
+    fresh_stage = tmp_path / "fresh-stage"
+    fresh_results = fresh_stage / "production" / "results"
+    fresh_checkpoints = fresh_stage / "production" / "checkpoints"
+    fresh_local = tmp_path / "fresh-local-checkpoints"
+    fresh_storage = _storage(service, fresh_stage, monkeypatch)
+    fresh_storage.bind_root(logical_results, fresh_results)
+    fresh_storage.bind_root(logical_checkpoints, fresh_checkpoints)
+    resumed = workflow.resolve_matrix_run_paths(
+        plan, run2, output_root=fresh_results, checkpoint_root=fresh_checkpoints,
+        local_checkpoint_root=fresh_local, storage_adapter=fresh_storage,
+        clean_restart_run2=True, create_route=False,
+        acknowledge_no_other_worker=True,
+    )
+    assert resumed["restart_status"] == "CLEAN_REPLACEMENT_RESUME"
+    assert resumed["output"] == first["output"].__class__(fresh_results / first["output"].relative_to(results))
+    assert resumed["checkpoints"] == fresh_checkpoints / first["checkpoints"].relative_to(checkpoints)
+    assert resumed["route_file_id"] == route_id
+    assert storage.exact_file(first["logical_route_path"])["id"] == route_id
+    assert storage.download_file(
+        old_storage.logical_path_for_local(old_output_file), tmp_path / "old-output-readback.txt",
+    )["file_id"] == old_output_remote["file_id"]
+    assert storage.download_file(
+        old_storage.logical_path_for_local(old_checkpoint_file), tmp_path / "old-checkpoint-readback.txt",
+    )["file_id"] == old_checkpoint_remote["file_id"]
+    assert old_output_file.read_text(encoding="utf-8") == "preserve abandoned Run 2"
+    assert old_checkpoint_file.read_text(encoding="utf-8") == "preserve abandoned checkpoint"
+
+
+def test_task_boundary_manifest_staging_reserves_generation_without_payload_download(tmp_path, monkeypatch):
+    from revision_r1.config import DATASETS
+    from scripts import production_workflow as workflow
+
+    package_root = Path(__file__).resolve().parents[1]
+    dataset_references = {
+        name: {
+            "train_md5": values["train"]["md5"], "test_md5": values["test"]["md5"],
+            "feature_dim": values["feature_dim"], "train_shape": list(values["train"]["shape"]),
+            "test_shape": list(values["test"]["shape"]),
+        }
+        for name, values in DATASETS.items()
+    }
+    plan = workflow.build_frozen_run_plan(
+        package_root, schedule_sha256="7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
+        dataset_references=dataset_references,
+    )
+    record = plan["runs"][1]
+    record["dataset_identity"] = {
+        "namespace": "PRODUCTION", "dataset": record["dataset"],
+        "train_md5": record["dataset_reference"]["train_md5"],
+        "test_md5": record["dataset_reference"]["test_md5"],
+        "train_sha256": "1" * 64, "test_sha256": "2" * 64,
+    }
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    logical_checkpoints = Path("/drive/MyDrive/ReVision/revision_R1/production/checkpoints")
+    stage = tmp_path / "stage"
+    checkpoints = stage / "production" / "checkpoints"
+    service = _FakeService()
+    storage = _storage(service, stage, monkeypatch)
+    storage.bind_root(logical_checkpoints, checkpoints)
+    logical_boundaries = logical_checkpoints / workflow.run_checkpoint_root(checkpoints, record).relative_to(checkpoints) / "task_boundaries"
+    storage.folder_id(logical_boundaries, create=True)
+
+    payload = tmp_path / "generation-000001.pt"
+    payload.write_bytes(b"opaque checkpoint payload")
+    storage.publish_file(payload, logical_boundaries / payload.name)
+    manifest = {
+        "schema_version": 1, "generation": 1, "kind": "task-boundary",
+        "identity": identity, "identity_sha256": workflow._sha256_json(identity),
+        "payload_file": payload.name, "payload_bytes": payload.stat().st_size,
+        "payload_sha256": hashlib.sha256(payload.read_bytes()).hexdigest(),
+    }
+    local_manifest_source = tmp_path / "generation-000001.manifest.json"
+    local_manifest_source.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    storage.publish_file(local_manifest_source, logical_boundaries / local_manifest_source.name)
+
+    run_checkpoint = workflow.run_checkpoint_root(checkpoints, record)
+    evidence = workflow._hydrate_task_boundary_manifests(storage, plan, record, run_checkpoint)
+    staged_dir = run_checkpoint / "task_boundaries"
+    assert evidence["status"] == "MANIFESTS_STAGED_ONLY"
+    assert evidence["generations"] == [{
+        "generation": 1, "manifest": "generation-000001.manifest.json",
+        "payload_present_on_drive": True, "payload_bytes": payload.stat().st_size,
+    }]
+    assert (staged_dir / "generation-000001.manifest.json").is_file()
+    assert not (staged_dir / "generation-000001.pt").exists()
+
+    payload_metadata = storage.exact_file(logical_boundaries / payload.name)
+    assert payload_metadata is not None
+    service.records.pop(payload_metadata["id"])
+    with pytest.raises(workflow.StorageCapacityError, match="durable task-boundary payload is missing"):
+        workflow._hydrate_task_boundary_manifests(storage, plan, record, run_checkpoint)
+
+    orphan = tmp_path / "generation-000002.pt"
+    orphan.write_bytes(b"unfinished publication")
+    storage.publish_file(orphan, logical_boundaries / orphan.name)
+    with pytest.raises(workflow.StorageCapacityError, match="payloads without manifests"):
+        workflow._hydrate_task_boundary_manifests(storage, plan, record, run_checkpoint)
+
+
+def test_matrix_path_clean_run2_interrupt_resume_finalize_and_order_through_run100(tmp_path, monkeypatch):
+    """Exercise the real matrix entry point/control flow with a simulated executor and API Drive."""
+    import threading
+    from revision_r1.config import DATASETS
+    from scripts import production_workflow as workflow
+
+    package_root = Path(__file__).resolve().parents[1]
+    references = {
+        name: {
+            "train_md5": values["train"]["md5"], "test_md5": values["test"]["md5"],
+            "feature_dim": values["feature_dim"], "train_shape": list(values["train"]["shape"]),
+            "test_shape": list(values["test"]["shape"]),
+        }
+        for name, values in DATASETS.items()
+    }
+    plan = workflow.build_frozen_run_plan(
+        package_root, schedule_sha256="7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
+        dataset_references=references,
+    )
+    for row in plan["runs"]:
+        row["dataset_identity"] = {
+            "namespace": "PRODUCTION", "dataset": row["dataset"],
+            "train_md5": row["dataset_reference"]["train_md5"],
+            "test_md5": row["dataset_reference"]["test_md5"],
+            "train_sha256": hashlib.sha256(f"{row['dataset']}-train".encode()).hexdigest(),
+            "test_sha256": hashlib.sha256(f"{row['dataset']}-test".encode()).hexdigest(),
+        }
+    workflow._refresh_plan_hash(plan)
+    first, run2 = plan["runs"][:2]
+    logical_results = Path("/drive/MyDrive/ReVision/revision_R1/production/results")
+    logical_checkpoints = Path("/drive/MyDrive/ReVision/revision_R1/production/checkpoints")
+    service = _FakeService()
+
+    def bind_stage(name):
+        stage = tmp_path / name
+        results = stage / "production" / "results"
+        checkpoints = stage / "production" / "checkpoints"
+        local_checkpoints = stage / "local-checkpoints"
+        storage = _storage(service, stage, monkeypatch)
+        storage.bind_root(logical_results, results)
+        storage.bind_root(logical_checkpoints, checkpoints)
+        return storage, stage, results, checkpoints, local_checkpoints
+
+    storage1, _stage1, results1, checkpoints1, local1 = bind_stage("session-one")
+    # Preserve abandoned Run 2 evidence; the clean route must neither reuse nor
+    # overwrite these ordinary-namespace files.
+    abandoned_output = workflow.run_output_root(results1, run2)
+    abandoned_checkpoint = workflow.run_checkpoint_root(checkpoints1, run2)
+    abandoned_output.mkdir(parents=True)
+    abandoned_checkpoint.mkdir(parents=True)
+    abandoned_marker = abandoned_output / "abandoned-attempt.txt"
+    abandoned_marker.write_text("preserve", encoding="utf-8")
+    abandoned_remote = storage1.publish_file(
+        abandoned_marker, storage1.logical_path_for_local(abandoned_marker),
+    )
+    abandoned_checkpoint_marker = abandoned_checkpoint / "abandoned-checkpoint.txt"
+    abandoned_checkpoint_marker.write_text("preserve checkpoint", encoding="utf-8")
+    checkpoint_remote = storage1.publish_file(
+        abandoned_checkpoint_marker,
+        storage1.logical_path_for_local(abandoned_checkpoint_marker),
+    )
+
+    first_measurement = {
+        "status": "MEASURED_VALIDATED_PRODUCTION_RUN", "run_key": first["run_key"],
+        "run_id": workflow._run_id_for(first, synthetic=False),
+        "max_checkpoint_payload_bytes": 1024, "run_output_bytes": 4096,
+    }
+    first_validation = {
+        "run_id": workflow._run_id_for(first, synthetic=False),
+        "artifact_manifest_sha256": "a" * 64,
+    }
+    _first_registry, added = workflow._record_completed_run(
+        results1, plan, first, first_validation, storage_measurement=first_measurement,
+    )
+    assert added is True
+    first_registry_path = workflow._matrix_registry_path(results1, plan)
+    storage1.publish_file(first_registry_path, storage1.logical_path_for_local(first_registry_path))
+    abandoned_measurement = {
+        "status": "MEASURED_VALIDATED_PRODUCTION_RUN", "run_key": run2["run_key"],
+        "run_id": workflow._run_id_for(run2, synthetic=False),
+        "max_checkpoint_payload_bytes": 2048, "run_output_bytes": 8192,
+    }
+    _abandoned_registry, old_entry_added = workflow._record_completed_run(
+        results1, plan, run2,
+        {
+            "run_id": workflow._run_id_for(run2, synthetic=False),
+            "artifact_manifest_sha256": "b" * 64,
+        },
+        storage_measurement=abandoned_measurement,
+    )
+    assert old_entry_added is True
+    storage1.publish_file(first_registry_path, storage1.logical_path_for_local(first_registry_path))
+
+    class TrackedLease:
+        def __init__(self, *_args, **_kwargs):
+            self.lost = threading.Event()
+            self.acquired = False
+
+        def owns_canonical_lock(self, _adapter, _path):
+            return self.acquired and not self.lost.is_set()
+
+        def __enter__(self):
+            self.acquired = True
+            return self
+
+        def __exit__(self, *_args):
+            self.acquired = False
+            return False
+
+    monkeypatch.setattr(workflow, "_require_canonical_storage_api_factory", lambda _factory: None)
+    monkeypatch.setattr(workflow, "validate_runtime_bound_plan", lambda value, *_a, **_k: value)
+    monkeypatch.setattr(workflow, "_MatrixLeaseHeartbeat", TrackedLease)
+    monkeypatch.setattr(storage1, "ensure_lease_record", lambda _path: {"status": "EXISTING_EXACT_ID"})
+    monkeypatch.setattr(workflow, "reuse_validated_first_run_measurement", lambda *_a: first_measurement)
+    monkeypatch.setattr(workflow, "project_storage", lambda *_a, **_k: {"drive": {
+        "matrix_peak_with_reserve_bytes": 1, "next_run_peak_with_reserve_bytes": 1,
+        "next_run_required_without_reserve_bytes": 1,
+    }})
+    monkeypatch.setattr(workflow, "inspect_production_capacity", lambda *_a, **_k: {
+        "production_measurements_validated": True,
+    })
+    monkeypatch.setattr(workflow, "require_run_capacity", lambda *_a, **_k: None)
+    monkeypatch.setattr(workflow, "_preflight_addressed_cache_bytes", lambda *_a, **_k: 0)
+    monkeypatch.setattr(workflow, "_bundle_cache_bytes", lambda *_a, **_k: 0)
+    monkeypatch.setattr(workflow, "_SequentialDatasetBundleCache", lambda _loader: type(
+        "Cache", (), {"get": lambda _self, _dataset: object()},
+    )())
+
+    def runner_identity(_plan, record, _bundle=None, *, synthetic=False):
+        assert synthetic is False
+        return {
+            "runner_version": "revision_R1.0.2", "config_sha256": record["config_sha256"],
+            "dataset": record["dataset_identity"], "code_sha256": plan["training_source_sha256"],
+            "schedule_sha256": plan["schedule_sha256"], "execution_scope": "production",
+            "run_id": workflow._run_id_for(record, synthetic=False),
+        }
+
+    monkeypatch.setattr(workflow, "_expected_plan_runner_identity", runner_identity)
+    monkeypatch.setattr(workflow, "_expected_runner_identity", runner_identity)
+    current_results = {"path": results1}
+
+    def validate_completed(_plan, record, _bundle, _output, *, synthetic):
+        assert synthetic is False
+        entry = workflow._read_matrix_registry(current_results["path"], plan)["completed_runs"].get(record["run_key"])
+        if entry is None:
+            raise FileNotFoundError(record["run_key"])
+        return {"run_id": entry["run_id"], "artifact_manifest_sha256": entry["artifact_manifest_sha256"]}
+
+    monkeypatch.setattr(workflow, "_validate_completed_run", validate_completed)
+    executor_calls = []
+    route_evidence = {}
+
+    def publish_checkpoint_file(storage, local_source, remote_path):
+        local_source.parent.mkdir(parents=True, exist_ok=True)
+        if not local_source.exists():
+            local_source.write_bytes(b"fixture checkpoint payload")
+        result = storage.publish_file(local_source, remote_path)
+        assert result["status"] == "PASS"
+        return result
+
+    def fake_execute(_plan, record, _bundle, **kwargs):
+        executor_calls.append(record["run_key"])
+        output = Path(kwargs["run_output_path"])
+        checkpoint = Path(kwargs["run_checkpoint_path"])
+        local_checkpoint = Path(kwargs["run_local_checkpoint_path"])
+        assert kwargs["api_state_preloaded"] is True
+        if record["run_key"] == run2["run_key"] and executor_calls.count(run2["run_key"]) == 1:
+            assert output != workflow.run_output_root(results1, run2)
+            assert not output.exists()
+            assert not checkpoint.exists()
+            # Simulate the real runner's Task 1 boundary and resumable state
+            # publication through the same API adapter and independent roots.
+            identity = runner_identity(plan, record)
+            boundary_root = checkpoint / "task_boundaries"
+            boundary_payload = local_checkpoint / "task_boundaries" / "generation-000001.pt"
+            boundary_payload.parent.mkdir(parents=True, exist_ok=True)
+            boundary_payload.write_bytes(b"durable-task-1-boundary")
+            boundary_logical = storage1.logical_path_for_local(boundary_root)
+            publish_checkpoint_file(storage1, boundary_payload, boundary_logical / boundary_payload.name)
+            boundary_manifest = {
+                "schema_version": 1, "generation": 1, "kind": "task-boundary",
+                "identity": identity, "identity_sha256": workflow._sha256_json(identity),
+                "payload_file": boundary_payload.name, "payload_bytes": boundary_payload.stat().st_size,
+                "payload_sha256": hashlib.sha256(boundary_payload.read_bytes()).hexdigest(),
+            }
+            boundary_manifest_path = local_checkpoint / "task_boundaries" / "generation-000001.manifest.json"
+            boundary_manifest_path.write_text(json.dumps(boundary_manifest, sort_keys=True), encoding="utf-8")
+            storage1.publish_file(boundary_manifest_path, boundary_logical / boundary_manifest_path.name)
+
+            recovery_payload = local_checkpoint / "recovery" / "generation-000001.pt"
+            recovery_payload.parent.mkdir(parents=True, exist_ok=True)
+            recovery_payload.write_bytes(b"valid-resume-state-after-task-1")
+            recovery_logical = storage1.logical_path_for_local(checkpoint / "recovery")
+            publish_checkpoint_file(storage1, recovery_payload, recovery_logical / recovery_payload.name)
+            recovery_manifest = {
+                **boundary_manifest, "kind": "recovery", "payload_file": recovery_payload.name,
+                "payload_bytes": recovery_payload.stat().st_size,
+                "payload_sha256": hashlib.sha256(recovery_payload.read_bytes()).hexdigest(),
+            }
+            recovery_manifest_path = local_checkpoint / "recovery" / "generation-000001.manifest.json"
+            recovery_manifest_path.write_text(json.dumps(recovery_manifest, sort_keys=True), encoding="utf-8")
+            storage1.publish_file(recovery_manifest_path, recovery_logical / recovery_manifest_path.name)
+            progress = {
+                "plan_sha256": plan["plan_sha256"], "schedule_sha256": plan["schedule_sha256"],
+                "training_source_sha256": plan["training_source_sha256"], "run_key": record["run_key"],
+                "run_index": record["run_index"], "config_sha256": record["config_sha256"],
+                "status": "INTERRUPTED_RESUMABLE", "drive_checkpoint_write_bytes_total": 0,
+                "drive_checkpoint_write_bytes_this_attempt": 0,
+            }
+            progress_relative = kwargs["progress_relative_path"]
+            progress_path = results1 / progress_relative / (
+                f"{record['run_key']}_{record['config_sha256'][:12]}.json"
+            )
+            progress_path.parent.mkdir(parents=True, exist_ok=True)
+            progress_path.write_text(json.dumps(progress, sort_keys=True), encoding="utf-8")
+            storage1.publish_file(progress_path, logical_results / progress_relative / progress_path.name)
+            route_evidence.update(
+                output=output, checkpoint=checkpoint, local_checkpoint=local_checkpoint,
+                route_sha256=kwargs["execution_namespace"]["route_sha256"],
+                progress_relative=progress_relative,
+            )
+            return {"status": "INTERRUPTED_RESUMABLE", "cursor": {"task": 1, "phase": "classifier"}}
+
+        if record["run_key"] == run2["run_key"]:
+            assert output.relative_to(results2) == route_evidence["output"].relative_to(results1)
+            assert checkpoint.relative_to(checkpoints2) == route_evidence["checkpoint"].relative_to(checkpoints1)
+            assert kwargs["execution_namespace"]["route_sha256"] == route_evidence["route_sha256"]
+            assert (checkpoint / "recovery" / "generation-000001.pt").is_file()
+            assert (checkpoint / "task_boundaries" / "generation-000001.manifest.json").is_file()
+            assert not (checkpoint / "task_boundaries" / "generation-000001.pt").exists()
+
+        artifact_sha = hashlib.sha256(f"simulated-artifact-{record['run_key']}".encode()).hexdigest()
+        measurement = {
+            "status": "MEASURED_VALIDATED_PRODUCTION_RUN", "run_key": record["run_key"],
+            "run_id": workflow._run_id_for(record, synthetic=False),
+            "max_checkpoint_payload_bytes": 1024, "run_output_bytes": 4096,
+        }
+        validated = {
+            "run_id": workflow._run_id_for(record, synthetic=False),
+            "artifact_manifest_sha256": artifact_sha,
+        }
+        _registry, was_added = workflow._record_completed_run(
+            results2, plan, record, validated, storage_measurement=measurement,
+            execution_namespace=kwargs.get("execution_namespace"),
+        )
+        assert was_added is True
+        registry_path = workflow._matrix_registry_path(results2, plan)
+        storage2.publish_file(registry_path, storage2.logical_path_for_local(registry_path))
+        return {"status": "COMPLETED_VALIDATED", "storage_measurement": measurement}
+
+    monkeypatch.setattr(workflow, "execute_frozen_plan_record", fake_execute)
+    monkeypatch.setattr(storage1, "ensure_lease_record", lambda _path: {"status": "EXISTING_EXACT_ID"})
+
+    common = dict(
+        plan=plan, preflight={}, schedule_path=tmp_path / "schedule.csv",
+        schedule_manifest_path=tmp_path / "schedule.manifest.json", data_roots={},
+        cache_root=tmp_path / "cache", launch_enabled=True,
+        api_factory=lambda: service, logical_output_root=logical_results,
+        logical_checkpoint_root=logical_checkpoints, clean_restart_run2=True,
+        acknowledge_no_other_worker=True,
+    )
+    interrupted = workflow.continue_production_matrix(
+        **common, output_root=results1, checkpoint_root=checkpoints1,
+        local_checkpoint_root=local1, storage_adapter=storage1,
+    )
+    assert interrupted["status"] == "INTERRUPTED_RESUMABLE"
+    assert interrupted["interrupted_run"] == run2["run_key"]
+    assert interrupted["run_index"] == 2
+    assert executor_calls == [run2["run_key"]]
+    registry_after_route = workflow._read_matrix_registry(results1, plan)
+    assert run2["run_key"] not in registry_after_route["completed_runs"]
+    superseded = registry_after_route["superseded_runs"][run2["run_key"]]
+    assert superseded["entry"]["artifact_manifest_sha256"] == "b" * 64
+    assert superseded["reason"] == "explicit_clean_replacement_requested"
+
+    storage2, _stage2, results2, checkpoints2, local2 = bind_stage("session-two-fresh")
+    current_results["path"] = results2
+    monkeypatch.setattr(storage2, "ensure_lease_record", lambda _path: {"status": "EXISTING_EXACT_ID"})
+    resumed_and_completed = workflow.continue_production_matrix(
+        **common, output_root=results2, checkpoint_root=checkpoints2,
+        local_checkpoint_root=local2, storage_adapter=storage2,
+    )
+    assert resumed_and_completed["status"] == "ALL_100_RUNS_VALIDATED"
+    assert resumed_and_completed["validated_completion_count"] == 100
+    assert executor_calls == [run2["run_key"], run2["run_key"], *[row["run_key"] for row in plan["runs"][2:]]]
+    assert route_evidence["output"] != abandoned_output
+    assert storage2.exact_file(logical_results / route_evidence["progress_relative"] / (
+        f"{run2['run_key']}_{run2['config_sha256'][:12]}.json"
+    )) is not None
+    assert storage2.download_file(
+        logical_results / abandoned_marker.relative_to(results1), tmp_path / "abandoned-readback.txt",
+    )["file_id"] == abandoned_remote["file_id"]
+    assert storage2.download_file(
+        logical_checkpoints / abandoned_checkpoint_marker.relative_to(checkpoints1),
+        tmp_path / "abandoned-checkpoint-readback.txt",
+    )["file_id"] == checkpoint_remote["file_id"]
+
+    # A third empty local stage proves frozen-order completion discovery is
+    # durable across sessions and does not invoke an executor again.
+    storage3, _stage3, results3, checkpoints3, local3 = bind_stage("session-three-empty")
+    current_results["path"] = results3
+    monkeypatch.setattr(storage3, "ensure_lease_record", lambda _path: {"status": "EXISTING_EXACT_ID"})
+    calls_before = list(executor_calls)
+    all_registered = workflow.continue_production_matrix(
+        **common, output_root=results3, checkpoint_root=checkpoints3,
+        local_checkpoint_root=local3, storage_adapter=storage3,
+    )
+    assert all_registered["status"] == "ALL_100_RUNS_VALIDATED"
+    assert all_registered["skipped_identity_validated"] == 99
+    assert executor_calls == calls_before

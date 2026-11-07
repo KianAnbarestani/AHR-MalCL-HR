@@ -560,26 +560,20 @@ def test_storage_probe_uses_content_proof_not_positive_quota(tmp_path, quota):
     assert evidence["new_file_owner"] == workflow.CANONICAL_STORAGE_ACCOUNT_EMAIL
 
 
-def test_actual_notebook_completion_only_cell_uses_existing_exports(tmp_path, monkeypatch, capsys):
+def test_actual_notebook_matrix_cell_is_disabled_by_default(capsys):
     import ast
     from scripts.build_github_handoff import _github_matrix_cell
-    setup, args = _failed_exports(tmp_path, monkeypatch)
-    plan, _record, root, ckpt, adapter, service, _output, _registry = setup
     tree = ast.parse(_github_matrix_cell())
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
-            if node.targets[0].id in {"COMPLETE_EXPORTED_RUN_ONLY", "ACKNOWLEDGE_NO_OTHER_COLAB_WORKER"}:
-                node.value = ast.Constant(True)
-    namespace = {"RUNTIME_PLAN": plan, "OUTPUT_ROOT": root, "CHECKPOINT_ROOT": ckpt,
-        "LOCAL_CHECKPOINT_ROOT": tmp_path / "local", "STORAGE_ADAPTER": adapter,
-        "STORAGE_API_FACTORY": lambda: service}
-    exec(compile(ast.fix_missing_locations(tree), "distributed-Cell-F-completion-only", "exec"), namespace)
+    namespace = {}
+    exec(compile(tree, "distributed-Cell-F-default", "exec"), namespace)
     assert namespace["LAUNCH_REMAINING_MATRIX"] is False
-    assert namespace["COMPLETION_REPORT"]["next_pending_run"] == "ember_seed42_anchor_only"
+    assert namespace["ACKNOWLEDGE_NO_OTHER_COLAB_WORKER"] is False
+    assert namespace["CLEAN_RESTART_RUN2"] is True
     lines = capsys.readouterr().out.splitlines()
-    for expected in ("Training complete: 11/11 tasks", "Publishing artifacts:", "Verifying artifacts:",
-                     "Registering completion:", "Run 2 finalized", "Next pending run: ember_seed42_anchor_only"):
-        assert any(line.startswith(expected) for line in lines)
+    assert any(line.startswith("NOT_LAUNCHED:") for line in lines)
+    assert any("Run 1 remains finalized/skipped" in line for line in lines)
+    assert not any(line.startswith(("Training complete:", "Publishing artifacts:", "Matrix status:"))
+                   for line in lines)
 
 
 @pytest.mark.parametrize("name", ["selection_records.jsonl", "resource_metrics.json", "artifact_manifest.json", "checkpoint"])
