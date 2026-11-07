@@ -18,6 +18,7 @@ from revision_r1.drive_storage import (
     DriveStorageError,
     verify_conditional_update_support,
 )
+from scripts import production_workflow as workflow
 
 
 OWNER = "kian.anb777@gmail.com"
@@ -364,6 +365,52 @@ def test_missing_md5_readback_rejects_same_size_corruption(tmp_path, monkeypatch
     local.write_bytes(b"yes")
     with pytest.raises(DriveStorageError, match="SHA-256 mismatch"):
         storage.publish_file(local, "/drive/MyDrive/ReVision/results/artifact.jsonl")
+
+
+def test_streamed_remote_sha256_verification_checks_exact_drive_object(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    class _FakeMediaIoBaseDownload:
+        def __init__(self, sink, request, chunksize):
+            assert chunksize > 0
+            self.sink, self.request, self.done = sink, request, False
+
+        def next_chunk(self, num_retries=0):
+            assert num_retries == 2
+            if not self.done:
+                self.sink.write(self.request.execute())
+                self.done = True
+            return None, self.done
+
+    google = types.ModuleType("googleapiclient")
+    http = types.ModuleType("googleapiclient.http")
+    http.MediaIoBaseDownload = _FakeMediaIoBaseDownload
+    google.http = http
+    monkeypatch.setitem(sys.modules, "googleapiclient", google)
+    monkeypatch.setitem(sys.modules, "googleapiclient.http", http)
+
+    service = _FakeService()
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "checkpoint.pt"
+    local.write_bytes(b"serialized checkpoint bytes")
+    logical = Path("/drive/MyDrive/ReVision/checkpoints/generation-000001.pt")
+    published = storage.publish_file(local, logical)
+    evidence = workflow._stream_verify_remote_checkpoint_payload(
+        storage, logical, expected_sha256=hashlib.sha256(local.read_bytes()).hexdigest(),
+        expected_bytes=local.stat().st_size,
+    )
+    assert evidence["status"] == "PASS"
+    assert evidence["file_id"] == published["file_id"]
+    assert evidence["sha256"] == published["sha256"]
+    assert evidence["bytes"] == local.stat().st_size
+
+    service.records[published["file_id"]]["content"] = b"X" * local.stat().st_size
+    with pytest.raises(workflow.StorageCapacityError, match="SHA-256"):
+        workflow._stream_verify_remote_checkpoint_payload(
+            storage, logical, expected_sha256=hashlib.sha256(local.read_bytes()).hexdigest(),
+            expected_bytes=local.stat().st_size,
+        )
 
 
 @pytest.mark.parametrize("overrides", [
@@ -2174,13 +2221,15 @@ def test_task_boundary_manifest_staging_reserves_generation_without_payload_down
     orphan = tmp_path / "generation-000002.pt"
     orphan.write_bytes(b"unfinished publication")
     storage.publish_file(orphan, logical_boundaries / orphan.name)
-    with pytest.raises(workflow.StorageCapacityError, match="payloads without manifests"):
+    with pytest.raises(workflow.StorageCapacityError, match="orphan task-boundary payload"):
         workflow._hydrate_task_boundary_manifests(storage, plan, record, run_checkpoint)
 
 
 def test_matrix_path_clean_run2_interrupt_resume_finalize_and_order_through_run100(tmp_path, monkeypatch):
     """Exercise the real matrix entry point/control flow with a simulated executor and API Drive."""
     import threading
+    from revision_r1.checkpointing import save_generation
+    from revision_r1.state import PhaseCursor, RunState
     from revision_r1.config import DATASETS
     from scripts import production_workflow as workflow
 
@@ -2348,37 +2397,38 @@ def test_matrix_path_clean_run2_interrupt_resume_finalize_and_order_through_run1
             assert output != workflow.run_output_root(results1, run2)
             assert not output.exists()
             assert not checkpoint.exists()
-            # Simulate the real runner's Task 1 boundary and resumable state
-            # publication through the same API adapter and independent roots.
+            # Exercise the real checkpoint serializer and API publication
+            # order for Task 1; only expensive model training is simulated.
             identity = runner_identity(plan, record)
             boundary_root = checkpoint / "task_boundaries"
             boundary_payload = local_checkpoint / "task_boundaries" / "generation-000001.pt"
-            boundary_payload.parent.mkdir(parents=True, exist_ok=True)
-            boundary_payload.write_bytes(b"durable-task-1-boundary")
+            boundary_manifest = save_generation(
+                boundary_payload.parent,
+                RunState(
+                    identity=identity,
+                    cursor=PhaseCursor(task_index=1, phase="scaler"),
+                    extra={"runtime": {"task_rows": [{"task_id": 1}]}},
+                ),
+                identity, kind="task-boundary", retain_generations=None,
+            )
             boundary_logical = storage1.logical_path_for_local(boundary_root)
             publish_checkpoint_file(storage1, boundary_payload, boundary_logical / boundary_payload.name)
-            boundary_manifest = {
-                "schema_version": 1, "generation": 1, "kind": "task-boundary",
-                "identity": identity, "identity_sha256": workflow._sha256_json(identity),
-                "payload_file": boundary_payload.name, "payload_bytes": boundary_payload.stat().st_size,
-                "payload_sha256": hashlib.sha256(boundary_payload.read_bytes()).hexdigest(),
-            }
-            boundary_manifest_path = local_checkpoint / "task_boundaries" / "generation-000001.manifest.json"
-            boundary_manifest_path.write_text(json.dumps(boundary_manifest, sort_keys=True), encoding="utf-8")
+            boundary_manifest_path = boundary_payload.parent / f"generation-{boundary_manifest['generation']:06d}.manifest.json"
             storage1.publish_file(boundary_manifest_path, boundary_logical / boundary_manifest_path.name)
 
             recovery_payload = local_checkpoint / "recovery" / "generation-000001.pt"
-            recovery_payload.parent.mkdir(parents=True, exist_ok=True)
-            recovery_payload.write_bytes(b"valid-resume-state-after-task-1")
+            recovery_manifest = save_generation(
+                recovery_payload.parent,
+                RunState(
+                    identity=identity,
+                    cursor=PhaseCursor(task_index=1, phase="classifier"),
+                    extra={"runtime": {"task_rows": [{"task_id": 1}]}},
+                ),
+                identity, kind="recovery", retain_generations=None,
+            )
             recovery_logical = storage1.logical_path_for_local(checkpoint / "recovery")
             publish_checkpoint_file(storage1, recovery_payload, recovery_logical / recovery_payload.name)
-            recovery_manifest = {
-                **boundary_manifest, "kind": "recovery", "payload_file": recovery_payload.name,
-                "payload_bytes": recovery_payload.stat().st_size,
-                "payload_sha256": hashlib.sha256(recovery_payload.read_bytes()).hexdigest(),
-            }
-            recovery_manifest_path = local_checkpoint / "recovery" / "generation-000001.manifest.json"
-            recovery_manifest_path.write_text(json.dumps(recovery_manifest, sort_keys=True), encoding="utf-8")
+            recovery_manifest_path = recovery_payload.parent / f"generation-{recovery_manifest['generation']:06d}.manifest.json"
             storage1.publish_file(recovery_manifest_path, recovery_logical / recovery_manifest_path.name)
             progress = {
                 "plan_sha256": plan["plan_sha256"], "schedule_sha256": plan["schedule_sha256"],
@@ -2398,6 +2448,8 @@ def test_matrix_path_clean_run2_interrupt_resume_finalize_and_order_through_run1
                 output=output, checkpoint=checkpoint, local_checkpoint=local_checkpoint,
                 route_sha256=kwargs["execution_namespace"]["route_sha256"],
                 progress_relative=progress_relative,
+                task1_payload_sha256=workflow._hash_file_stream(boundary_payload),
+                recovery_payload_sha256=workflow._hash_file_stream(recovery_payload),
             )
             return {"status": "INTERRUPTED_RESUMABLE", "cursor": {"task": 1, "phase": "classifier"}}
 
@@ -2408,6 +2460,8 @@ def test_matrix_path_clean_run2_interrupt_resume_finalize_and_order_through_run1
             assert (checkpoint / "recovery" / "generation-000001.pt").is_file()
             assert (checkpoint / "task_boundaries" / "generation-000001.manifest.json").is_file()
             assert not (checkpoint / "task_boundaries" / "generation-000001.pt").exists()
+            assert workflow._hash_file_stream(checkpoint / "recovery" / "generation-000001.pt") == route_evidence["recovery_payload_sha256"]
+            assert len(route_evidence["task1_payload_sha256"]) == 64
 
         artifact_sha = hashlib.sha256(f"simulated-artifact-{record['run_key']}".encode()).hexdigest()
         measurement = {
@@ -2463,6 +2517,7 @@ def test_matrix_path_clean_run2_interrupt_resume_finalize_and_order_through_run1
     assert resumed_and_completed["status"] == "ALL_100_RUNS_VALIDATED"
     assert resumed_and_completed["validated_completion_count"] == 100
     assert executor_calls == [run2["run_key"], run2["run_key"], *[row["run_key"] for row in plan["runs"][2:]]]
+    assert executor_calls[2] == plan["runs"][2]["run_key"]
     assert route_evidence["output"] != abandoned_output
     assert storage2.exact_file(logical_results / route_evidence["progress_relative"] / (
         f"{run2['run_key']}_{run2['config_sha256'][:12]}.json"

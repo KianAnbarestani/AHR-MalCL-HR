@@ -360,35 +360,59 @@ def _boundary_cursor_evidence(directory, manifest, identity, *, recovery_directo
     provenance = manifest.get("recovery_provenance")
     if provenance is not None:
         if type(cursor.task_index) is not int or type(cursor.phase) is not str:
-            raise ValueError("derived final task-boundary cursor fields must be exact integers/strings")
+            raise ValueError("recovered task-boundary cursor fields must be exact integers/strings")
         if any(type(getattr(cursor, name)) is not int or getattr(cursor, name) != 0
                for name in ("item_index", "substep_index", "update_index")):
-            raise ValueError("derived final task-boundary cursor fields must be exact zero integers")
+            raise ValueError("recovered task-boundary cursor fields must be exact zero integers")
         source_generation = manifest.get("copied_from_recovery_generation")
-        expected_provenance = {
-            "source_kind": "complete",
-            "source_generation": source_generation,
-            "task_id": 11,
-            "validated_cursor": {"task_index": 11, "phase": "complete"},
-        }
-        if (type(source_generation) is not int or source_generation <= 0
-                or provenance != expected_provenance):
-            raise ValueError("derived final task-boundary recovery provenance is invalid")
-        if cursor.task_index != 11 or cursor.phase != "complete":
-            raise ValueError("derived final task-boundary payload is not terminal task 11")
-        if recovery_directory is None or run_record is None:
-            raise ValueError("derived final task-boundary lacks its recovery-source validation context")
-        source_path = Path(recovery_directory) / f"generation-{source_generation:06d}.manifest.json"
-        if not source_path.is_file() or source_path.is_symlink():
-            raise ValueError(f"terminal recovery source generation {source_generation} is unavailable")
-        source_manifest = _manifest(source_path, identity)
-        if source_manifest.get("generation") != source_generation or source_manifest.get("kind") != "complete":
-            raise ValueError(f"terminal recovery source generation {source_generation} is not the exact complete state")
-        if (source_manifest.get("payload_bytes") != manifest.get("payload_bytes")
-                or source_manifest.get("payload_sha256") != manifest.get("payload_sha256")):
-            raise ValueError(f"terminal recovery source generation {source_generation} payload differs from derived boundary")
-        _validate_terminal_completion_checkpoint(recovery_directory, source_manifest, identity, run_record)
-        _validated_task_rows(state, through_task=11)
+        source_kind = provenance.get("source_kind") if isinstance(provenance, dict) else None
+        if type(source_generation) is not int or source_generation <= 0:
+            raise ValueError("recovered task-boundary source generation is invalid")
+        if source_kind == "complete":
+            expected_provenance = {
+                "source_kind": "complete", "source_generation": source_generation,
+                "task_id": 11, "validated_cursor": {"task_index": 11, "phase": "complete"},
+            }
+            if (provenance != expected_provenance or cursor.task_index != 11 or cursor.phase != "complete"):
+                raise ValueError("derived final task-boundary recovery provenance is invalid")
+            if recovery_directory is None or run_record is None:
+                raise ValueError("derived final task-boundary lacks its recovery-source validation context")
+            source_path = Path(recovery_directory) / f"generation-{source_generation:06d}.manifest.json"
+            if not source_path.is_file() or source_path.is_symlink():
+                raise ValueError(f"terminal recovery source generation {source_generation} is unavailable")
+            source_manifest = _manifest(source_path, identity)
+            if source_manifest.get("generation") != source_generation or source_manifest.get("kind") != "complete":
+                raise ValueError(f"terminal recovery source generation {source_generation} is not the exact complete state")
+            if (source_manifest.get("payload_bytes") != manifest.get("payload_bytes")
+                    or source_manifest.get("payload_sha256") != manifest.get("payload_sha256")):
+                raise ValueError(f"terminal recovery source generation {source_generation} payload differs from derived boundary")
+            _validate_terminal_completion_checkpoint(recovery_directory, source_manifest, identity, run_record)
+            _validated_task_rows(state, through_task=11)
+        elif source_kind == "task-boundary":
+            task_id = provenance.get("task_id")
+            cursor_record = provenance.get("validated_cursor")
+            source_manifest_sha256 = provenance.get("source_manifest_sha256")
+            source_payload_sha256 = provenance.get("source_payload_sha256")
+            expected_phase = "export" if task_id == 11 else "scaler"
+            expected_provenance = {
+                "source_kind": "task-boundary", "source_generation": source_generation,
+                "task_id": task_id, "validated_cursor": {"task_index": task_id, "phase": expected_phase},
+                "source_manifest_sha256": source_manifest_sha256,
+                "source_payload_sha256": source_payload_sha256,
+            }
+            if (type(task_id) is not int or not 1 <= task_id <= 11
+                    or cursor_record != expected_provenance["validated_cursor"]
+                    or provenance != expected_provenance
+                    or not workflow._is_sha256(source_manifest_sha256)
+                    or not workflow._is_sha256(source_payload_sha256)
+                    or cursor.task_index != task_id or cursor.phase != expected_phase
+                    or manifest.get("payload_sha256") != source_payload_sha256):
+                raise ValueError("recovered task-boundary provenance/cursor is inconsistent")
+            if state.sampler_state:
+                raise ValueError("recovered task-boundary retains an active sampler")
+            _validated_task_rows(state, through_task=task_id)
+        else:
+            raise ValueError("unsupported recovered task-boundary provenance kind")
         recovered = True
     else:
         if type(cursor.task_index) is not int or type(cursor.phase) is not str:
@@ -1149,6 +1173,7 @@ def complete_exported_run(plan, record, *, output_root, checkpoint_root,
                     output,
                     checkpoints,
                     allow_recovery_overflow=True,
+                    storage_adapter=storage_adapter,
                 )
                 if lease.lost.is_set() or run_lease.lost.is_set():
                     raise RuntimeError("completion matrix lease lost before registration")

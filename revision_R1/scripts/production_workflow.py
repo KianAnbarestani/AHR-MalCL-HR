@@ -3715,6 +3715,7 @@ def _checkpoint_tree_measurement(
     kind: str,
     expected_count: int,
     allow_recovery_overflow: bool = False,
+    remote_payload_verifier=None,
 ) -> dict[str, Any]:
     directory = root / kind
     manifests = sorted(directory.glob("generation-*.manifest.json"))
@@ -3732,6 +3733,8 @@ def _checkpoint_tree_measurement(
     generations: list[int] = []
     orphan_manifests: list[dict[str, Any]] = []
     referenced_payload_names: set[str] = set()
+    remote_verified_payload_names: set[str] = set()
+    remote_payload_evidence: list[dict[str, Any]] = []
     for manifest_path in manifests:
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -3759,6 +3762,31 @@ def _checkpoint_tree_measurement(
         manifest_size = manifest_path.stat().st_size
         manifest_bytes += manifest_size
         if not payload.is_file():
+            if payload.is_symlink():
+                raise ValueError(f"production checkpoint payload is a symlink: {payload}")
+            if kind == "task_boundaries" and remote_payload_verifier is not None:
+                evidence = remote_payload_verifier(payload_name, manifest)
+                if (not isinstance(evidence, dict) or evidence.get("status") != "PASS"
+                        or evidence.get("bytes") != manifest["payload_bytes"]
+                        or evidence.get("sha256") != manifest["payload_sha256"]):
+                    raise ValueError(
+                        f"remote task-boundary payload failed exact SHA-256 verification: {payload_name}"
+                    )
+                payload_bytes.append(manifest["payload_bytes"])
+                generations.append(generation)
+                referenced_payload_names.add(payload_name)
+                remote_verified_payload_names.add(payload_name)
+                remote_payload_evidence.append({
+                    "generation": generation, "payload_file": payload_name,
+                    "payload_bytes": manifest["payload_bytes"],
+                    "payload_sha256": manifest["payload_sha256"],
+                    "file_id": evidence.get("file_id"),
+                    "parent_id": evidence.get("parent_id"),
+                    "owner": evidence.get("owner"),
+                    "verification": "STREAMED_CANONICAL_DRIVE_SHA256",
+                })
+                kinds.append(str(manifest.get("kind")))
+                continue
             if kind != "recovery":
                 raise ValueError(
                     f"production checkpoint payload is missing or size-mismatched: {payload}"
@@ -3777,8 +3805,10 @@ def _checkpoint_tree_measurement(
                 "payload_sha256_expected": manifest["payload_sha256"],
             })
             continue
-        if payload.stat().st_size != manifest["payload_bytes"]:
+        if payload.is_symlink() or payload.stat().st_size != manifest["payload_bytes"]:
             raise ValueError(f"production checkpoint payload is size-mismatched: {payload}")
+        if kind == "task_boundaries" and _hash_file_stream(payload) != manifest["payload_sha256"]:
+            raise ValueError(f"production task-boundary payload SHA-256 mismatch: {payload}")
         payload_bytes.append(payload.stat().st_size)
         generations.append(generation)
         referenced_payload_names.add(payload_name)
@@ -3789,11 +3819,12 @@ def _checkpoint_tree_measurement(
             f"expected {expected_count}, found {len(generations)} complete generations"
         )
     actual_payload_names = {path.name for path in directory.glob("generation-*.pt") if path.is_file()}
-    if actual_payload_names != referenced_payload_names:
+    expected_local_payload_names = referenced_payload_names - remote_verified_payload_names
+    if actual_payload_names != expected_local_payload_names:
         raise ValueError(
             f"production checkpoint payload inventory differs from manifests at {directory}: "
-            f"unreferenced={sorted(actual_payload_names - referenced_payload_names)}, "
-            f"missing={sorted(referenced_payload_names - actual_payload_names)}"
+            f"unreferenced={sorted(actual_payload_names - expected_local_payload_names)}, "
+            f"missing={sorted(expected_local_payload_names - actual_payload_names)}"
         )
     orphan_manifests.sort(key=lambda item: item["generation"])
     if orphan_manifests and (
@@ -3820,12 +3851,15 @@ def _checkpoint_tree_measurement(
         "manifest_only_orphan_count": len(orphan_manifests),
         "manifest_only_orphan_bytes": sum(item["size_bytes"] for item in orphan_manifests),
         "manifest_only_orphans": orphan_manifests,
+        "remote_payload_verification_count": len(remote_payload_evidence),
+        "remote_payload_verification_status": "PASS" if remote_payload_evidence else "NOT_REQUIRED",
+        "remote_payload_evidence": remote_payload_evidence,
     }
 
 
 def measure_completed_production_run(
     plan: dict[str, Any], record: dict[str, Any], bundle, output: str | Path, checkpoint_root: str | Path,
-    *, allow_recovery_overflow: bool = False,
+    *, allow_recovery_overflow: bool = False, storage_adapter=None,
 ) -> dict[str, Any]:
     """Measure exact run artifacts/checkpoint retention after validating completion."""
     from revision_r1.registry import RunRegistry
@@ -3839,7 +3873,23 @@ def measure_completed_production_run(
         checkpoint_path, identity, kind="recovery", expected_count=2,
         allow_recovery_overflow=allow_recovery_overflow,
     )
-    boundaries = _checkpoint_tree_measurement(checkpoint_path, identity, kind="task_boundaries", expected_count=11)
+    remote_payload_verifier = None
+    if storage_adapter is not None:
+        def remote_payload_verifier(payload_name, manifest):
+            logical_payload = storage_adapter.logical_path_for_local(
+                checkpoint_path / "task_boundaries" / payload_name
+            )
+            return _stream_verify_remote_checkpoint_payload(
+                storage_adapter,
+                logical_payload,
+                expected_sha256=manifest["payload_sha256"],
+                expected_bytes=manifest["payload_bytes"],
+            )
+
+    boundaries = _checkpoint_tree_measurement(
+        checkpoint_path, identity, kind="task_boundaries", expected_count=11,
+        remote_payload_verifier=remote_payload_verifier,
+    )
     output_bytes = sum(path.stat().st_size for path in output_path.rglob("*") if path.is_file() and not path.is_symlink())
     try:
         resources = json.loads((output_path / "resource_metrics.json").read_text(encoding="utf-8"))
@@ -6094,13 +6144,161 @@ def _hydrate_task_boundary_manifests(storage_adapter, plan: dict[str, Any], reco
     payload_names = {name for name in by_name if re.fullmatch(r"generation-\d{6}\.pt", name)}
     orphan_payloads = sorted(name for name in payload_names
                              if name.removesuffix(".pt") + ".manifest.json" not in manifest_names)
-    if orphan_payloads:
-        raise StorageCapacityError(
-            "canonical Drive has task-boundary payloads without manifests; refusing generation reuse: "
-            + ", ".join(orphan_payloads)
-        )
     expected_identity = _expected_plan_runner_identity(plan, record)
     local_directory.mkdir(parents=True, exist_ok=True)
+    repaired_orphans = []
+    if orphan_payloads:
+        from revision_r1 import checkpointing
+        from scripts import production_recovery
+
+        recovery_directory = checkpoints / "recovery"
+        for orphan_name in orphan_payloads:
+            match = re.fullmatch(r"generation-(\d{6})\.pt", orphan_name)
+            generation = int(match.group(1)) if match else None
+            manifest_generations = sorted(
+                int(re.fullmatch(r"generation-(\d{6})\.manifest\.json", name).group(1))
+                for name in manifest_names
+            )
+            if generation is None or manifest_generations != list(range(1, generation)):
+                raise StorageCapacityError(
+                    "orphan task-boundary payload cannot be reconciled with a contiguous verified prefix; "
+                    f"preserved: {orphan_name}; existing_manifest_generations={manifest_generations}"
+                )
+            remote_payload = by_name[orphan_name]
+            try:
+                remote_size = int(remote_payload.get("size"))
+            except (TypeError, ValueError):
+                remote_size = -1
+            source_candidates = []
+            for source_path in sorted(recovery_directory.glob("generation-*.manifest.json")):
+                if source_path.is_symlink():
+                    continue
+                try:
+                    source_manifest = production_recovery._manifest(source_path, expected_identity)
+                except (OSError, ValueError, UnicodeError):
+                    continue
+                if (source_manifest.get("kind") != "task-boundary"
+                        or source_manifest.get("payload_bytes") != remote_size):
+                    continue
+                source_payload = recovery_directory / source_manifest["payload_file"]
+                if (not source_payload.is_file() or source_payload.is_symlink()
+                        or source_payload.stat().st_size != source_manifest["payload_bytes"]
+                        or _hash_file_stream(source_payload) != source_manifest["payload_sha256"]):
+                    continue
+                remote_md5 = remote_payload.get("md5Checksum")
+                if remote_md5 and _checkpoint_md5(source_payload) != remote_md5:
+                    continue
+                try:
+                    cursor_evidence = production_recovery._boundary_cursor_evidence(
+                        recovery_directory, source_manifest, expected_identity,
+                    )
+                except Exception:
+                    continue
+                if cursor_evidence.get("task_id") != generation:
+                    continue
+                source_candidates.append((source_path, source_manifest, source_payload, cursor_evidence))
+            if len(source_candidates) != 1:
+                raise StorageCapacityError(
+                    "orphan task-boundary payload has no unique identity- and cursor-validated recovery source; "
+                    f"preserved: {orphan_name}; matching_recovery_sources={len(source_candidates)}"
+                )
+            source_path, source_manifest, source_payload, cursor_evidence = source_candidates[0]
+            logical_payload = logical_directory / orphan_name
+            try:
+                remote_integrity = _stream_verify_remote_checkpoint_payload(
+                    storage_adapter,
+                    logical_payload,
+                    expected_sha256=source_manifest["payload_sha256"],
+                    expected_bytes=source_manifest["payload_bytes"],
+                )
+            except Exception as exc:
+                raise StorageCapacityError(
+                    f"orphan task-boundary payload failed canonical Drive content verification; preserved: {orphan_name}"
+                ) from exc
+            if remote_integrity.get("sha256") != source_manifest["payload_sha256"]:
+                raise StorageCapacityError(
+                    f"orphan task-boundary payload differs from its recovery source; preserved: {orphan_name}"
+                )
+
+            local_payload = local_directory / orphan_name
+            copy_accounting = production_recovery._copy_checkpoint_file_exclusive(
+                source_payload, local_payload,
+                expected_bytes=source_manifest["payload_bytes"],
+                expected_sha256=source_manifest["payload_sha256"],
+            )
+            local_manifest = local_directory / (orphan_name.removesuffix(".pt") + ".manifest.json")
+            provenance = {
+                "source_kind": "task-boundary",
+                "source_generation": int(source_manifest["generation"]),
+                "task_id": int(cursor_evidence["task_id"]),
+                "validated_cursor": cursor_evidence["cursor"],
+                "source_manifest_sha256": _hash_file_stream(source_path),
+                "source_payload_sha256": str(source_manifest["payload_sha256"]),
+            }
+            if local_manifest.exists() or local_manifest.is_symlink():
+                if local_manifest.is_symlink() or not local_manifest.is_file():
+                    raise StorageCapacityError(f"local orphan-repair manifest is not a regular file; preserved: {local_manifest}")
+                try:
+                    repaired_manifest = production_recovery._manifest(local_manifest, expected_identity)
+                except Exception as exc:
+                    raise StorageCapacityError(f"local orphan-repair manifest is invalid; preserved: {local_manifest}") from exc
+                if (repaired_manifest.get("generation") != generation
+                        or repaired_manifest.get("kind") != "task-boundary"
+                        or repaired_manifest.get("payload_bytes") != source_manifest["payload_bytes"]
+                        or repaired_manifest.get("payload_sha256") != source_manifest["payload_sha256"]
+                        or repaired_manifest.get("copied_from_recovery_generation") != source_manifest["generation"]
+                        or repaired_manifest.get("recovery_provenance") not in (None, provenance)):
+                    raise StorageCapacityError(
+                        f"existing local task-boundary manifest conflicts with the proven recovery source; preserved: {local_manifest}"
+                    )
+                production_recovery._boundary_cursor_evidence(
+                    local_directory, repaired_manifest, expected_identity,
+                )
+            else:
+                repaired_manifest = {
+                    "schema_version": 1, "generation": generation, "kind": "task-boundary",
+                    "created_unix": time.time(), "identity": expected_identity,
+                    "identity_sha256": _sha256_json(expected_identity),
+                    "payload_file": orphan_name,
+                    "payload_bytes": int(source_manifest["payload_bytes"]),
+                    "payload_sha256": str(source_manifest["payload_sha256"]),
+                    "copied_from_recovery_generation": int(source_manifest["generation"]),
+                    "recovery_provenance": provenance,
+                    "checkpoint_accounting": {
+                        "serialization_seconds": 0.0,
+                        "local_artifact_copy_seconds": copy_accounting["copy_seconds"],
+                        "local_verification_seconds": copy_accounting["verification_seconds"],
+                        "local_artifact_copy_bytes": int(source_manifest["payload_bytes"])
+                            if copy_accounting["copied"] else 0,
+                        "local_artifact_copy_timing_complete": copy_accounting["copied"],
+                        "local_manifest_write_bytes": 0,
+                    },
+                }
+                repaired_manifest_bytes = checkpointing._set_self_sized_byte_field(
+                    repaired_manifest, "local_manifest_write_bytes",
+                )
+                if checkpointing._write_json_atomic(local_manifest, repaired_manifest) != repaired_manifest_bytes:
+                    raise StorageCapacityError("recovered task-boundary manifest byte accounting did not reconcile")
+            production_recovery._boundary_cursor_evidence(
+                local_directory, repaired_manifest, expected_identity,
+            )
+            logical_manifest = logical_directory / local_manifest.name
+            publication = storage_adapter.publish_file(local_manifest, logical_manifest)
+            if publication.get("status") not in {"PASS", "UNCHANGED_VERIFIED_METADATA"}:
+                raise StorageCapacityError(
+                    f"recovered task-boundary manifest publication was not verified; preserved: {local_manifest}"
+                )
+            repaired_orphans.append({
+                "generation": generation, "task_id": int(cursor_evidence["task_id"]),
+                "recovery_generation": int(source_manifest["generation"]),
+                "payload_sha256": source_manifest["payload_sha256"],
+                "payload_file_id": remote_integrity.get("file_id"),
+                "manifest_file_id": publication.get("file_id"),
+                "status": "REPAIRED_FROM_VERIFIED_RECOVERY_STATE",
+            })
+        remote_files = storage_adapter.list_files(logical_directory)
+        by_name = {str(item.get("name", "")): item for item in remote_files}
+        manifest_names = {name for name in by_name if re.fullmatch(r"generation-\d{6}\.manifest\.json", name)}
     staged = []
     for name in sorted(manifest_names):
         local_manifest = local_directory / name
@@ -6133,7 +6331,13 @@ def _hydrate_task_boundary_manifests(storage_adapter, plan: dict[str, Any], reco
             "payload_present_on_drive": payload_metadata is not None,
             "payload_bytes": document["payload_bytes"],
         })
-    return {"status": "MANIFESTS_STAGED_ONLY", "manifest_count": len(staged), "generations": staged}
+    return {
+        "status": "MANIFESTS_STAGED_WITH_ORPHAN_REPAIR" if repaired_orphans else "MANIFESTS_STAGED_ONLY",
+        "manifest_count": len(staged), "generations": staged,
+        "repaired_orphan_generations": [row["generation"] for row in repaired_orphans],
+        "repaired_orphan_task_ids": [row["task_id"] for row in repaired_orphans],
+        "repaired_orphans": repaired_orphans,
+    }
 
 
 def _guard_no_silent_fresh_start(output: Path, checkpoints: Path, local_checkpoints: Path,
@@ -6301,6 +6505,87 @@ def _file_sha256_path(path: Path) -> str:
         for block in iter(lambda: stream.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+class _StreamingDriveDigestSink:
+    """Hash Drive media chunks without materializing multi-gigabyte checkpoints."""
+
+    def __init__(self) -> None:
+        self.sha256 = hashlib.sha256()
+        self.md5 = hashlib.md5(usedforsecurity=False)
+        self.bytes_written = 0
+
+    def write(self, payload: bytes) -> int:
+        if not isinstance(payload, (bytes, bytearray, memoryview)):
+            raise TypeError("Drive checkpoint download returned a non-byte chunk")
+        chunk = bytes(payload)
+        self.sha256.update(chunk)
+        self.md5.update(chunk)
+        self.bytes_written += len(chunk)
+        return len(chunk)
+
+
+def _stream_verify_remote_checkpoint_payload(
+    storage_adapter, logical_file: str | Path, *, expected_sha256: str, expected_bytes: int,
+) -> dict[str, Any]:
+    """Verify canonical checkpoint content and metadata without creating a duplicate local copy."""
+    if not _is_sha256(expected_sha256) or type(expected_bytes) is not int or expected_bytes < 0:
+        raise ValueError("remote checkpoint verification requires a SHA-256 and nonnegative byte count")
+    logical = Path(os.path.abspath(str(Path(logical_file).expanduser())))
+    metadata = storage_adapter.exact_file(logical)
+    if metadata is None:
+        raise FileNotFoundError(f"canonical checkpoint is missing: {logical}")
+    parent_id = storage_adapter.folder_id(logical.parent, create=False)
+    owner = storage_adapter._owner(metadata)
+    try:
+        size = int(metadata.get("size"))
+    except (TypeError, ValueError, OverflowError):
+        size = None
+    file_id = metadata.get("id")
+    if (not isinstance(file_id, str) or not file_id
+            or metadata.get("name") != logical.name
+            or [str(value) for value in metadata.get("parents", [])] != [str(parent_id)]
+            or size != expected_bytes
+            or not isinstance(metadata.get("mimeType"), str)
+            or metadata["mimeType"].startswith("application/vnd.google-apps.")
+            or owner != storage_adapter.expected_account_email
+            or metadata.get("ownedByMe") is not True):
+        raise StorageCapacityError(
+            "canonical checkpoint file identity/parent/owner/type/size mismatch; "
+            f"file_id={file_id!r}, parents={metadata.get('parents')!r}, owner={owner!r}, "
+            f"ownedByMe={metadata.get('ownedByMe')!r}, size={size!r}, expected_bytes={expected_bytes}"
+        )
+    sink = _StreamingDriveDigestSink()
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+        request = storage_adapter.service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        downloader = MediaIoBaseDownload(sink, request, chunksize=8 << 20)
+        done = False
+        while not done:
+            _status, done = downloader.next_chunk(num_retries=2)
+    except Exception as exc:
+        raise StorageCapacityError(
+            f"canonical checkpoint content could not be streamed for exact Drive file ID {file_id}: "
+            f"{type(exc).__name__}"
+        ) from exc
+    observed_sha256 = sink.sha256.hexdigest()
+    observed_md5 = sink.md5.hexdigest()
+    if sink.bytes_written != expected_bytes:
+        raise StorageCapacityError(
+            f"canonical checkpoint byte count mismatch for file ID {file_id}: "
+            f"observed={sink.bytes_written}, expected={expected_bytes}"
+        )
+    if observed_sha256 != expected_sha256:
+        raise StorageCapacityError(f"canonical checkpoint SHA-256 mismatch for file ID {file_id}")
+    remote_md5 = metadata.get("md5Checksum")
+    if remote_md5 is not None and remote_md5 != observed_md5:
+        raise StorageCapacityError(f"canonical checkpoint MD5 read-back mismatch for file ID {file_id}")
+    return {
+        "status": "PASS", "file_id": file_id, "parent_id": str(parent_id),
+        "bytes": sink.bytes_written, "sha256": observed_sha256,
+        "md5_checksum": observed_md5, "owner": owner,
+        "streamed_without_local_staging": True,
+    }
 
 
 def _api_publish_file(storage_adapter, local_path: str | Path) -> dict[str, Any]:
@@ -6998,7 +7283,7 @@ def execute_frozen_plan_record(
             }
         validated = _validate_completed_run(plan, record, bundle, output, synthetic=synthetic)
         storage_measurement = None if synthetic else measure_completed_production_run(
-            plan, record, bundle, output, checkpoints,
+            plan, record, bundle, output, checkpoints, storage_adapter=storage_adapter,
         )
         matrix_registry, added = _record_completed_run(
             root, plan, record, validated, storage_measurement=storage_measurement,
@@ -7152,7 +7437,7 @@ def execute_first_production_run(
         validated_existing = None
     if validated_existing is not None:
         measurement = measure_completed_production_run(
-            plan, first, None, output_run, drive_checkpoint_run,
+            plan, first, None, output_run, drive_checkpoint_run, storage_adapter=storage_adapter,
         )
         matrix_registry, _ = _record_completed_run(
             Path(output_root).expanduser().resolve(), plan, first,
@@ -7745,7 +8030,11 @@ def _validate_registered_completion_for_export(
     ):
         raise ValueError(f"runner completion marker differs from registry for {record['run_key']}")
     artifact_manifest = output / "artifact_manifest.json"
-    manifest_record = (artifacts or {}).get("artifact_manifest", {})
+    manifest_record = (artifacts or {}).get("artifact_manifest.json")
+    if not isinstance(manifest_record, dict):
+        # Accept the short historical label used by an earlier completion writer,
+        # while the current runner records the literal filename as its label.
+        manifest_record = (artifacts or {}).get("artifact_manifest", {})
     manifest_digest = file_sha256(artifact_manifest) if artifact_manifest.is_file() else None
     if (
         not isinstance(entry, dict)
@@ -7777,6 +8066,7 @@ def export_lightweight_results(
     plan: dict[str, Any], output_root: str | Path, output_zip: str | Path, *,
     storage_snapshot: dict[str, Any], storage_adapter=None,
     logical_output_path: str | Path | None = None,
+    completed_run_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     """Export registered, revalidated production results without checkpoint payloads."""
     from revision_r1.archives import build_lightweight_results_archive
@@ -7790,15 +8080,24 @@ def export_lightweight_results(
     registry = _read_matrix_registry(root, plan)
     if not registry["completed_runs"]:
         raise ValueError("no identity-registered production results are available for lightweight export")
+    registered_keys = set(registry["completed_runs"])
+    selected_keys = registered_keys if completed_run_keys is None else set(completed_run_keys)
+    if selected_keys - registered_keys:
+        raise ValueError(
+            "lightweight export filter names completions absent from the canonical registry: "
+            + ", ".join(sorted(selected_keys - registered_keys))
+        )
     registered_roots = [
         registered_run_output_path(root, row, registry["completed_runs"].get(row["run_key"]))
-        for row in plan["runs"] if row["run_key"] in registry["completed_runs"]
+        for row in plan["runs"] if row["run_key"] in selected_keys
     ]
     if any(target_candidate.is_relative_to(run_root) for run_root in registered_roots):
         raise ValueError("lightweight results archive must be outside every registered run-artifact namespace")
     run_roots = []
     raw_bytes = 0
     for record in plan["runs"]:
+        if record["run_key"] not in selected_keys:
+            continue
         entry = registry["completed_runs"].get(record["run_key"])
         if entry is None:
             continue

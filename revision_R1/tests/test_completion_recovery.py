@@ -17,6 +17,30 @@ from test_drive_api_storage import _FakeService, _storage
 from test_production_workflow import _identity, _write_completed_production_fixture
 
 
+def _mock_media_download(monkeypatch):
+    import sys
+    import types
+
+    class FakeMediaIoBaseDownload:
+        def __init__(self, sink, request, chunksize):
+            assert chunksize > 0
+            self.sink, self.request, self.done = sink, request, False
+
+        def next_chunk(self, num_retries=0):
+            assert num_retries == 2
+            if not self.done:
+                self.sink.write(self.request.execute())
+                self.done = True
+            return None, self.done
+
+    google = types.ModuleType("googleapiclient")
+    http = types.ModuleType("googleapiclient.http")
+    http.MediaIoBaseDownload = FakeMediaIoBaseDownload
+    google.http = http
+    monkeypatch.setitem(sys.modules, "googleapiclient", google)
+    monkeypatch.setitem(sys.modules, "googleapiclient.http", http)
+
+
 def _checkpoints(root, identity):
     for task in range(1, 12):
         state = RunState(
@@ -128,6 +152,126 @@ def test_failed_final_publication_completion_only_retry_and_fresh_stage_skip(tmp
     assert rerun["completion_registry_added_now"] is False
     assert rerun["next_pending_run"] == "ember_seed42_anchor_only"
     assert set(rerun["completed_run_keys"]) == {"ember_seed42_full_hybrid", "ember_seed42_current_only"}
+
+
+def test_fresh_stage_measures_remote_task_boundaries_without_staging_payloads(tmp_path, monkeypatch):
+    _mock_media_download(monkeypatch)
+    plan, record, root, checkpoints, adapter, _service, output, _registry = _setup(tmp_path, monkeypatch)
+    run_id = workflow._run_id_for(record, synthetic=False)
+    run_registry = RunRegistry(output / "registry")
+    artifacts = {name: output / name for name in (
+        "artifact_manifest.json", "status.json", "full-result.json", "task_matrix.json",
+        "predictions.npz", "resource_metrics.json", "config.json", "environment.json",
+    )}
+    assert run_registry.complete(run_id, artifacts)
+
+    checkpoint_namespace = workflow.run_checkpoint_root(checkpoints, record)
+    boundary_dir = checkpoint_namespace / "task_boundaries"
+    for path in sorted(boundary_dir.glob("generation-*")):
+        adapter.publish_file(path, adapter.logical_path_for_local(path))
+    for payload in boundary_dir.glob("generation-*.pt"):
+        payload.unlink()
+
+    measurement = workflow.measure_completed_production_run(
+        plan, record, None, output, checkpoint_namespace, storage_adapter=adapter,
+    )
+    boundaries = measurement["task_boundary_checkpoints"]
+    assert boundaries["generation_count"] == 11
+    assert boundaries["remote_payload_verification_count"] == 11
+    assert boundaries["remote_payload_verification_status"] == "PASS"
+    assert not list(boundary_dir.glob("generation-*.pt"))
+
+
+def test_orphan_boundary_payload_repairs_only_from_matching_cursor_bound_recovery(tmp_path, monkeypatch):
+    _mock_media_download(monkeypatch)
+    from revision_r1.checkpointing import save_generation
+
+    plan = json.loads((Path(__file__).parents[1] / "configs/production_run_plan_v1.json").read_text())
+    record = plan["runs"][1]
+    record["dataset_identity"] = _identity(record["dataset"])
+    record["update_budgets_by_task"] = [1] * 11
+    record["effective_schedule_sha256"] = plan["schedule_sha256"]
+    plan = workflow._refresh_plan_hash(plan)
+    identity = workflow._expected_plan_runner_identity(plan, record)
+    stage = tmp_path / "stage"
+    service = _FakeService()
+    adapter = _storage(service, stage, monkeypatch)
+    checkpoint_root = stage / "production" / "checkpoints"
+    adapter.bind_root("/drive/MyDrive/ReVision/production/checkpoints", checkpoint_root)
+    checkpoint_namespace = workflow.run_checkpoint_root(checkpoint_root, record)
+    recovery_dir = checkpoint_namespace / "recovery"
+    state = RunState(
+        identity=identity, cursor=PhaseCursor(task_index=1, phase="scaler"),
+        extra={"runtime": {"task_rows": [{"task_id": 1}]}},
+    )
+    recovery_manifest = save_generation(recovery_dir, state, identity, kind="task-boundary", retain_generations=None)
+    recovery_payload = recovery_dir / recovery_manifest["payload_file"]
+    adapter.publish_file(recovery_payload, adapter.logical_path_for_local(recovery_payload))
+    recovery_manifest_path = recovery_dir / "generation-000001.manifest.json"
+    adapter.publish_file(recovery_manifest_path, adapter.logical_path_for_local(recovery_manifest_path))
+
+    logical_boundaries = adapter.logical_path_for_local(checkpoint_namespace / "task_boundaries")
+    orphan_payload_metadata = adapter.publish_file(
+        recovery_payload, logical_boundaries / "generation-000001.pt",
+    )
+    service.files().fail_create_name = "generation-000001.manifest.json"
+    with pytest.raises(DriveStorageError, match="Drive upload failed"):
+        workflow._hydrate_task_boundary_manifests(adapter, plan, record, checkpoint_namespace)
+    boundary_dir = checkpoint_namespace / "task_boundaries"
+    repaired = boundary_dir / "generation-000001.manifest.json"
+    assert repaired.is_file(), "a failed remote manifest upload must preserve the verified local repair"
+    assert adapter.exact_file(logical_boundaries / repaired.name) is None
+    # The same reconciliation is safely retryable: it reuses the proven local
+    # payload/manifest and publishes only the missing manifest, not a duplicate payload.
+    evidence = workflow._hydrate_task_boundary_manifests(adapter, plan, record, checkpoint_namespace)
+    assert repaired.is_file()
+    manifest = json.loads(repaired.read_text())
+    assert manifest["kind"] == "task-boundary"
+    assert manifest["copied_from_recovery_generation"] == 1
+    assert evidence["repaired_orphan_generations"] == [1]
+    assert evidence["repaired_orphan_task_ids"] == [1]
+    assert adapter.exact_file(logical_boundaries / repaired.name) is not None
+    assert adapter.exact_file(logical_boundaries / "generation-000001.pt")["id"] == orphan_payload_metadata["file_id"]
+    assert len([item for item in adapter.list_files(logical_boundaries)
+                if item.get("name") == repaired.name]) == 1
+    assert workflow._hash_file_stream(boundary_dir / "generation-000001.pt") == manifest["payload_sha256"]
+
+    bad_payload = tmp_path / "bad-generation-000002.pt"
+    bad_payload.write_bytes(b"not the task-boundary recovery payload")
+    adapter.publish_file(bad_payload, logical_boundaries / "generation-000002.pt")
+    with pytest.raises(workflow.StorageCapacityError, match="orphan task-boundary payload"):
+        workflow._hydrate_task_boundary_manifests(adapter, plan, record, checkpoint_namespace)
+
+
+def test_export_filter_excludes_abandoned_completion_from_archive(tmp_path, monkeypatch):
+    import zipfile
+
+    plan, record, root, _checkpoints_root, _adapter, _service, output, _registry = _setup(tmp_path, monkeypatch)
+    run_id = workflow._run_id_for(record, synthetic=False)
+    run_registry = RunRegistry(output / "registry")
+    artifacts = {name: output / name for name in (
+        "artifact_manifest.json", "status.json", "full-result.json", "task_matrix.json",
+        "predictions.npz", "resource_metrics.json", "config.json", "environment.json",
+    )}
+    assert run_registry.complete(run_id, artifacts)
+    validated = workflow._validate_completed_run(plan, record, None, output, synthetic=False)
+    workflow._record_completed_run(root, plan, record, validated)
+
+    target = tmp_path / "filtered-results.zip"
+    result = workflow.export_lightweight_results(
+        plan, root, target, storage_snapshot={
+            "path": str(tmp_path), "available_bytes": 1 << 30,
+            "write_capability_verified": True, "new_file_owner_verified": True,
+            "quota_metadata_verified": True, "drive_id": None,
+        },
+        completed_run_keys={"ember_seed42_full_hybrid"},
+    )
+    assert result["run_count"] == 1
+    with zipfile.ZipFile(target) as archive:
+        names = archive.namelist()
+    assert sum(name.endswith("/full-result.json") for name in names) == 1
+    abandoned_namespace_name = workflow.run_output_root(root, plan["runs"][1]).name
+    assert not any(abandoned_namespace_name in name for name in names)
 
 
 def test_completion_only_validates_and_preserves_fifteen_recovery_generations(tmp_path, monkeypatch):

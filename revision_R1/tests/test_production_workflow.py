@@ -2667,6 +2667,7 @@ def _write_completed_production_fixture(output: Path, plan: dict, record: dict) 
     ]
     for name, value in {
         "config.json": {
+            **record["config"],
             "config_sha256": record["config_sha256"],
             "code_sha256": plan["training_source_sha256"], "namespace": "PRODUCTION",
         },

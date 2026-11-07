@@ -229,8 +229,23 @@ def test_notebook_builder_uses_saved_drive_notebook_without_temporary_recovery_c
     saved_drive_sha256 = "a220a08e0ff472876a479eaded35cd7946bc5d0c35ec245a7203c33a42ff3f9d"
     template_path = ROOT / "notebooks" / "Revision_R1_Production_Colab_Saved_Drive_Base.ipynb"
     template = json.loads(template_path.read_text(encoding="utf-8"))
-    assert template["metadata"]["revision_r1_saved_drive_source_sha256"] == saved_drive_sha256
-    assert len(template["cells"]) == 8
+    assert hashlib.sha256(template_path.read_bytes()).hexdigest() == saved_drive_sha256
+    assert len(template["cells"]) == 10
+    assert "_r1_helpers" in "".join(template["cells"][6]["source"])
+    assert "load_verified_state" in "".join(template["cells"][7]["source"])
+    assert "COMPLETE_EXPORTED_RUN_ONLY" in "".join(template["cells"][8]["source"])
+    preserved_cell_sha256 = {
+        0: "b1045533cce79eec370846c25684522c716ee826d64908b49d0781d4a60ceaf4",
+        1: "9bdd9a1ce0a5b54da81542f3159fa71308b440e179d7259417fd9bb74ab09e59",
+        2: "86bb01aa3885421aaf8593ca2a97ba1971d23e6c610c5d4b9e55bf8759fa63ac",
+        3: "9c79997ebc7f95d586b8eefa0b24be8461ff3ded8bc99b1c763a641d3f1771d2",
+        4: "bd34d57df3a17b55d235e26e6e30072c8c0e51768e22ceb772a98dba4a100549",
+        5: "46dd4986088c4274123aae54d9c65283758c4a43ad73b4a46e2c70649b780369",
+        9: "04d4539c6a24f3115cac33f8c34345065636dfe38b317d3054ee8259f3ef1cbe",
+    }
+    for index, expected in preserved_cell_sha256.items():
+        source = "".join(template["cells"][index]["source"]).encode("utf-8")
+        assert hashlib.sha256(source).hexdigest() == expected
 
     generated = notebook_document("0123456789abcdef0123456789abcdef01234567")
     cells = ["".join(cell.get("source", [])) for cell in generated["cells"]]

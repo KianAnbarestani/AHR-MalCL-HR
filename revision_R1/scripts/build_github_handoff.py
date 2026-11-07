@@ -1298,16 +1298,40 @@ def notebook_document(commit_sha: str) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
         raise ValueError("the stable Colab notebook requires a lowercase full 40-character Git commit SHA")
     template_path = Path(__file__).resolve().parents[1] / "notebooks" / "Revision_R1_Production_Colab_Saved_Drive_Base.ipynb"
-    document = json.loads(template_path.read_text(encoding="utf-8"))
-    if len(document.get("cells", [])) != 8:
-        raise ValueError("saved user-edited notebook template must contain the opening cell and Cells A–G")
-    saved_drive_sha256 = document.get("metadata", {}).get("revision_r1_saved_drive_source_sha256")
-    if saved_drive_sha256 != SAVED_DRIVE_NOTEBOOK_SHA256:
-        raise ValueError("notebook template is not derived from the verified saved Drive notebook")
+    template_bytes = template_path.read_bytes()
+    if _sha256(template_bytes) != SAVED_DRIVE_NOTEBOOK_SHA256:
+        raise ValueError("notebook template is not the exact verified saved Drive notebook")
+    document = json.loads(template_bytes.decode("utf-8"))
+    cells = document.get("cells", [])
+    if len(cells) != 10:
+        raise ValueError("verified saved notebook must contain its 10 captured cells before temporary-cell removal")
+
+    # The live saved notebook contains two temporary Run-2 recovery cells
+    # immediately before its edited launch cell. Remove only this exact,
+    # recognized pair; refuse unknown edits or a stale cell layout.
+    temporary_recovery = "".join(cells[6].get("source", []))
+    temporary_checkpoint_dump = "".join(cells[7].get("source", []))
+    saved_launch = "".join(cells[8].get("source", []))
+    saved_export = "".join(cells[9].get("source", []))
+    if not (
+        cells[6].get("cell_type") == "code"
+        and "_r1_helpers = r'''_RECOVERABLE_EXPORTS" in temporary_recovery
+        and cells[7].get("cell_type") == "code"
+        and temporary_checkpoint_dump.startswith("from scripts import production_workflow as wf")
+        and "load_verified_state" in temporary_checkpoint_dump
+        and saved_launch.startswith("# Cell F — continue/resume Runs 2–100")
+        and "COMPLETE_EXPORTED_RUN_ONLY" in saved_launch
+        and saved_export.startswith("# Cell G — stage compact exports locally")
+    ):
+        raise ValueError("saved notebook temporary recovery-cell layout differs; refusing to discard user cells")
+    document["cells"] = cells[:6] + cells[8:]
+    if len(document["cells"]) != 8:
+        raise ValueError("temporary-cell removal did not produce the opening cell and Cells A–G")
+
     template_sources = "\n".join(
         "".join(cell.get("source", [])) for cell in document.get("cells", [])
     )
-    if "COMPLETE_EXPORTED_RUN_ONLY" in template_sources or "_r1_helpers" in template_sources:
+    if "_r1_helpers" in template_sources:
         raise ValueError("temporary recovery-only cells/patches must not be included in the production notebook template")
 
     def replace_once(source: str, old: str, new: str, description: str) -> str:
@@ -1335,6 +1359,12 @@ def notebook_document(commit_sha: str) -> dict[str, Any]:
     if count != 1:
         raise ValueError("saved notebook Cell A does not contain exactly one supported full-commit pin")
     document["cells"][1]["source"] = setup.splitlines(keepends=True)
+    if "build_main_account_storage_api(" not in setup or "PINNED_GIT_COMMIT" not in setup:
+        raise ValueError("verified Cell A is missing the canonical OAuth or explicit Git pin contract")
+
+    preflight = "".join(document["cells"][2].get("source", []))
+    if "stage_canonical_preflight_artifacts(" not in preflight:
+        raise ValueError("verified Cell B no longer stages canonical preflight/schedule artifacts through OAuth API")
 
     readiness = "".join(document["cells"][3].get("source", []))
     import_anchor = "reuse_validated_first_run_measurement, run_checkpoint_root, run_output_root,"
@@ -1558,6 +1588,13 @@ if _run2_paths["restart_status"] == "CLEAN_REPLACEMENT_RESUME":''',
     )
     export = replace_once(
         export,
+        'storage_adapter=STORAGE_ADAPTER, logical_output_path=DRIVE_PATHS["export_root"],',
+        'storage_adapter=STORAGE_ADAPTER, logical_output_path=DRIVE_PATHS["export_root"],\n'
+        '        completed_run_keys=EFFECTIVE_COMPLETED_RUN_KEYS,',
+        "Cell G filtered lightweight archive completions",
+    )
+    export = replace_once(
+        export,
         "    from scripts.production_workflow import _hydrate_api_run_state, run_checkpoint_root\n    for _row in _completed:\n        _hydrate_api_run_state(\n            STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN, _row,\n            run_output_root(OUTPUT_ROOT, _row), run_checkpoint_root(CHECKPOINT_ROOT, _row),\n            include_recovery=False,\n        )",
         '''    from scripts.production_workflow import _hydrate_api_run_state
     for _row in _completed:
@@ -1579,10 +1616,13 @@ if _run2_paths["restart_status"] == "CLEAN_REPLACEMENT_RESUME":''',
         raise ValueError("Cell D is a local-only read-only diagnostic and must not publish its report")
     if "live_progress = ColabProgressDisplay(" not in final_diagnostic:
         raise ValueError("saved Cell D progress display edit was not preserved")
+    if "Diagnostic saved locally:" not in final_diagnostic:
+        raise ValueError("saved Cell D local-only diagnostic report path was not preserved")
     final_export = "".join(document["cells"][7].get("source", []))
     for required in (
         "registered_run_output_path", "registered_run_checkpoint_path",
         "_hydrate_api_matrix_registry(STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN)",
+        "completed_run_keys=EFFECTIVE_COMPLETED_RUN_KEYS",
     ):
         if required not in final_export:
             raise ValueError(f"Cell G is missing route-aware registered export handling: {required}")
