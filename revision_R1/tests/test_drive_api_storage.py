@@ -332,6 +332,62 @@ def test_new_publication_rejects_wrong_remote_type(tmp_path, monkeypatch, mime):
     assert local.read_bytes() == b"real content"
 
 
+def test_new_matrix_progress_accepts_drive_json_mime_and_verifies_exact_content(tmp_path, monkeypatch):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"mimeType": "application/json"}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / "matrix_progress.json"
+    payload = b'{"progress_kind":"TASKWISE_MATRIX_PROGRESS"}\n'
+    local.write_bytes(payload)
+
+    result = storage.publish_file(
+        local, "/drive/MyDrive/ReVision/results/matrix_progress.json",
+    )
+
+    remote = service.records[result["file_id"]]
+    assert result["status"] == "PASS"
+    assert remote["id"] == result["file_id"]
+    assert remote["parents"] == [result["parent_id"]]
+    assert remote["owners"] == [{"emailAddress": OWNER}]
+    assert remote["ownedByMe"] is True
+    assert int(remote["size"]) == len(payload)
+    assert remote["mimeType"] == "application/json"
+    assert remote["content"] == payload
+    assert remote["md5Checksum"] == hashlib.md5(payload, usedforsecurity=False).hexdigest()
+    assert result["sha256"] == hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.parametrize("drive_mime", [
+    "application/zip", "application/x-zip", "application/x-zip-compressed",
+])
+@pytest.mark.parametrize("filename", ["task-01.pt", "EMBER_Class_train.npz", "bundle.zip"])
+def test_new_zip_like_artifacts_accept_drive_mime_variants_and_verify_exact_content(
+    tmp_path, monkeypatch, filename, drive_mime,
+):
+    service = _FakeService()
+    service.files().create_metadata_overrides = {"mimeType": drive_mime}
+    storage = _storage(service, tmp_path / "stage", monkeypatch)
+    local = tmp_path / filename
+    payload = b"torch-serialized-task-boundary-fixture"
+    local.write_bytes(payload)
+
+    result = storage.publish_file(
+        local, f"/drive/MyDrive/ReVision/checkpoints/{filename}",
+    )
+
+    remote = service.records[result["file_id"]]
+    assert result["status"] == "PASS"
+    assert remote["id"] == result["file_id"]
+    assert remote["parents"] == [result["parent_id"]]
+    assert remote["owners"] == [{"emailAddress": OWNER}]
+    assert remote["ownedByMe"] is True
+    assert int(remote["size"]) == len(payload)
+    assert remote["mimeType"] == drive_mime
+    assert remote["content"] == payload
+    assert remote["md5Checksum"] == hashlib.md5(payload, usedforsecurity=False).hexdigest()
+    assert result["sha256"] == hashlib.sha256(payload).hexdigest()
+
+
 def test_nonempty_local_artifact_cannot_verify_as_empty_remote(tmp_path, monkeypatch):
     service = _FakeService()
     service.files().create_metadata_overrides = {"size": 0, "quotaBytesUsed": None,

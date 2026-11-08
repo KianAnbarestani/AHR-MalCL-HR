@@ -39,6 +39,26 @@ class DriveLeaseError(DriveStorageError):
     pass
 
 
+_DRIVE_ZIP_MIME_TYPES = frozenset({
+    "application/zip",
+    "application/x-zip",
+    "application/x-zip-compressed",
+})
+
+
+def _upload_mime_type(path: Path) -> str:
+    return "application/json" if path.suffix.lower() == ".json" else "application/octet-stream"
+
+
+def _accepted_upload_mime_types(path: Path) -> set[str]:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return {"application/json", "application/octet-stream"}
+    if suffix in {".pt", ".npz", ".zip"}:
+        return {"application/octet-stream", *_DRIVE_ZIP_MIME_TYPES}
+    return {"application/octet-stream"}
+
+
 TRANSIENT_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 READBACK_DELAYS_SECONDS = (0.0, 0.25, 0.75, 1.5)
 
@@ -595,12 +615,15 @@ class DriveApiStorage:
         local_sha = _file_sha256(local)
         existing_owner = None
         existing_owned_by_me = None
-        expected_mime = "application/octet-stream"
+        upload_mime = _upload_mime_type(logical)
+        accepted_mime_types = _accepted_upload_mime_types(logical)
+        expected_mime = upload_mime
         if existing is not None:
             expected_mime = existing.get("mimeType")
             if (not isinstance(expected_mime, str)
                     or expected_mime.startswith("application/vnd.google-apps.")):
                 raise DriveStorageError("existing Drive file type is not a binary artifact; preserved")
+            accepted_mime_types.add(expected_mime)
             if [str(value) for value in existing.get("parents", [])] != [parent_id]:
                 raise DriveStorageError(f"existing file ID {existing.get('id')} has a different parent")
             if not self._owner(existing) or type(existing.get("ownedByMe")) is not bool:
@@ -659,19 +682,19 @@ class DriveApiStorage:
         for attempt, delay in enumerate(delays):
             if delay:
                 time.sleep(delay)
-            media_body = self.media_upload_factory(local, "application/octet-stream")
+            media_body = self.media_upload_factory(local, upload_mime)
             if new_file:
                 request = self.service.files().create(
                     body={"id": file_id, "name": logical.name,
-                          "mimeType": "application/octet-stream", "parents": [parent_id]},
-                    media_body=media_body, media_mime_type="application/octet-stream",
+                          "mimeType": upload_mime, "parents": [parent_id]},
+                    media_body=media_body, media_mime_type=upload_mime,
                     supportsAllDrives=True,
                     fields="id,name,mimeType,parents,owners(emailAddress),ownedByMe,size,quotaBytesUsed,md5Checksum,capabilities(canEdit)",
                 )
             else:
                 request = self.service.files().update(
                     fileId=file_id, media_body=media_body,
-                    media_mime_type="application/octet-stream", supportsAllDrives=True,
+                    media_mime_type=upload_mime, supportsAllDrives=True,
                     fields="id,name,mimeType,parents,owners(emailAddress),ownedByMe,size,quotaBytesUsed,md5Checksum,capabilities(canEdit)",
                 )
             try:
@@ -698,7 +721,7 @@ class DriveApiStorage:
                         ).execute()
                         if (observed.get("name") == logical.name
                                 and observed.get("id") == file_id
-                                and observed.get("mimeType") == expected_mime
+                                and observed.get("mimeType") in accepted_mime_types
                                 and [str(value) for value in observed.get("parents", [])] == [parent_id]
                                 and _nonnegative_int(observed.get("size")) == local_size
                                 and observed.get("md5Checksum") in (None, local_md5)):
@@ -720,7 +743,8 @@ class DriveApiStorage:
         last_readback_error = None
         expected_readback = {
             "id": file_id, "name": logical.name, "parent_id": parent_id,
-            "size": local_size, "md5Checksum": local_md5, "mimeType": expected_mime,
+            "size": local_size, "md5Checksum": local_md5,
+            "mimeTypes": sorted(accepted_mime_types),
         }
         readback_delays = (0.0, *self.retry_delays)
         for attempt, delay in enumerate(readback_delays):
@@ -742,7 +766,7 @@ class DriveApiStorage:
             base_metadata_matches = (
                 isinstance(verified, dict) and verified.get("id") == file_id
                 and verified.get("name") == logical.name
-                and verified.get("mimeType") == expected_mime
+                and verified.get("mimeType") in accepted_mime_types
                 and [str(value) for value in verified.get("parents", [])] == [parent_id]
                 and _nonnegative_int(verified.get("size")) == local_size
                 and verified.get("md5Checksum") in (None, local_md5)
@@ -786,7 +810,7 @@ class DriveApiStorage:
                 )
         if (not isinstance(verified, dict) or verified.get("id") != file_id
                 or verified.get("name") != logical.name
-                or verified.get("mimeType") != expected_mime
+                or verified.get("mimeType") not in accepted_mime_types
                 or [str(value) for value in verified.get("parents", [])] != [parent_id]
                 or _nonnegative_int(verified.get("size")) != local_size
                 or verified.get("md5Checksum") not in (None, local_md5)):
