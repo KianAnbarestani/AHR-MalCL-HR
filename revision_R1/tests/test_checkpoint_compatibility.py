@@ -55,3 +55,13 @@ def test_compatibility_manifest_is_machine_readable_and_matches_verified_runtime
     assert observed_fingerprint == manifest["training_behavior_fingerprint_sha256"]
     verified = verify_checkpoint_compatibility(ROOT)
     assert manifest == verified
+
+
+def test_checkpoint_compatibility_metadata_describes_only_task_boundary_saves():
+    manifest = verify_checkpoint_compatibility(ROOT)
+    assert manifest["checkpoint_cadence_policy"] == {
+        "task_boundary_checkpoints": 11,
+        "mid_task_checkpoints": False,
+        "publication_order": "checkpoint_then_matrix_progress_json",
+        "retention": "retain_each_task_boundary_checkpoint",
+    }

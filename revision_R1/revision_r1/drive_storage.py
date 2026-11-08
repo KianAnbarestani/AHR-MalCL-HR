@@ -413,6 +413,18 @@ class DriveApiStorage:
         """
         parts = self._relative_parts(logical_path)
         name = parts[-1]
+        if parts == ("revision_R1", "production", "results", "matrix_progress.json"):
+            return True
+        if len(parts) == 7 and parts[:4] == ("revision_R1", "production", "checkpoints", "taskwise_v1"):
+            return bool(
+                re.fullmatch(r"[0-9a-f]{64}", parts[4])
+                and re.fullmatch(r"[0-9]{3}_[a-z0-9_]+_[0-9a-f]{16}", parts[5])
+                and re.fullmatch(r"task-(?:0[1-9]|1[01])\.pt", name)
+            )
+        if (len(parts) >= 8 and parts[:4] == ("revision_R1", "production", "results", "taskwise_v1")
+                and re.fullmatch(r"[0-9a-f]{64}", parts[4]) and parts[5] == "runs"
+                and re.fullmatch(r"[0-9]{3}_[a-z0-9_]+_[0-9a-f]{16}", parts[6])):
+            return True
         if name in {".matrix_execution.lease.json", ".run.lease.json"}:
             return True
         if name == "matrix_completion_registry.json":

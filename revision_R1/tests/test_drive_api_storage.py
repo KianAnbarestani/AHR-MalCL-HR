@@ -720,10 +720,9 @@ def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount
         "DRIVE_PATHS": {
             "ember_data_root": "/content/drive/MyDrive/AHR_MalCL/datasets",
             "az_data_root": "/content/drive/MyDrive/AHR_MalCL/datasets",
-            # Older Cell A used preflight_path; the replacement B must supply
-            # the canonical logical defaults without depending on a mount.
+                # Existing canonical preflight setting is staged through OAuth,
+                # and data roots are staged without requiring DriveFS.
             "preflight_path": logical_preflight,
-            "v62_recovery_report": "/content/drive/MyDrive/ReVision/revision_R1/results/reference.json",
             "dataset_cache_root": str(tmp_path / "cache"),
         },
         "STORAGE_ADAPTER": storage,
@@ -750,7 +749,7 @@ def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount
     assert fixture["historical_schedule"] not in str(namespace["EFFECTIVE_SCHEDULE_PATH"])
     dataset_downloads = len(downloads)
     assert all(Path(root).is_relative_to(tmp_path) for root in namespace["DATA_ROOTS"].values())
-    assert Path(namespace["DRIVE_PATHS"]["v62_recovery_report"]).is_file()
+    assert "v62_recovery_report" not in source
     remote_snapshot = {
         key: (record.get("size"), record.get("md5Checksum"), record.get("content"))
         for key, record in service.records.items()
@@ -759,8 +758,8 @@ def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount
     exec(compile(source, "generated-cell-B-rerun", "exec"), namespace)
     capsys.readouterr()
     assert namespace["PREFLIGHT_STAGING_EVIDENCE"]["bundle_key"] == first_bundle_key
-    # Small preflight records may redownload; NPZs and the operational report
-    # must reuse already hash-verified local bytes.
+    # Small preflight records may redownload; dataset bytes are reused from
+    # hash-verified local caches on the second execution.
     assert len(downloads) == dataset_downloads + 4
     assert sum(payload.startswith(b"PK") for payload in downloads) == 4
     assert {
@@ -786,8 +785,9 @@ def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount
     assert sum(payload.startswith(b"PK") for payload in downloads) == 4
     assert all(row["source"] == "VERIFIED_LOCAL_MMAP_CACHE"
                for row in namespace["DATASET_API_STAGING_EVIDENCE"].values())
-    # Test the real generated C with external readiness evidence mocked. The
-    # schedule/data downloads and filesystem serialization above remain real.
+    # Exercise the generated C against canonical API staging and the single
+    # taskwise progress file; only pre-existing Run 1 registry/checkpoint
+    # discovery is supplied as already-verified external evidence.
     for dataset, splits in original_specs.items():
         for split, spec in splits.items():
             monkeypatch.setitem(DATASETS[dataset], split, spec)
@@ -802,41 +802,40 @@ def test_cell_b_stages_complete_preflight_bundle_through_api_without_drive_mount
     monkeypatch.setattr(production_workflow, "_hydrate_api_run_state", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(production_workflow, "matrix_registry_evidence", lambda *_args: {"completed_run_keys": [first["run_key"]]})
     monkeypatch.setattr(production_workflow, "reuse_validated_first_run_measurement", lambda *_args: measurement)
-    monkeypatch.setattr(production_workflow, "_read_matrix_registry", lambda *_args: {"completed_runs": {first["run_key"]: {}}})
-    def reference_reader(path):
-        assert Path(path).is_relative_to(tmp_path)
-        assert json.loads(Path(path).read_bytes()) == {"fixture": "recovery"}
-        return {"max_checkpoint_payload_bytes": 100}
-    monkeypatch.setattr(production_workflow, "load_v62_recovery_checkpoint_bound", reference_reader)
-    monkeypatch.setattr(production_workflow, "_preflight_addressed_cache_bytes", lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(production_workflow, "require_run_capacity", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(production_workflow, "project_storage", lambda *_args, **_kwargs: {"drive": {
-        "matrix_peak_with_reserve_bytes": 100, "next_run_peak_with_reserve_bytes": 100,
-        "next_run_required_without_reserve_bytes": 100,
-    }})
-    monkeypatch.setattr(production_workflow, "inspect_production_capacity", lambda *_args, **_kwargs: {
-        "canonical_storage_identity_verified": True, "drive_available_bytes": 1 << 40,
-        "quota_account_email": OWNER, "canonical_revision_folder_id": "revision",
-        "quota_status": "TEST_FIXTURE", "output_destination": {"destination_owner": OWNER, "new_file_owner": OWNER},
-        "checkpoint_destination": {"destination_owner": OWNER, "new_file_owner": OWNER},
+    monkeypatch.setattr(production_workflow, "_read_matrix_registry", lambda *_args: {
+        "completed_runs": {first["run_key"]: {
+            "run_id": "verified-run-1", "artifact_manifest_sha256": "d" * 64,
+        }}
     })
+    from scripts import taskwise_matrix
+    monkeypatch.setattr(taskwise_matrix, "discover_run1_task_checkpoint_paths", lambda *_args: [
+        f"/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints/task-boundaries/task-{i:02d}.pt"
+        for i in range(1, 12)
+    ])
     monkeypatch.setattr(drive_storage, "_make_media_upload", lambda path, _mime: Path(path))
     monkeypatch.setattr(storage, "media_upload_factory", lambda path, _mime: Path(path))
     monkeypatch.setattr(drive_storage, "_make_media_bytes_upload", lambda payload, _mime: bytes(payload))
-    for key in ("output_root", "checkpoint_root", "export_root", "checkpoint_backup_root"):
-        logical = Path("/content/drive/MyDrive/ReVision/revision_R1/production") / key
-        namespace["DRIVE_PATHS"][key] = str(logical)
-        local_name = {"output_root": "results", "checkpoint_root": "checkpoints",
-                      "export_root": "exports", "checkpoint_backup_root": "checkpoint_backups"}[key]
-        storage.bind_root(logical, tmp_path / "storage/production" / local_name)
-    namespace["DRIVE_PATHS"]["local_checkpoint_root"] = str(tmp_path / "local-checkpoints")
+    logical_output = Path("/content/drive/MyDrive/ReVision/revision_R1/production/results")
+    logical_checkpoints = Path("/content/drive/MyDrive/ReVision/revision_R1/production/checkpoints")
+    namespace["DRIVE_PATHS"].update({
+        "output_root": str(logical_output),
+        "checkpoint_root": str(logical_checkpoints),
+    })
+    storage.bind_root(logical_output, tmp_path / "storage/production/results")
+    storage.bind_root(logical_checkpoints, tmp_path / "storage/production/checkpoints")
     namespace.update(STORAGE_API_FACTORY=lambda: service, ACTUAL_GIT_COMMIT="a" * 40,
                      ACTUAL_TRAINING_SOURCE_SHA256=plan["training_source_sha256"],
                      ACTUAL_RUNTIME_SOURCE_SHA256="b" * 64, PACKAGE_MANIFEST_SHA256="c" * 64)
     c_source = "".join(notebook_document("a" * 40)["cells"][3]["source"])
     exec(compile(c_source, "generated-cell-C", "exec"), namespace)
-    assert namespace["NEXT_PENDING_RECORD"]["run_key"] == "ember_seed42_current_only"
+    assert namespace["MATRIX_PROGRESS"]["runs"][0]["run_complete"] is True
+    assert namespace["MATRIX_PROGRESS"]["runs"][1]["run_key"] == "ember_seed42_current_only"
+    assert all(not task["done"] for task in namespace["MATRIX_PROGRESS"]["runs"][1]["tasks"])
     assert namespace["DATA_ROOTS"]["ember"].is_relative_to(tmp_path)
+    assert namespace["LOGICAL_MATRIX_PROGRESS_PATH"].name == "matrix_progress.json"
+    assert namespace["LOGICAL_MATRIX_PROGRESS_PATH"] == (
+        Path("/content/drive/MyDrive/ReVision/revision_R1/production/results/matrix_progress.json")
+    )
 
 
 def test_preflight_staging_rejects_wrong_schedule_hash_missing_or_ambiguous_canonical_file(tmp_path, monkeypatch):

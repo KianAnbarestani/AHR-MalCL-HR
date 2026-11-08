@@ -22,44 +22,29 @@ The package manifest reports `training_source_sha256` for the historical
 checkpoint identity and `runtime_source_sha256` for the actual new code. The
 notebook prints and binds both separately from its selected Git commit.
 
-## Checkpoint policy
+## Taskwise checkpoint policy
 
-- Local recovery serialization: completion-based monotonic timer, every 300
-  seconds; task boundaries and graceful interruption are forced.
-- Drive recovery publication: completion-based monotonic timer, every 900
-  seconds; task boundaries and graceful interruption are forced.
-- The frozen RunConfig's older cadence fields are retained unchanged as part
-  of the resume identity; the 300/900-second operational override is recorded
-  separately in resource metrics and does not alter the config hash.
-- A periodic Drive publication copies only the newly-created recovery
-  generation. It does not resend the existing recovery pair. Startup verifies
-  the newest local generation first and stages only a newer valid Drive
-  generation; if the newest Drive generation is damaged, metadata/hash
-  fallback selects the preceding valid generation. The selected full state is
-  deserialized once.
-- Recovery directories retain two hash-verified generations. A new Drive
-  generation is staged and verified before the previous generation is
-  pruned. Pruning uses exact owned Drive file IDs with permanent deletion
-  (not Trash); a failed publish or unverifiable owner prevents pruning. Cell C
-  must verify that the authenticated account can permanently delete its own
-  probe file before a run can rely on this rotation policy. If the running
-  account does not own an older recovery file, the exact-file ownership gate
-  refuses to prune it; no unrelated or foreign-owned file is touched.
-- The rotation applies only to the `recovery` directory. Existing task-boundary
-  artifacts remain separately retained and are never pruned by the recovery
-  policy. Existing files already in Drive Trash are not automatically
-  permanently deleted; they continue to count against quota until an account
-  owner handles them separately.
-- Required task-boundary artifacts remain a separate unpruned archive. Their
-  generation number continues from Drive manifest metadata after runtime
-  restart, without downloading the archive payloads.
-- A serialization/publish failure does not initiate a second full-state save.
-- Run outputs separate optimizer/training seconds from snapshot capture,
-  serialization, upload, verification, pruning, and artifact-copy time; they
-  report retained bytes and cumulative successful payload/manifest write bytes
-  separately. Historical cumulative traffic before this build is explicitly
-  marked unknown and is not inferred from current retained files. Component
-  times are nested within total checkpoint wall time and are not additive.
+- The matrix uses one Drive `matrix_progress.json`, with all 100 frozen runs in
+  plan order and eleven task entries per run. A task is `done` only after its
+  full-state checkpoint has been written and verified in Drive.
+- Each new run writes exactly one full-state checkpoint at the end of each
+  completed task. The checkpoint includes model, optimizer, RNG, scaler,
+  replay, sampler, cursor, and accumulated task state needed for the next task.
+- Save order is checkpoint first, then atomic local progress replacement and
+  Drive progress publication. A failure before progress publication leaves
+  the task unfinished there; a stop during a task repeats only that task.
+- All eleven task checkpoints are retained. There are no initial/mid-task
+  checkpoints, leases, heartbeats, expiry handling, recovery generations,
+  timed publication, or checkpoint rotation in the Colab taskwise path.
+- After Task 11, result artifacts publish first and `artifact_manifest.json`
+  publishes last. Only after successful result publication is the same progress
+  record updated to mark the run complete. Export-only retry resumes from the
+  Task 11 checkpoint and performs no training updates.
+- Run 1 remains imported from its existing validated completion registry.
+  The clean replacement Run 2 uses the `taskwise_v1/<plan_sha256>/` namespace;
+  abandoned legacy Run 2 artifacts are neither read as completion nor altered.
+- Missing or unloadable recorded checkpoint files fail closed with run, task,
+  and logical path. The runner never silently starts a replacement from Task 1.
 
 These changes do not modify model/optimizer configuration, data sampling,
 RNG streams, fixed update budgets, or the frozen schedule. The notebook must

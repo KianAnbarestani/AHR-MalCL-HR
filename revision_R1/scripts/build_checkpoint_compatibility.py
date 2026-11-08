@@ -93,9 +93,10 @@ def build_manifest(package_root: str | Path, *, baseline_commit: str = AUTHENTIC
         "checkpoint_schema_unchanged": True,
         "resume_identity_policy": "preserve the authentic historical identity only after exact baseline and runtime source verification; never rewrite checkpoint identity",
         "checkpoint_cadence_policy": {
-            "local_recovery_seconds": 300,
-            "drive_publication_seconds": 900,
-            "task_boundaries_and_graceful_interruptions_forced": True,
+            "task_boundary_checkpoints": 11,
+            "mid_task_checkpoints": False,
+            "publication_order": "checkpoint_then_matrix_progress_json",
+            "retention": "retain_each_task_boundary_checkpoint",
         },
     }
 

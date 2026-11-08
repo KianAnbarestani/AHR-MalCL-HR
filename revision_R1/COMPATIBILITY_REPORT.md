@@ -1,5 +1,11 @@
 # revision_R1 compatibility and packaging report
 
+> Current production launch/resume behavior is the taskwise protocol described
+> in `README_GITHUB_COLAB.md` and `CHECKPOINT_COMPATIBILITY.md`. The later
+> validation-workflow section below records historical v6.x QA tooling only;
+> its worker, lease, and validation-checkpoint policies are not used by the
+> current production notebook.
+
 ## Scope and provenance
 
 `revision_R1` is a newly specified, separately versioned matched-runner

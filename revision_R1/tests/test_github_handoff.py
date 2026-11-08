@@ -14,6 +14,7 @@ from scripts.build_github_handoff import (
     EXPECTED_TRAINING_SOURCE_SHA256,
     build_package_manifest,
     notebook_document,
+    stage_committed_package,
     stage_clean_package,
     verify_package_integrity,
 )
@@ -74,6 +75,25 @@ def test_clean_package_verifier_rejects_file_tampering(tmp_path):
     target.write_bytes(target.read_bytes() + b"# tampered\n")
     with pytest.raises(ValueError, match="hash/size mismatch"):
         verify_package_integrity(clean_package)
+
+
+def test_committed_checkout_is_staged_to_exact_manifest_inventory(tmp_path):
+    source = stage_clean_package(ROOT, tmp_path / "committed-source")
+    (source / "PRODUCTION_COLAB_README.md").write_text("archival, not runtime package\n", encoding="utf-8")
+    (source / "notebooks").mkdir()
+    (source / "notebooks" / "saved-base.ipynb").write_text("{}\n", encoding="utf-8")
+    destination = stage_committed_package(source, tmp_path / "verified-package")
+    package_manifest, _build_manifest, package_sha = verify_package_integrity(destination)
+
+    assert destination == tmp_path / "verified-package"
+    assert package_sha == hashlib.sha256((source / "PACKAGE_MANIFEST.json").read_bytes()).hexdigest()
+    assert len(package_manifest["files"]) > 0
+    assert {path.relative_to(destination).as_posix() for path in destination.rglob("*") if path.is_file()} == {
+        *package_manifest["files"], "PACKAGE_MANIFEST.json", "BUILD_MANIFEST.json",
+    }
+    assert not (destination / "PRODUCTION_COLAB_README.md").exists()
+    assert not (destination / "notebooks" / "saved-base.ipynb").exists()
+    assert stage_committed_package(source, destination) == destination
 
 
 @pytest.mark.parametrize("secret_value,expected_api_calls", [(None, 1), ("sentinel-do-not-leak", 2)])
@@ -156,6 +176,10 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "token contents are never displayed" in cells[1]
     assert '"GIT_TRACE": "0"' in cells[1]
     assert "if CHECKOUT_PATH.exists():" in cells[1]
+    assert 'PACKAGE_SOURCE_ROOT = CHECKOUT_PATH / "revision_R1"' in cells[1]
+    assert 'PACKAGE_ROOT = Path("/content/revision_R1_verified_packages") / PINNED_GIT_COMMIT' in cells[1]
+    assert "stage_committed_package(PACKAGE_SOURCE_ROOT, PACKAGE_ROOT)" in cells[1]
+    assert "package allowlist" in cells[1]
     assert "sys.dont_write_bytecode = True" in cells[1]
     assert "git pull" not in cells[1]
     assert "verify_package_integrity(PACKAGE_ROOT)" in cells[1]
@@ -173,56 +197,16 @@ def test_stable_notebook_pins_commit_and_keeps_production_gated():
     assert "torch.cuda.is_available()" in cells[1]
     assert "revision_R1_production_v1_4_1_20261028.zip" not in all_source
     assert "revision_R1_production_v1_4_1_20261028.zip.sha256" not in all_source
-    assert "runtime_code_binding" in cells[3]
-    assert "selected_git_commit" in cells[3]
-    assert "output_new_file_owner" in cells[3]
-    assert "checkpoint_new_file_owner" in cells[3]
-    assert "quota_account_email" in cells[3]
-    assert "reuse_validated_first_run_measurement(" in cells[3]
-    assert "matrix_registry_evidence(STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN)" in cells[3]
-    assert "CELL_C_CANONICAL_COMPLETION_REGISTRY" in cells[3]
-    assert "require_run_capacity(CAPACITY, STORAGE_PROJECTION, scope=\"first_run\")" not in cells[3]
-    assert "prepare_dataset_roots" not in cells[2]
-    assert "inspect_dataset_sources(" in cells[2]
-    assert "no external download will be attempted" in cells[2]
-    assert "if _npz.is_file():" in cells[2]
-    assert "LAUNCH_FIRST_PRODUCTION_RUN" not in cells[5]
-    assert "ALREADY_FINALIZED_COMPLETED_RUN" in cells[5]
-    assert "execute_first_production_run(" not in cells[5]
-    assert "CELL_E_REUSES_CELL_C_REGISTRY_EVIDENCE" in cells[5]
-    assert "LAUNCH_REMAINING_MATRIX = False" in cells[6]
-    assert "api_factory=STORAGE_API_FACTORY" in cells[6]
-    assert "api_factory=STORAGE_API_FACTORY" in cells[7]
-    assert "finalize_completed_production_run(" not in all_source
-    assert "execute_first_production_run(" not in all_source
-    assert "continue_production_matrix(" in cells[6]
-    assert "CLEAN_RESTART_RUN2 = True" in cells[6]
-    assert "ACKNOWLEDGE_NO_OTHER_COLAB_WORKER = False" in cells[6]
-    assert "clean_restart_run2=CLEAN_RESTART_RUN2" in cells[6]
-    assert "acknowledge_no_other_worker=ACKNOWLEDGE_NO_OTHER_COLAB_WORKER" in cells[6]
-    assert "Run 1 remains finalized/skipped" in cells[6]
-    assert "complete_exported_run(" not in cells[6]
-    assert "prepare_pending_checkpoint_publication(" not in cells[6]
-    assert "resolve_matrix_run_paths" in cells[3]
-    assert "replacement_completion_matches_route" in cells[3]
-    assert "CELL_C_EFFECTIVE_RUN2_DISPOSITION" in cells[3]
-    assert "resolve_matrix_run_paths" in cells[4]
-    assert "run2_registry_disposition" in cells[4]
-    assert "registered_run_output_path" in cells[7]
-    assert "registered_run_checkpoint_path" in cells[7]
-    assert "clean_replacement_run2=True" in cells[7]
-    assert "EFFECTIVE_COMPLETED_RUN_KEYS" in cells[7]
-    assert "STORAGE_ADAPTER.publish_file(" not in cells[4]
-    assert "Diagnostic saved locally:" in cells[4]
-    assert "ColabProgressDisplay(" in cells[4]
-    assert "training_source_sha256" in cells[3]
-    assert "selected_git_commit" in cells[3]
-    assert "fine-grained read-only" in cells[0]
-    assert "GITHUB_READ_TOKEN" in cells[0]
-    assert "REVISION_R1_STORAGE_REFRESH_TOKEN" in cells[0]
-    assert "REVISION_R1_STORAGE_OAUTH_CLIENT_ID" in cells[0]
-    assert "REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET" in cells[0]
-    assert "dedicated user-OAuth refresh token" in cells[0]
+    assert "matrix_progress.json" in cells[3]
+    assert "Run 1" in cells[5] and "skipped" in cells[5].lower()
+    assert "LAUNCH_MATRIX = False" in cells[6]
+    assert "ACKNOWLEDGE_SINGLE_WORKER = False" in cells[6]
+    assert "run_taskwise_matrix(" in cells[6]
+    for removed in (
+        "MATRIX_LEASE", "RunLease", "inspect_lease", "continue_production_matrix(",
+        "COMPLETE_EXPORTED_RUN_ONLY", "_r1_helpers", "finalize_completed_production_run(",
+    ):
+        assert removed.lower() not in all_source.lower()
 
 
 def test_notebook_builder_uses_saved_drive_notebook_without_temporary_recovery_cells():
@@ -252,9 +236,11 @@ def test_notebook_builder_uses_saved_drive_notebook_without_temporary_recovery_c
     assert len(cells) == 8
     assert "PINNED_GIT_COMMIT = \"0123456789abcdef0123456789abcdef01234567\"" in cells[1]
     assert "stage_canonical_preflight_artifacts(" in cells[2]
-    assert "ColabProgressDisplay(" in cells[4]
-    assert "ALREADY_FINALIZED_COMPLETED_RUN" in cells[5]
-    assert "continue_production_matrix(" in cells[6]
+    assert "matrix_progress.json" in cells[3]
+    assert '"read_only": True' in cells[4]
+    assert "already finalized" in cells[5].lower()
+    assert "run_taskwise_matrix(" in cells[6]
+    assert "LAUNCH_MATRIX = False" in cells[6]
     assert "COMPLETE_EXPORTED_RUN_ONLY" not in "\n".join(cells)
     assert "_r1_helpers" not in "\n".join(cells)
     assert "revision_R1_saved_drive_source_sha256" not in "\n".join(cells)
@@ -274,20 +260,16 @@ def test_cell_b_preflight_uses_api_staging_and_frozen_schedule_digest():
     assert 'PREFLIGHT_PATH = Path(DRIVE_PATHS["preflight_drive_path"])' not in cell_b
     assert 'if not PREFLIGHT_PATH.is_file()' in cell_b  # checks only the already API-staged local file
     assert "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212" in cells[1]
-    assert "Cells A through C require no DriveFS mount" in cells[0]
+    assert "one Colab worker at a time" in cells[0]
+    assert "one `matrix_progress.json`" in cells[0]
 
 
 def test_generated_cell_f_is_one_disabled_launch_resume_path():
-    from scripts.build_github_handoff import _github_matrix_cell
-    source = _github_matrix_cell()
-    assert "LAUNCH_REMAINING_MATRIX = False" in source
-    assert "ACKNOWLEDGE_NO_OTHER_COLAB_WORKER = False" in source
-    assert "CLEAN_RESTART_RUN2 = True" in source
-    assert "continue_production_matrix(" in source
-    assert "clean_restart_run2=CLEAN_RESTART_RUN2" in source
-    assert "PREPARE_EXISTING_CHECKPOINT_ONLY" not in source
-    assert "complete_exported_run(" not in source
-    assert "Run interrupted safely. Re-run Cell D, then rerun this same Cell F" in source
+    source = "".join(notebook_document("0123456789abcdef0123456789abcdef01234567")["cells"][6]["source"])
+    assert "LAUNCH_MATRIX = False" in source
+    assert "ACKNOWLEDGE_SINGLE_WORKER = False" in source
+    assert "run_taskwise_matrix(" in source
+    assert "continue_production_matrix(" not in source
 
 
 def test_user_edited_cell_d_is_local_only_and_keeps_readable_progress():
@@ -295,22 +277,22 @@ def test_user_edited_cell_d_is_local_only_and_keeps_readable_progress():
         "0123456789abcdef0123456789abcdef01234567"
     )["cells"]]
     diagnostic = cells[4]
-    assert "ColabProgressDisplay(" in diagnostic
-    assert "live_progress =" in diagnostic
-    assert "Diagnostic saved locally:" in diagnostic
-    assert "STORAGE_ADAPTER.publish_file(" not in diagnostic
-    assert "resolve_matrix_run_paths" in diagnostic
-    assert "_next_progress_relative" in diagnostic
-    assert "next_run_recovery_checkpoint_metadata_only" in diagnostic
+    assert "read_canonical_progress(" in diagnostic
+    assert '"read_only": True' in diagnostic
+    assert "first_unfinished_run" in diagnostic
+    assert "next_task_id" in diagnostic
+    assert "LOGICAL_MATRIX_PROGRESS_PATH" in diagnostic
 
 
 def test_production_readme_has_one_github_execution_order_and_no_zip_setup():
-    readme = (ROOT / "PRODUCTION_COLAB_README.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README_GITHUB_COLAB.md").read_text(encoding="utf-8")
 
     assert readme.count("## Exact execution order") == 1
-    assert "verify the distributed ZIP" not in readme
     assert "Revision_R1_Production_Colab.ipynb" in readme
     assert "kian.anb777@gmail.com" in readme
-    assert "Mixed-owner historical generations" in readme
-    assert "PyTorch 2.11.0+cu128" in readme
-    assert "PyTorch CUDA build 12.8" in readme
+    assert "matrix_progress.json" in readme
+    assert "one atomic full-state checkpoint locally" in readme
+    assert "only then atomically updates/publishes `matrix_progress.json`" in readme
+    assert "LAUNCH_MATRIX = False" in readme
+    assert "no matrix/run lease, heartbeat, expiry, initial/mid-task save, recovery generation, or rotation is used" in readme.lower()
+    assert "five monotonic minutes" not in readme

@@ -820,6 +820,7 @@ def verify_canonical_storage_session(
     required_path_keys: tuple[str, ...] = (),
     conditional_update_probe=None,
     storage_adapter=None,
+    require_conditional_update: bool = True,
 ) -> dict[str, Any]:
     """Bind canonical API storage independently of the Colab DriveFS account.
 
@@ -913,21 +914,24 @@ def verify_canonical_storage_session(
         raise StorageCapacityError(
             "canonical OAuth API probe did not verify main-account ownership, exact ReVision parent, and cleanup capability"
         )
-    lock_parent_id = str(
-        (bindings.get("output_root") or {}).get("folder_id")
-        or revision.get("folder_id")
-    )
-    from revision_r1.drive_storage import verify_conditional_update_support
-    lease_service = getattr(storage_adapter, "lease_service", None) or service
-    conditional_update = (conditional_update_probe or verify_conditional_update_support)(
-        service, parent_id=lock_parent_id, expected_account_email=expected_account,
-        lease_service=lease_service,
-    )
-    if not isinstance(conditional_update, dict) or conditional_update.get("status") != "PASS":
-        raise StorageCapacityError(
-            "canonical Drive storage cannot prove stale lease updates are rejected; "
-            "production worker launch remains disabled"
+    if require_conditional_update:
+        lock_parent_id = str(
+            (bindings.get("output_root") or {}).get("folder_id")
+            or revision.get("folder_id")
         )
+        from revision_r1.drive_storage import verify_conditional_update_support
+        lease_service = getattr(storage_adapter, "lease_service", None) or service
+        conditional_update = (conditional_update_probe or verify_conditional_update_support)(
+            service, parent_id=lock_parent_id, expected_account_email=expected_account,
+            lease_service=lease_service,
+        )
+        if not isinstance(conditional_update, dict) or conditional_update.get("status") != "PASS":
+            raise StorageCapacityError(
+                "canonical Drive storage cannot prove stale lease updates are rejected; "
+                "production worker launch remains disabled"
+            )
+    else:
+        conditional_update = {"status": "NOT_REQUIRED", "reason": "single-worker taskwise progress protocol"}
     account_after = _drive_account_snapshot(service)
     if account_after["authenticated_user"] != expected_account:
         raise StorageCapacityError("authenticated storage account changed during canonical mount verification")

@@ -30,18 +30,17 @@ EXTRA_TESTS = (
     "test_github_handoff.py",
     "test_runtime_compatibility.py",
     "test_storage_auth.py",
+    "test_taskwise_matrix.py",
 )
 EXTRA_FILES = (
     "CHECKPOINT_COMPATIBILITY.md",
     "COMPATIBILITY_REPORT.md",
     "FROZEN_PROTOCOL.md",
     "legacy_checkpoint_source_compatibility.json",
-    "PRODUCTION_COLAB_README.md",
     "README_GITHUB_COLAB.md",
     "requirements-colab.txt",
     "requirements-test.txt",
     "checkpoint_compatibility.json",
-    "notebooks/Revision_R1_Production_Colab_Saved_Drive_Base.ipynb",
 )
 SCRIPT_FILES = (
     "scripts/build_checkpoint_compatibility.py",
@@ -52,6 +51,7 @@ SCRIPT_FILES = (
     "scripts/production_workflow.py",
     "scripts/production_recovery.py",
     "scripts/storage_auth.py",
+    "scripts/taskwise_matrix.py",
 )
 CONFIG_FILES = (
     "configs/legacy_v1_2_first_run_identity.json",
@@ -208,6 +208,15 @@ def verify_package_integrity(package_root: str | Path) -> tuple[dict[str, Any], 
             f"runner file inventory differs from manifest; unmanifested={sorted(observed - set(files))}, "
             f"missing={sorted(set(files) - observed)}"
         )
+    required_inventory = {
+        path.relative_to(root).as_posix() for path in package_file_paths(root)
+    }
+    if set(files) != required_inventory:
+        raise ValueError(
+            "PACKAGE_MANIFEST differs from the pinned runner allowlist; "
+            f"unmanifested={sorted(required_inventory - set(files))}, "
+            f"unexpected={sorted(set(files) - required_inventory)}"
+        )
     for relative, item in files.items():
         rel = Path(relative)
         target = (root / rel).resolve()
@@ -238,6 +247,70 @@ def verify_package_integrity(package_root: str | Path) -> tuple[dict[str, Any], 
         or plan.get("protocol") != package_manifest.get("protocol")):
         raise ValueError("frozen plan differs from authenticated training/schedule identities")
     return package_manifest, build_manifest, package_manifest_sha
+
+
+def stage_committed_package(source_root: str | Path, output_root: str | Path) -> Path:
+    """Stage and verify only the package allowlist from an exact Git checkout.
+
+    The source checkout may also contain notebook templates or archival files.
+    They are not part of the runtime package. The staging directory contains
+    exactly the allowlisted files plus the two committed integrity manifests.
+    """
+    source = Path(source_root).expanduser().resolve()
+    output = Path(output_root).expanduser().resolve()
+    if not (source / PACKAGE_MANIFEST_NAME).is_file() or not (source / BUILD_MANIFEST_NAME).is_file():
+        raise FileNotFoundError("pinned source checkout lacks committed runner integrity manifests")
+    source_manifest_bytes = (source / PACKAGE_MANIFEST_NAME).read_bytes()
+    source_build_bytes = (source / BUILD_MANIFEST_NAME).read_bytes()
+    source_manifest = json.loads(source_manifest_bytes)
+    manifest_files = source_manifest.get("files")
+    if not isinstance(manifest_files, dict):
+        raise ValueError("pinned source PACKAGE_MANIFEST has no file inventory")
+    required_inventory = {
+        path.relative_to(source).as_posix() for path in package_file_paths(source)
+    }
+    if set(manifest_files) != required_inventory:
+        raise ValueError(
+            "pinned source PACKAGE_MANIFEST differs from its runtime allowlist; "
+            f"unmanifested={sorted(required_inventory - set(manifest_files))}, "
+            f"unexpected={sorted(set(manifest_files) - required_inventory)}"
+        )
+
+    if output.exists() or output.is_symlink():
+        if output.is_symlink() or not output.is_dir():
+            raise ValueError(f"verified package destination is not a regular directory: {output}")
+        if ((output / PACKAGE_MANIFEST_NAME).read_bytes() != source_manifest_bytes
+                or (output / BUILD_MANIFEST_NAME).read_bytes() != source_build_bytes):
+            raise ValueError(f"existing verified package belongs to a different pinned release; preserved: {output}")
+        verify_package_integrity(output)
+        return output
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
+    try:
+        for relative in sorted(manifest_files):
+            rel = Path(relative)
+            if rel.is_absolute() or ".." in rel.parts:
+                raise ValueError(f"unsafe package member in committed manifest: {relative}")
+            source_file = source / rel
+            target = staging / rel
+            if source_file.is_symlink() or not source_file.is_file():
+                raise FileNotFoundError(f"pinned package member is missing or a symlink: {relative}")
+            try:
+                source_file.resolve().relative_to(source)
+                target.resolve().relative_to(staging)
+            except ValueError as exc:
+                raise ValueError(f"package member escapes its staging root: {relative}") from exc
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_file, target)
+        (staging / PACKAGE_MANIFEST_NAME).write_bytes(source_manifest_bytes)
+        (staging / BUILD_MANIFEST_NAME).write_bytes(source_build_bytes)
+        verify_package_integrity(staging)
+        os.replace(staging, output)
+        return output
+    finally:
+        if staging.exists() and not staging.is_symlink():
+            shutil.rmtree(staging)
 
 
 def stage_canonical_preflight_artifacts(
@@ -506,7 +579,8 @@ if REPOSITORY_METADATA.get("full_name", "").lower() != GITHUB_REPOSITORY.lower()
 
 CHECKOUT_PARENT = Path("/content/revision_R1_pinned_sources")
 CHECKOUT_PATH = CHECKOUT_PARENT / PINNED_GIT_COMMIT
-PACKAGE_ROOT = CHECKOUT_PATH / "revision_R1"
+PACKAGE_SOURCE_ROOT = CHECKOUT_PATH / "revision_R1"
+PACKAGE_ROOT = Path("/content/revision_R1_verified_packages") / PINNED_GIT_COMMIT
 def _git(args, *, cwd, env):
     result = subprocess.run(["git", *args], cwd=cwd, env=env, text=True, capture_output=True, check=False)
     if result.returncode:
@@ -564,6 +638,19 @@ else:
 ACTUAL_GIT_COMMIT = _git(["rev-parse", "HEAD"], cwd=CHECKOUT_PATH, env=os.environ.copy())
 if ACTUAL_GIT_COMMIT != PINNED_GIT_COMMIT or _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=CHECKOUT_PATH, env=os.environ.copy()) != "HEAD":
     raise RuntimeError("Pinned source was not checked out at the exact detached commit")
+
+# Keep the full detached Git checkout clean. Stage only the committed runner
+# allowlist as a separate package root; the saved notebook source and archived
+# README remain in Git but are deliberately not runtime package members.
+for module_name in list(sys.modules):
+    if module_name == "revision_r1" or module_name.startswith("revision_r1.") or module_name == "scripts" or module_name.startswith("scripts."):
+        del sys.modules[module_name]
+sys.path.insert(0, str(PACKAGE_SOURCE_ROOT))
+try:
+    from scripts.build_github_handoff import stage_committed_package
+    PACKAGE_ROOT = stage_committed_package(PACKAGE_SOURCE_ROOT, PACKAGE_ROOT)
+finally:
+    sys.path.remove(str(PACKAGE_SOURCE_ROOT))
 
 def _sha256_file(path):
     h = hashlib.sha256()
@@ -1294,7 +1381,7 @@ print("Full checkpoint archive: NOT_REQUESTED. No historical checkpoint was chan
 '''
 
 
-def notebook_document(commit_sha: str) -> dict[str, Any]:
+def _legacy_notebook_document(commit_sha: str) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
         raise ValueError("the stable Colab notebook requires a lowercase full 40-character Git commit SHA")
     template_path = Path(__file__).resolve().parents[1] / "notebooks" / "Revision_R1_Production_Colab_Saved_Drive_Base.ipynb"
@@ -1630,6 +1717,296 @@ if _run2_paths["restart_status"] == "CLEAN_REPLACEMENT_RESUME":''',
     for index, cell in enumerate(document["cells"]):
         if cell.get("cell_type") == "code":
             compile("".join(cell["source"]), f"notebook-cell-{index}", "exec")
+    return document
+
+
+def notebook_document(commit_sha: str) -> dict[str, Any]:
+    """Build the compact A–G notebook from the user's captured Drive-edited base."""
+    if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+        raise ValueError("the stable Colab notebook requires a lowercase full 40-character Git commit SHA")
+    template_path = Path(__file__).resolve().parents[1] / "notebooks" / "Revision_R1_Production_Colab_Saved_Drive_Base.ipynb"
+    payload = template_path.read_bytes()
+    if _sha256(payload) != SAVED_DRIVE_NOTEBOOK_SHA256:
+        raise ValueError("notebook template is not the exact verified saved Drive-edited base")
+    document = json.loads(payload.decode("utf-8"))
+    cells = document.get("cells", [])
+    if len(cells) != 10:
+        raise ValueError("saved Drive-edited notebook changed from its verified ten-cell layout")
+    if not (
+        "_r1_helpers = r'''_RECOVERABLE_EXPORTS" in "".join(cells[6].get("source", []))
+        and "load_verified_state" in "".join(cells[7].get("source", []))
+        and "COMPLETE_EXPORTED_RUN_ONLY" in "".join(cells[8].get("source", []))
+    ):
+        raise ValueError("the two recognized temporary recovery cells/launch cell differ; refusing an unsafe rewrite")
+    clean_cells = cells[:6] + cells[8:]
+    if len(clean_cells) != 8:
+        raise ValueError("temporary recovery cells were not removed exactly")
+
+    def set_source(index: int, source: str) -> None:
+        clean_cells[index]["source"] = source.splitlines(keepends=True)
+        if clean_cells[index].get("cell_type") == "code":
+            clean_cells[index]["execution_count"] = None
+            clean_cells[index]["outputs"] = []
+
+    markdown = """# revision_R1 production — one pinned runner, one taskwise progress file
+
+Run Cells A–E for setup and read-only readiness. Cell F is the only launch/resume cell and remains disabled by default. The runner keeps the frozen 100-run order, scientific settings, and result formats. It writes one `matrix_progress.json` to Drive and one full-state checkpoint after each completed task. A task is marked done only after its checkpoint publication is verified. A stop mid-task repeats only that unfinished task; a failure after Task 11 retries result export from the Task 11 checkpoint.
+
+Run one Colab worker at a time. No matrix/run leases, heartbeats, periodic checkpoints, recovery generations, or checkpoint rotation are used. Run 1 is imported as complete from its verified existing registry entry. The abandoned Run 2 namespace is left untouched; the clean taskwise namespace starts its replacement at Task 1.
+
+Before Cell A, complete the one-time OAuth setup in `README_GITHUB_COLAB.md` and add `REVISION_R1_STORAGE_OAUTH_CLIENT_ID`, `REVISION_R1_STORAGE_OAUTH_CLIENT_SECRET`, and `REVISION_R1_STORAGE_REFRESH_TOKEN` to Colab Secrets with notebook access enabled. Production is never launched automatically.
+"""
+    set_source(0, markdown)
+
+    setup = "".join(clean_cells[1].get("source", []))
+    setup, count = re.subn(
+        r'PINNED_GIT_COMMIT\s*=\s*"[0-9a-f]{40}"',
+        f'PINNED_GIT_COMMIT = "{commit_sha}"', setup, count=1,
+    )
+    if count != 1:
+        raise ValueError("Cell A does not contain exactly one supported full Git commit pin")
+    setup = setup.replace(
+        '    "v62_recovery_report": "/content/drive/MyDrive/ReVision/revision_R1/results/validation/reports/resume_validation_2b4d8f5f1f29a938_20261026T142320Z_946699443.json",\n', "",
+    )
+    setup = setup.replace('    "local_checkpoint_root": "/content/revision_R1_production/checkpoints",\n', "")
+    setup = setup.replace('    "export_root": "/content/drive/MyDrive/ReVision/revision_R1/production/exports",\n', "")
+    setup = setup.replace('    "checkpoint_backup_root": "/content/drive/MyDrive/ReVision/revision_R1/production/checkpoint_backups",\n', "")
+    setup = setup.replace('STORAGE_ADAPTER.bind_root(DRIVE_PATHS["export_root"], STORAGE_STAGE_ROOT / "production/exports")\n', "")
+    setup = setup.replace('STORAGE_ADAPTER.bind_root(DRIVE_PATHS["checkpoint_backup_root"], STORAGE_STAGE_ROOT / "production/checkpoint_backups")\n', "")
+    setup = setup.replace(
+        "        storage_adapter=STORAGE_ADAPTER,\n        path_bindings={",
+        "        storage_adapter=STORAGE_ADAPTER,\n        require_conditional_update=False,\n        path_bindings={",
+        1,
+    )
+    if "require_conditional_update=False" not in setup:
+        raise ValueError("Cell A must verify OAuth storage without running the removed lease CAS probe")
+    setup = setup.replace(
+        'PACKAGE_ROOT = CHECKOUT_PATH / "revision_R1"',
+        'PACKAGE_SOURCE_ROOT = CHECKOUT_PATH / "revision_R1"\n'
+        'PACKAGE_ROOT = Path("/content/revision_R1_verified_packages") / PINNED_GIT_COMMIT',
+        1,
+    )
+    checkout_verified = (
+        'ACTUAL_GIT_COMMIT = _git(["rev-parse", "HEAD"], cwd=CHECKOUT_PATH, env=os.environ.copy())\n'
+        'if ACTUAL_GIT_COMMIT != PINNED_GIT_COMMIT or _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=CHECKOUT_PATH, env=os.environ.copy()) != "HEAD":\n'
+        '    raise RuntimeError("Pinned source was not checked out at the exact detached commit")'
+    )
+    if setup.count(checkout_verified) != 1 or "PACKAGE_SOURCE_ROOT = CHECKOUT_PATH" not in setup:
+        raise ValueError("Cell A checkout/package-root contract differs from the verified saved notebook")
+    stage_package = '''
+# Keep the full detached checkout clean; the runtime uses only its committed package allowlist.
+for module_name in list(sys.modules):
+    if module_name == "revision_r1" or module_name.startswith("revision_r1.") or module_name == "scripts" or module_name.startswith("scripts."):
+        del sys.modules[module_name]
+sys.path.insert(0, str(PACKAGE_SOURCE_ROOT))
+try:
+    from scripts.build_github_handoff import stage_committed_package
+    PACKAGE_ROOT = stage_committed_package(PACKAGE_SOURCE_ROOT, PACKAGE_ROOT)
+finally:
+    sys.path.remove(str(PACKAGE_SOURCE_ROOT))'''
+    setup = setup.replace(checkout_verified, checkout_verified + "\n" + stage_package, 1)
+    set_source(1, setup)
+
+    data = "".join(clean_cells[2].get("source", []))
+    marker = "# Cell C also consumes this existing small report; stage it through OAuth so\n"
+    if data.count(marker) != 1:
+        raise ValueError("Cell B recovery-report staging block differs from the captured base")
+    data = data[:data.index(marker)] + data[data.index("PACKAGED_SCHEDULE_PATH =", data.index(marker)):]
+    data = data.replace('DRIVE_PATHS["v62_recovery_report"] = str(_reference_local)\n', "")
+    if "v62_recovery_report" in data or "recovery_validation" in data:
+        raise ValueError("Cell B still contains a recovery-reference download")
+    set_source(2, data)
+
+    cell_c = r'''# Cell C — verify Run 1, initialize/read the single taskwise matrix file; no training.
+from pathlib import Path
+import json
+from scripts.production_workflow import (
+    _hydrate_api_matrix_registry, _hydrate_api_run_state, _read_matrix_registry,
+    bind_runtime_schedule, build_frozen_run_plan, matrix_registry_evidence,
+    reuse_validated_first_run_measurement, run_checkpoint_root, run_output_root,
+    validate_frozen_plan, validate_runtime_bound_plan,
+)
+from scripts.taskwise_matrix import (
+    discover_run1_task_checkpoint_paths, next_task_id, prepare_matrix_progress,
+)
+
+BASE_PLAN_PATH = PROJECT / "configs" / "production_run_plan_v1.json"
+BASE_PLAN = json.loads(BASE_PLAN_PATH.read_text(encoding="utf-8"))
+validate_frozen_plan(BASE_PLAN, expected_source_sha256=ACTUAL_TRAINING_SOURCE_SHA256)
+RUNTIME_PLAN = bind_runtime_schedule(
+    BASE_PLAN, EFFECTIVE_SCHEDULE_PATH, EFFECTIVE_SCHEDULE_MANIFEST_PATH, PREFLIGHT,
+)
+validate_runtime_bound_plan(
+    RUNTIME_PLAN, EFFECTIVE_SCHEDULE_PATH, EFFECTIVE_SCHEDULE_MANIFEST_PATH, PREFLIGHT,
+)
+if RUNTIME_PLAN["run_count"] != 100 or RUNTIME_PLAN["runs"][0]["run_key"] != "ember_seed42_full_hybrid":
+    raise ValueError("Runtime plan/order differs from the frozen 100-run protocol")
+
+LOGICAL_OUTPUT_ROOT = Path(DRIVE_PATHS["output_root"]).expanduser().absolute()
+LOGICAL_CHECKPOINT_ROOT = Path(DRIVE_PATHS["checkpoint_root"]).expanduser().absolute()
+OUTPUT_ROOT = STORAGE_STAGE_ROOT / "production/results"
+CHECKPOINT_ROOT = STORAGE_STAGE_ROOT / "production/checkpoints"
+CACHE_ROOT = LOCAL_DATASET_CACHE_ROOT
+STORAGE_ADAPTER.bind_root(LOGICAL_OUTPUT_ROOT, OUTPUT_ROOT)
+STORAGE_ADAPTER.bind_root(LOGICAL_CHECKPOINT_ROOT, CHECKPOINT_ROOT)
+
+_hydrate_api_matrix_registry(STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN)
+MATRIX_REGISTRY = _read_matrix_registry(OUTPUT_ROOT, RUNTIME_PLAN)
+MATRIX_REGISTRY_EVIDENCE = matrix_registry_evidence(
+    STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN,
+)
+FIRST_RUN = RUNTIME_PLAN["runs"][0]
+FIRST_RUN_OUTPUT = run_output_root(OUTPUT_ROOT, FIRST_RUN)
+_hydrate_api_run_state(
+    STORAGE_ADAPTER, OUTPUT_ROOT, RUNTIME_PLAN, FIRST_RUN, FIRST_RUN_OUTPUT,
+    run_checkpoint_root(CHECKPOINT_ROOT, FIRST_RUN), include_recovery=False,
+)
+FIRST_RUN_MEASUREMENT = reuse_validated_first_run_measurement(
+    RUNTIME_PLAN, FIRST_RUN, OUTPUT_ROOT,
+)
+_first_entry = MATRIX_REGISTRY["completed_runs"].get(FIRST_RUN["run_key"])
+if not isinstance(_first_entry, dict):
+    raise ValueError("Run 1 is not in the existing completion registry; refusing to rerun it")
+if (FIRST_RUN["run_key"] not in MATRIX_REGISTRY_EVIDENCE.get("completed_run_keys", [])
+        or not _first_entry.get("run_id")
+        or not _first_entry.get("artifact_manifest_sha256")):
+    raise ValueError("Run 1 registry identity is incomplete or differs from Cell A/B evidence")
+RUN1_TASK_CHECKPOINT_PATHS = discover_run1_task_checkpoint_paths(
+    STORAGE_ADAPTER, LOGICAL_CHECKPOINT_ROOT, FIRST_RUN,
+)
+MATRIX_PROGRESS_PATH = OUTPUT_ROOT / "matrix_progress.json"
+LOGICAL_MATRIX_PROGRESS_PATH = LOGICAL_OUTPUT_ROOT / "matrix_progress.json"
+MATRIX_PROGRESS = prepare_matrix_progress(
+    RUNTIME_PLAN, local_progress_path=MATRIX_PROGRESS_PATH,
+    logical_progress_path=LOGICAL_MATRIX_PROGRESS_PATH, storage_adapter=STORAGE_ADAPTER,
+    run1_checkpoint_paths=RUN1_TASK_CHECKPOINT_PATHS,
+    run1_registry_evidence={
+        "run_id": _first_entry["run_id"],
+        "artifact_manifest_sha256": _first_entry["artifact_manifest_sha256"],
+    },
+)
+_next = next((row for row in MATRIX_PROGRESS["runs"] if not row["run_complete"]), None)
+print(json.dumps({
+    "status": "TASKWISE_STORAGE_READY",
+    "progress_file": str(LOGICAL_MATRIX_PROGRESS_PATH),
+    "frozen_run_count": len(MATRIX_PROGRESS["runs"]),
+    "completed_runs": sum(bool(row["run_complete"]) for row in MATRIX_PROGRESS["runs"]),
+    "run_1": "imported from existing validated registry and skipped",
+    "next_run": None if _next is None else _next["run_key"],
+    "next_task": None if _next is None else next_task_id(_next),
+    "schedule_sha256": RUNTIME_PLAN["schedule_sha256"],
+    "training_source_sha256": RUNTIME_PLAN["training_source_sha256"],
+    "plan_sha256": RUNTIME_PLAN["plan_sha256"],
+    "checkpoint_policy": "one full-state checkpoint after each task; no mid-task saves or rotation",
+    "single_worker_required": True,
+}, sort_keys=True, indent=2))
+'''
+    set_source(3, cell_c)
+
+    cell_d = r'''# Cell D — read-only view of the single canonical matrix progress file.
+import json
+from scripts.taskwise_matrix import (
+    first_unfinished_run, first_unfinished_task, next_task_id, read_canonical_progress,
+    validate_matrix_progress,
+)
+
+MATRIX_PROGRESS = read_canonical_progress(
+    MATRIX_PROGRESS_PATH, logical_progress_path=LOGICAL_MATRIX_PROGRESS_PATH,
+    storage_adapter=STORAGE_ADAPTER,
+)
+validate_matrix_progress(MATRIX_PROGRESS, RUNTIME_PLAN)
+_pending_run = first_unfinished_run(MATRIX_PROGRESS)
+_completed_count = sum(bool(row["run_complete"]) for row in MATRIX_PROGRESS["runs"])
+_done_tasks = sum(bool(task["done"]) for row in MATRIX_PROGRESS["runs"] for task in row["tasks"])
+print(json.dumps({
+    "progress_file": str(LOGICAL_MATRIX_PROGRESS_PATH),
+    "completed_runs": f"{_completed_count}/100",
+    "completed_tasks": f"{_done_tasks}/1100",
+    "next_run": None if _pending_run is None else _pending_run["run_key"],
+    "next_run_index": None if _pending_run is None else _pending_run["run_index"],
+    "next_task": None if _pending_run is None else next_task_id(_pending_run),
+    "checkpoint": None if _pending_run is None or not any(task["done"] for task in _pending_run["tasks"]) else _pending_run["tasks"][sum(task["done"] for task in _pending_run["tasks"]) - 1]["checkpoint_path"],
+    "read_only": True,
+}, sort_keys=True, indent=2))
+'''
+    set_source(4, cell_d)
+    set_source(5, '''# Cell E — Run 1 is already finalized and remains skipped.\nprint("ALREADY_FINALIZED_COMPLETED_RUN — Run 1 was imported from its verified existing registry entry.")\nprint("No training, model loading, result export, or registry rewrite occurs in this cell.")\n''')
+
+    cell_f = r'''# Cell F — the only launch/resume cell. Disabled by default.
+import json, time
+from scripts.taskwise_matrix import run_taskwise_matrix
+
+LAUNCH_MATRIX = False
+ACKNOWLEDGE_SINGLE_WORKER = False
+if not LAUNCH_MATRIX:
+    print("NOT_LAUNCHED: set LAUNCH_MATRIX=True only after reviewing Cells C–E and confirming this is the only Colab worker.")
+else:
+    if ACKNOWLEDGE_SINGLE_WORKER is not True:
+        raise RuntimeError("Confirm that no other Colab worker is using this matrix; leases are intentionally not used.")
+    _last_progress_print = 0.0
+    def _matrix_console_progress(event):
+        global _last_progress_print
+        status = event.get("status")
+        if status == "TASK_CHECKPOINT_SAVED":
+            print(f"Checkpoint saved · Run {event['run_index']}/100 {event['run_key']} · Task {event['task']}/11 · {event['checkpoint_bytes']:,} bytes", flush=True)
+        elif status == "RUNNING" and time.monotonic() - _last_progress_print >= 60:
+            _last_progress_print = time.monotonic()
+            print(f"Run {event['run_index']}/100 {event['run_key']} · Task {event['task']}/11 · {event['phase']} · classifier updates {event['classifier_updates']:,}", flush=True)
+        elif status in {"PUBLISHING_RESULTS", "RESULTS_PUBLISHED", "RUN_COMPLETE"}:
+            print(status, event.get("run_key"), flush=True)
+
+    MATRIX_RESULT = run_taskwise_matrix(
+        RUNTIME_PLAN,
+        progress_path=MATRIX_PROGRESS_PATH,
+        logical_progress_path=LOGICAL_MATRIX_PROGRESS_PATH,
+        data_roots=DATA_ROOTS, cache_root=CACHE_ROOT, preflight=PREFLIGHT,
+        schedule_path=EFFECTIVE_SCHEDULE_PATH,
+        schedule_manifest_path=EFFECTIVE_SCHEDULE_MANIFEST_PATH,
+        output_root=OUTPUT_ROOT, logical_output_root=LOGICAL_OUTPUT_ROOT,
+        checkpoint_root=CHECKPOINT_ROOT, logical_checkpoint_root=LOGICAL_CHECKPOINT_ROOT,
+        storage_adapter=STORAGE_ADAPTER,
+        launch_enabled=LAUNCH_MATRIX,
+        acknowledge_single_worker=ACKNOWLEDGE_SINGLE_WORKER,
+        device="cuda", progress_callback=_matrix_console_progress,
+    )
+    print(json.dumps(MATRIX_RESULT, sort_keys=True, indent=2, default=str))
+'''
+    set_source(6, cell_f)
+
+    cell_g = r'''# Cell G — read-only completion summary; no second progress export is created.
+import json
+from scripts.taskwise_matrix import first_unfinished_run, next_task_id, read_canonical_progress, validate_matrix_progress
+
+MATRIX_PROGRESS = read_canonical_progress(
+    MATRIX_PROGRESS_PATH, logical_progress_path=LOGICAL_MATRIX_PROGRESS_PATH,
+    storage_adapter=STORAGE_ADAPTER,
+)
+validate_matrix_progress(MATRIX_PROGRESS, RUNTIME_PLAN)
+_pending = first_unfinished_run(MATRIX_PROGRESS)
+print(json.dumps({
+    "progress_file": str(LOGICAL_MATRIX_PROGRESS_PATH),
+    "completed_runs": sum(bool(row["run_complete"]) for row in MATRIX_PROGRESS["runs"]),
+    "remaining_runs": sum(not row["run_complete"] for row in MATRIX_PROGRESS["runs"]),
+    "next_run": None if _pending is None else _pending["run_key"],
+    "next_task": None if _pending is None else next_task_id(_pending),
+    "status": "MATRIX_COMPLETE" if _pending is None else "RESUMABLE",
+}, sort_keys=True, indent=2))
+'''
+    set_source(7, cell_g)
+
+    document["cells"] = clean_cells
+    for index, cell in enumerate(clean_cells):
+        if cell.get("cell_type") == "code":
+            source = "".join(cell.get("source", []))
+            compile(source, f"taskwise-notebook-cell-{index}", "exec")
+    code_sources = "\n".join(
+        "".join(cell.get("source", [])) for cell in clean_cells if cell.get("cell_type") == "code"
+    )
+    for forbidden in ("MATRIX_LEASE", "RunLease", "inspect_lease", "generation-", "prepare_pending_checkpoint_only", "COMPLETE_EXPORTED_RUN_ONLY", "_r1_helpers"):
+        if forbidden.lower() in code_sources.lower():
+            raise ValueError(f"generated notebook still contains removed recovery/lease workflow: {forbidden}")
+    if "LAUNCH_MATRIX = False" not in "".join(clean_cells[6].get("source", [])):
+        raise ValueError("Cell F must keep production launch disabled by default")
     return document
 
 

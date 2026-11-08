@@ -465,12 +465,16 @@ def _export_run(state: RunState, config: RunConfig, bundle, output_dir: Path, de
         "generator_seconds": tracker.seconds.get("generator", 0.0),
         "critic_seconds": tracker.seconds.get("critic", 0.0),
         "checkpoint_seconds": tracker.seconds.get("checkpoint", 0.0),
-        "checkpoint_policy": {
-            "local_recovery_interval_seconds": 300.0,
-            "drive_publication_interval_seconds": 900.0,
-            "update_count_trigger_enabled": False,
-            "forced_checkpoint_kinds": ["initial", "task-boundary", "interrupted-resumable", "failed-recovery", "complete"],
-        },
+        "checkpoint_policy": (
+            {"mode": "one_atomic_full_state_checkpoint_after_each_completed_task",
+             "task_count": 11, "mid_task_checkpointing": False,
+             "progress_commit_order": "checkpoint_publish_then_matrix_progress_json"}
+            if state.extra.get("taskwise_checkpoint_mode") is True else
+            {"local_recovery_interval_seconds": 300.0,
+             "drive_publication_interval_seconds": 900.0,
+             "update_count_trigger_enabled": False,
+             "forced_checkpoint_kinds": ["initial", "task-boundary", "interrupted-resumable", "failed-recovery", "complete"]}
+        ),
         "training_reproduction_claimed": False,
     })
     write_json(output_dir / "resource_metrics.json", resource_output)
@@ -523,7 +527,7 @@ def _write_completion(state: RunState, config: RunConfig, output_dir: Path, regi
             "predictions.npz", "resource_metrics.json", "config.json", "environment.json",
         )
     }
-    if not registry.complete(run_id, artifacts):
+    if registry is not None and not registry.complete(run_id, artifacts):
         raise ValueError("run completion marker failed artifact revalidation")
     state.exports["validated_artifacts"] = validation
     return validation
@@ -542,6 +546,10 @@ def run_one(
     drive_checkpoint_root: str | Path | None = None,
     local_checkpoint_root: str | Path | None = None,
     drive_delete_callback=None,
+    taskwise_mode: bool = False,
+    taskwise_resume_state: RunState | None = None,
+    taskwise_checkpoint_callback=None,
+    progress_callback=None,
 ) -> dict[str, Any]:
     """Run one immutable arm; all synthetic CPU/GPU modes are non-reportable.
 
@@ -551,6 +559,12 @@ def run_one(
     """
     if run_config.arm not in ARMS:
         raise ValueError("unsupported revision_R1 run arm")
+    if type(taskwise_mode) is not bool:
+        raise ValueError("taskwise_mode must be an explicit boolean")
+    if taskwise_mode and not callable(taskwise_checkpoint_callback):
+        raise ValueError("taskwise mode requires a task-boundary checkpoint callback")
+    if not taskwise_mode and taskwise_resume_state is not None:
+        raise ValueError("a taskwise checkpoint cannot be loaded by the legacy checkpoint workflow")
     if dataset_bundle.dataset != run_config.dataset:
         raise ValueError("run config and dataset bundle identity differ")
     target_device = torch.device(device)
@@ -596,17 +610,18 @@ def run_one(
         "execution_scope": execution_scope,
         "run_id": run_id,
     }
-    registry = RunRegistry(output / "registry")
-    if registry.is_completed(run_id):
+    registry = None if taskwise_mode else RunRegistry(output / "registry")
+    if registry is not None and registry.is_completed(run_id):
         validation = validate_run_artifacts(output, require_production=not synthetic)
         return {"status": "ALREADY_VALIDATED", "validated": True, **validation}
-    lease = RunLease(output / ".run.lease.json", ttl_seconds=900)
-    lease.acquire()
-    try:
-        attempt = registry.begin_attempt(run_id, identity=identity)
-    except Exception:
-        lease.release()
-        raise
+    lease = None if taskwise_mode else RunLease(output / ".run.lease.json", ttl_seconds=900)
+    if lease is not None:
+        lease.acquire()
+        try:
+            registry.begin_attempt(run_id, identity=identity)
+        except Exception:
+            lease.release()
+            raise
     streams = make_rng_streams(run_config.dataset, run_config.seed, run_config.arm)
     _seed_new_run(streams)
     order = list(streams.class_order)
@@ -626,13 +641,13 @@ def run_one(
     checkpoint_base = Path(local_checkpoint_root) if local_checkpoint_root is not None else output / "checkpoints"
     checkpoints = checkpoint_base / "recovery"
     task_boundary_checkpoints = checkpoint_base / "task_boundaries"
-    persist_task_boundary_duplicate = should_persist_task_boundary_duplicate(identity)
-    next_task_boundary_generation = next_generation_number(task_boundary_checkpoints, identity)
+    persist_task_boundary_duplicate = False if taskwise_mode else should_persist_task_boundary_duplicate(identity)
+    next_task_boundary_generation = 0 if taskwise_mode else next_generation_number(task_boundary_checkpoints, identity)
     startup_recovery_stage = None
     startup_verification_seconds = 0.0
     local_recovery_manifest = None
     local_recovery_error = None
-    local_recovery_has_manifests = any(checkpoints.glob("generation-*.manifest.json"))
+    local_recovery_has_manifests = (not taskwise_mode) and any(checkpoints.glob("generation-*.manifest.json"))
     if local_recovery_has_manifests:
         try:
             verification_started = time.monotonic()
@@ -640,7 +655,7 @@ def run_one(
             startup_verification_seconds += time.monotonic() - verification_started
         except CheckpointError as exc:
             local_recovery_error = exc
-    if drive_checkpoint_root is not None:
+    if not taskwise_mode and drive_checkpoint_root is not None:
         remote_recovery = Path(drive_checkpoint_root) / "recovery"
         if list(remote_recovery.glob("generation-*.manifest.json")):
             remote_highest = next_generation_number(remote_recovery, identity) - 1
@@ -694,7 +709,46 @@ def run_one(
     critic_optimizer = None
     state_restore_seconds = 0.0
 
-    if local_recovery_manifest is not None:
+    if taskwise_mode and taskwise_resume_state is not None:
+        state = taskwise_resume_state
+        state.validate()
+        if state.identity != identity:
+            raise CheckpointError("taskwise checkpoint identity differs from the current run/config/dataset/schedule")
+        if state.classifier_state:
+            head_size = int(state.classifier_state["out.weight"].shape[0])
+            if head_size > classifier.num_classes:
+                classifier.expand(head_size, streams.classifier_init_seed)
+            classifier.load_state_dict(state.classifier_state)
+        if generator is not None:
+            if not state.generator_state or not state.critic_state:
+                raise CheckpointError("taskwise GAN checkpoint is missing generator or critic state")
+            generator.load_state_dict(state.generator_state)
+            critic.load_state_dict(state.critic_state)
+        if state.resources.get("tracker"):
+            tracker.load_state_dict(state.resources["tracker"])
+            tracker.resume_active_clock()
+        runtime_at_resume = state.extra.get("runtime", {})
+        if state.cursor.phase == "classifier":
+            classifier_optimizer = torch.optim.AdamW(
+                classifier.parameters(), lr=run_config.classifier_lr,
+                weight_decay=run_config.classifier_weight_decay,
+            )
+            if state.classifier_optimizer_state and runtime_at_resume.get("classifier_optimizer_task") == state.cursor.task_index:
+                classifier_optimizer.load_state_dict(state.classifier_optimizer_state)
+        if state.cursor.phase == "gan_critic" and generator is not None and critic is not None:
+            generator_optimizer = torch.optim.Adam(
+                generator.parameters(), lr=run_config.generator_lr, betas=run_config.gan_betas,
+            )
+            critic_optimizer = torch.optim.Adam(
+                critic.parameters(), lr=run_config.critic_lr, betas=run_config.gan_betas,
+            )
+            if state.generator_optimizer_state:
+                generator_optimizer.load_state_dict(state.generator_optimizer_state)
+            if state.critic_optimizer_state:
+                critic_optimizer.load_state_dict(state.critic_optimizer_state)
+        # Rebuild every module and optimizer before restoring the serialized RNG.
+        _restore_rng(state.rng_state, streams)
+    elif local_recovery_manifest is not None:
         restore_started = time.monotonic()
         loaded = load_verified_manifest(checkpoints, identity, local_recovery_manifest)
         state_restore_seconds = time.monotonic() - restore_started
@@ -798,22 +852,22 @@ def run_one(
             validation = _write_completion(state, run_config, output, registry, run_id, synthetic)
             return {"status": "SYNTHETIC_VALIDATED_NON_REPORTABLE" if synthetic else "COMPLETED_VALIDATED", "validated": True, **validation}
         finally:
-            lease.release()
+            if lease is not None:
+                lease.release()
 
     tracker.resume_active_clock()
-    # Start fresh monotonic deadlines after checkpoint discovery and restore;
-    # loading a full recovery state cannot make the first save immediately due.
-    checkpoint_schedule = CheckpointSchedule()
-    # The frozen RunConfig still carries the legacy cadence values in its
-    # identity; report the operational runtime cadence separately rather than
-    # changing the config hash of resumable checkpoints.
-    tracker.checkpoint_accounting["policy"] = checkpoint_schedule.metadata(
-        legacy_config_fields={
-            "checkpoint_interval_updates": int(run_config.checkpoint_interval_updates),
-            "checkpoint_interval_seconds": int(run_config.checkpoint_interval_seconds),
-            "drive_sync_interval_seconds": int(run_config.drive_sync_interval_seconds),
-        },
-    )
+    checkpoint_schedule = None
+    if not taskwise_mode:
+        # Retain legacy loading only for historical/synthetic compatibility;
+        # the production taskwise path does not create timed generations.
+        checkpoint_schedule = CheckpointSchedule()
+        tracker.checkpoint_accounting["policy"] = checkpoint_schedule.metadata(
+            legacy_config_fields={
+                "checkpoint_interval_updates": int(run_config.checkpoint_interval_updates),
+                "checkpoint_interval_seconds": int(run_config.checkpoint_interval_seconds),
+                "drive_sync_interval_seconds": int(run_config.drive_sync_interval_seconds),
+            },
+        )
     checkpoint_failed = False
     runtime = state.extra["runtime"]
     runtime["class_order"] = order
@@ -826,6 +880,9 @@ def run_one(
     runtime.setdefault("task_boundary_predictions", {})
     runtime.setdefault("selection_records", [])
     runtime.setdefault("classifier_mode_trace", [])
+    if taskwise_mode:
+        runtime["taskwise_checkpoint_mode"] = True
+        state.extra["taskwise_checkpoint_mode"] = True
     if not state.anchor_replay_state:
         state.anchor_replay_state = {"indices_by_class": {}, "targets_by_index": {}, "class_ids": []}
     if not state.generated_replay_state:
@@ -876,15 +933,31 @@ def run_one(
 
     def capture_state():
         state.classifier_state = classifier.state_dict()
+        if classifier_optimizer is not None:
+            state.classifier_optimizer_state = classifier_optimizer.state_dict()
         if generator is not None:
             state.generator_state = generator.state_dict()
             state.critic_state = critic.state_dict()
+            if generator_optimizer is not None:
+                state.generator_optimizer_state = generator_optimizer.state_dict()
+            if critic_optimizer is not None:
+                state.critic_optimizer_state = critic_optimizer.state_dict()
         state.rng_state = _capture_rng(streams)
         state.extra["runtime_source_sha256"] = runtime_source_sha256(Path(__file__).resolve().parents[1])
         state.resources["tracker"] = tracker.state_dict()
 
     def checkpoint(*, force: bool = False, kind: str = "recovery"):
         nonlocal checkpoint_failed, next_task_boundary_generation
+        if taskwise_mode:
+            if kind != "task-boundary":
+                return None
+            started = tracker.start_timer()
+            try:
+                capture_state()
+                taskwise_checkpoint_callback(state, int(state.cursor.task_index))
+                return {"kind": "task-boundary", "task_id": int(state.cursor.task_index)}
+            finally:
+                tracker.finish_timer("checkpoint", started)
         forced_kinds = {"initial", "task-boundary", "interrupted-resumable", "failed-recovery", "complete"}
         forced = bool(force and kind in forced_kinds)
         if not checkpoint_schedule.local_due(force=forced):
@@ -993,10 +1066,16 @@ def run_one(
         finally:
             tracker.finish_timer("checkpoint", checkpoint_started)
 
-    if not list(checkpoints.glob("generation-*.manifest.json")):
+    if not taskwise_mode and not list(checkpoints.glob("generation-*.manifest.json")):
         checkpoint(force=True, kind="initial")
 
     def safe_stop() -> bool:
+        if progress_callback is not None:
+            try:
+                progress_callback(state)
+            except Exception:
+                # Console/rendering failures never change scientific execution.
+                pass
         if stop_hook is None:
             return False
         return bool(stop_hook(state))
@@ -1522,12 +1601,21 @@ def run_one(
         }
     except StopRequested as exc:
         tracker.pause_active_clock()
+        if taskwise_mode:
+            return {
+                "status": "INTERRUPTED_TASK",
+                "cursor": dict(state.cursor.__dict__),
+                "classifier_updates": int(state.resources["classifier_updates"]),
+                "note": "no mid-task checkpoint was written; resume repeats the unfinished task",
+            }
         state.resources["tracker"] = tracker.state_dict()
         checkpoint(force=True, kind="interrupted-resumable")
         write_json(output / "status.json", {"status": "INTERRUPTED_RESUMABLE", "reason": str(exc), "cursor": state.cursor.__dict__})
         registry.fail_attempt(run_id, str(exc))
         return {"status": "INTERRUPTED_RESUMABLE", "cursor": state.cursor.__dict__, "classifier_updates": int(state.resources["classifier_updates"])}
     except Exception as exc:
+        if taskwise_mode:
+            raise
         try:
             if not checkpoint_failed:
                 checkpoint(force=True, kind="failed-recovery")
@@ -1536,4 +1624,5 @@ def run_one(
         raise
     finally:
         tracker.pause_active_clock()
-        lease.release()
+        if lease is not None:
+            lease.release()

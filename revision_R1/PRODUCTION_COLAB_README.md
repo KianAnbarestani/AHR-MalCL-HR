@@ -1,4 +1,10 @@
-# revision_R1 production Colab handoff
+# Archived legacy revision_R1 Colab handoff
+
+> Do not use these former ZIP/lease/recovery instructions for current
+> production. The taskwise GitHub-pinned workflow is documented in
+> `README_GITHUB_COLAB.md`; its checkpoint policy is in
+> `CHECKPOINT_COMPATIBILITY.md`. This archived file is excluded from the
+> distributed package.
 
 The single stable notebook in `My Drive/ReVision` is
 `Revision_R1_Production_Colab.ipynb`. The runner code is fetched

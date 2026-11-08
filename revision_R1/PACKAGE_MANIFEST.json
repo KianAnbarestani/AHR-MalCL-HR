@@ -1,32 +1,28 @@
 {
   "checkpoint_compatibility_baseline_commit": "e7bea685827137a1ea48c5886db22518d68a6b06",
-  "checkpoint_compatibility_manifest_sha256": "56860961b949100c6973e1af1a3ce042ae70935c1caaa0cbf8418c9e7e59784b",
+  "checkpoint_compatibility_manifest_sha256": "ebb90c175cc4fa4a572fa7326ec40eb8729595b9b20b684f29678d1edc644aea",
   "credential_policy": "no credential for public repository; private read-only token only via Colab Secrets",
   "expected_effective_schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
   "files": {
     "CHECKPOINT_COMPATIBILITY.md": {
-      "bytes": 4289,
-      "sha256": "e4602d6c0e49aac3ae2c5d3b9b5555c693264e9fac77cee74a929d2580aca7ce"
+      "bytes": 3313,
+      "sha256": "979fd308cfa6c3165c7598ff1940ea03a7c2ce1bfa4521f87508255e5ec372e7"
     },
     "COMPATIBILITY_REPORT.md": {
-      "bytes": 12466,
-      "sha256": "27181a8c71eeede5e3d505a5971aeec336d17db630026b32247659164b5befe3"
+      "bytes": 12805,
+      "sha256": "9a97e24784c4d64ff9109cc23c0f34d7bdeeda18a392e5d601721618d32f65e0"
     },
     "FROZEN_PROTOCOL.md": {
-      "bytes": 1727,
-      "sha256": "c6118ca7e356726f0646259da9f3bd49d2922f908dcdea2e7dc3ae08a93e5263"
-    },
-    "PRODUCTION_COLAB_README.md": {
-      "bytes": 7967,
-      "sha256": "6d5dcf8c0096eb4a2d4a00c9725c45374b48ddc11769f600449213a3a76d3f3a"
+      "bytes": 2211,
+      "sha256": "80545bb1c964ecbada9c649cb44c06ba0caaecd17da593b900213a348c6552bb"
     },
     "README_GITHUB_COLAB.md": {
-      "bytes": 14704,
-      "sha256": "e2560d791e8d193c7010301f7a6afeac32a1a83a2cf077b4fe94d07087c9f6c1"
+      "bytes": 12032,
+      "sha256": "5b73806528431e505432ab12a2fcfa3b34e488d0ac4a09204b8828b4c1432b44"
     },
     "checkpoint_compatibility.json": {
-      "bytes": 6204,
-      "sha256": "56860961b949100c6973e1af1a3ce042ae70935c1caaa0cbf8418c9e7e59784b"
+      "bytes": 6262,
+      "sha256": "ebb90c175cc4fa4a572fa7326ec40eb8729595b9b20b684f29678d1edc644aea"
     },
     "configs/legacy_v1_2_first_run_identity.json": {
       "bytes": 7695,
@@ -47,10 +43,6 @@
     "legacy_checkpoint_source_compatibility.json": {
       "bytes": 2757,
       "sha256": "3302907af840a04146eca7f10773243b5c3252d053744a5fc11e820e504588fa"
-    },
-    "notebooks/Revision_R1_Production_Colab_Saved_Drive_Base.ipynb": {
-      "bytes": 153484,
-      "sha256": "a220a08e0ff472876a479eaded35cd7946bc5d0c35ec245a7203c33a42ff3f9d"
     },
     "requirements-colab.txt": {
       "bytes": 361,
@@ -89,8 +81,8 @@
       "sha256": "3acecda586b9c2a97a5d39888ffc8b0e54af3295e16f0d034a77122454e20ac5"
     },
     "revision_r1/drive_storage.py": {
-      "bytes": 90926,
-      "sha256": "ec00c80c28018b71d62b70aae8393b840eed1a4edbb6f349e51c0b0eaab23b12"
+      "bytes": 91675,
+      "sha256": "8079541d3445d9b4d99cc5db849660b12f433f474e54ab2281c5b7df4973a87c"
     },
     "revision_r1/engine.py": {
       "bytes": 2748,
@@ -141,8 +133,8 @@
       "sha256": "ce8895b6fd26872b9ef92d7795b762a9220c362eed0bbe582891047dc9067cb4"
     },
     "revision_r1/runner.py": {
-      "bytes": 88486,
-      "sha256": "feab951332cc1afc8ae8a491c3df1a627a2f2838484148618769802e890d09f3"
+      "bytes": 93525,
+      "sha256": "4790db3379aa3de81e25cdc8eff2d0b9cb7a1a59a957a286c9bea9967a619d14"
     },
     "revision_r1/sampling.py": {
       "bytes": 4481,
@@ -177,12 +169,12 @@
       "sha256": "c0de3f421ad27224ebfecf411898eb1b4c472709d45bc67c760af834eefdc34d"
     },
     "scripts/build_checkpoint_compatibility.py": {
-      "bytes": 5962,
-      "sha256": "9cdae14f1571b6339e06224fcb05ed6b38650d2c76c354c2974128922ab369a2"
+      "bytes": 6028,
+      "sha256": "12001b6da3b76bcb24a87697eddfff1619eb1f59dd0093ebe29a52101486380d"
     },
     "scripts/build_github_handoff.py": {
-      "bytes": 92696,
-      "sha256": "c101de7276acf009126f5d2d05881f9350fd841c9c84615754547b48a1feafb8"
+      "bytes": 114255,
+      "sha256": "159d9fab2487ebcd2eca47adff7a544bc7b7b56b59454d75ea9973b15666b498"
     },
     "scripts/build_production_handoff.py": {
       "bytes": 65900,
@@ -201,12 +193,16 @@
       "sha256": "71b9dc6a0e361a9f24a8b6674cd1fcd4f26d6491dc3c9ae38e3f134d41bcea4a"
     },
     "scripts/production_workflow.py": {
-      "bytes": 449351,
-      "sha256": "e75f766f8b213477c4c4e92622df53908073cdfbeb0e4e6133354e5fdf6717ae"
+      "bytes": 449611,
+      "sha256": "b317571741a35b0d4027ab6b420868517b7b5045ba6eb2e02c9c1c856241821e"
     },
     "scripts/storage_auth.py": {
       "bytes": 7927,
       "sha256": "fa75717f0777b76258d84dd1683e7264d3c01e9c579916c41b8f892a9bd060f3"
+    },
+    "scripts/taskwise_matrix.py": {
+      "bytes": 28859,
+      "sha256": "4618e949b1b206b529180a1a42d98925539274b65a102ec3cc10cfdd92d70a73"
     },
     "tests/conftest.py": {
       "bytes": 169,
@@ -217,8 +213,8 @@
       "sha256": "b070d994aa826a9cfbea7896cc21b5acde41c1da85dd30711209a6bca35a65bd"
     },
     "tests/test_checkpoint_compatibility.py": {
-      "bytes": 2672,
-      "sha256": "27eea6c444d6c9e9289ac3a4a4ea35c08c12832a0c1a77572a74960f58f54dac"
+      "bytes": 3078,
+      "sha256": "6003b5dabdd0a2661c888cc7252eb377165baaf806b7b0df897415a960973dca"
     },
     "tests/test_checkpoint_storage_policy.py": {
       "bytes": 9491,
@@ -245,12 +241,12 @@
       "sha256": "43ecc53d4d8a6f0782e44495322bdf00a474c9d3b56c1ab05cdab00771e2b483"
     },
     "tests/test_drive_api_storage.py": {
-      "bytes": 128508,
-      "sha256": "728410bc078e8362b34e4d491d470ccc8f1af214ca905b15a8d9693a2a357f02"
+      "bytes": 127896,
+      "sha256": "9552dbcfa9b18493a27abebf2a5ef814b709e4e872097daa9e8963687f347188"
     },
     "tests/test_github_handoff.py": {
-      "bytes": 16230,
-      "sha256": "7eca7a983ac52654aef7987273ac2fe0974f02235cd03fc1a1304b2781c7379c"
+      "bytes": 15307,
+      "sha256": "9b600e0e7fb6701dead72548a85fd022df40ae9cf22df9f95c97477221392578"
     },
     "tests/test_live_progress.py": {
       "bytes": 22810,
@@ -315,6 +311,10 @@
     "tests/test_task_stream_config.py": {
       "bytes": 3454,
       "sha256": "a8adaaa475a14673937c835aeaf9044d3fd42768e20380a48f5ed66f27202027"
+    },
+    "tests/test_taskwise_matrix.py": {
+      "bytes": 18997,
+      "sha256": "41ed258131dd43edb26cd157fcf0ba87725485c0309478aed3264bc11b6338fd"
     }
   },
   "first_run_key": "ember_seed42_full_hybrid",
@@ -367,7 +367,7 @@
   "release_kind": "GITHUB_PINNED_COLAB_RUNNER",
   "repository": "KianAnbarestani/AHR-MalCL-HR",
   "run_count": 100,
-  "runtime_source_sha256": "e41fd7512a1404a9b244cf492a10a8ae27bd5e976300f36c8b4077299815303d",
+  "runtime_source_sha256": "15307d7ee4ae934d287f06c6dfb03fa4a01caf8d6eb54c4869117d2daa93f7c6",
   "schema_version": 1,
   "training_source_sha256": "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
 }

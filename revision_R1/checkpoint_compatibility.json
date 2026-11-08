@@ -43,9 +43,10 @@
     "validation_workflow.py"
   ],
   "checkpoint_cadence_policy": {
-    "drive_publication_seconds": 900,
-    "local_recovery_seconds": 300,
-    "task_boundaries_and_graceful_interruptions_forced": true
+    "mid_task_checkpoints": false,
+    "publication_order": "checkpoint_then_matrix_progress_json",
+    "retention": "retain_each_task_boundary_checkpoint",
+    "task_boundary_checkpoints": 11
   },
   "checkpoint_schema_unchanged": true,
   "compatibility_kind": "CHECKPOINT_ONLY_RUNTIME_UPDATE",
@@ -58,7 +59,7 @@
     "compatibility.py": "3a390423c36f273e8870bf6fa4bc9a5979d01c21122cb28c9152b95b2ba69e65",
     "config.py": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608",
     "data.py": "3acecda586b9c2a97a5d39888ffc8b0e54af3295e16f0d034a77122454e20ac5",
-    "drive_storage.py": "ec00c80c28018b71d62b70aae8393b840eed1a4edbb6f349e51c0b0eaab23b12",
+    "drive_storage.py": "8079541d3445d9b4d99cc5db849660b12f433f474e54ab2281c5b7df4973a87c",
     "engine.py": "ccd55f5cf3726d18604c547a123537b498cb4ba438cef8e68475321156df1d68",
     "exports.py": "8825439a6372b2b7167aa31a6509cf9a9fc1e2b42ff7c346c9aefec414f94816",
     "generative.py": "6ccbbb7a19e3d536b01417f80e6bbfe6bbfb0e874fdf41c923f235208c30e78e",
@@ -71,7 +72,7 @@
     "replay.py": "53fc486c2a593bc64d31991445fcfd2782e9ade1a498646d8da1f58be2c08375",
     "resources.py": "d9146e4805795f3870c699135345a0815e9b03b76c2163c3fe4180a7a0ad22d6",
     "rng.py": "ce8895b6fd26872b9ef92d7795b762a9220c362eed0bbe582891047dc9067cb4",
-    "runner.py": "feab951332cc1afc8ae8a491c3df1a627a2f2838484148618769802e890d09f3",
+    "runner.py": "4790db3379aa3de81e25cdc8eff2d0b9cb7a1a59a957a286c9bea9967a619d14",
     "sampling.py": "f9ee9357b9646b820324340bf9ae17af99a666896c582d7d5d0f61185ad91497",
     "schedule.py": "7662a431186141a250e07419df06c3353c73df680bb667b07ae6d7adbe87cb73",
     "state.py": "d06f304f43ae12f22a35893e674b2803ea5886b1b610f05cf6bbb68ccb9b18e5",
@@ -81,7 +82,7 @@
     "validation_worker.py": "2ce2c13435f97a036a4d6a1ab233c2eef020be989788fe873da9e83ac8f9d095",
     "validation_workflow.py": "c0de3f421ad27224ebfecf411898eb1b4c472709d45bc67c760af834eefdc34d"
   },
-  "runtime_source_sha256": "e41fd7512a1404a9b244cf492a10a8ae27bd5e976300f36c8b4077299815303d",
+  "runtime_source_sha256": "15307d7ee4ae934d287f06c6dfb03fa4a01caf8d6eb54c4869117d2daa93f7c6",
   "schema_version": 1,
   "training_behavior_fingerprint_sha256": "63b1d7656cd1c2474920d79c8c569b29c8724b56d2f8d1223290d00a1c1dbacb",
   "training_behavior_matches_baseline": true
