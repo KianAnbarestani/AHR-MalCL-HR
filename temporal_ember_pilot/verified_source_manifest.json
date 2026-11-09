@@ -1,0 +1,102 @@
+{
+  "build_manifest": {
+    "commit_sha_is_bound_by_colab_not_embedded": true,
+    "effective_schedule_sha256": "7d327c9ce84a096201d06f910f88d022f4e056ad32e090a84e19be393747d212",
+    "file_count": 78,
+    "package_manifest_sha256": "ef61c661bbf32a68a4a9caef2af575852cf990cd220c150a3fe15f635562f725",
+    "release_kind": "GITHUB_PINNED_COLAB_RUNNER",
+    "runtime_source_sha256": "eb5c598ea7b7b6b159c8f27da5dac868ceae04f97c7fbacdef32f421f4d69ffb",
+    "schema_version": 1,
+    "training_source_sha256": "1731ee525e3297e276609040295977e4c02f5aeab8e4ab125dd08fbcb993dc9c"
+  },
+  "files": [
+    {
+      "source_path": "revision_R1/revision_r1/runner.py",
+      "source_sha256": "4790db3379aa3de81e25cdc8eff2d0b9cb7a1a59a957a286c9bea9967a619d14",
+      "vendored_path": null
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/config.py",
+      "source_sha256": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/config.py",
+      "vendored_sha256": "c2c748e6525e682d76bf3e3a082c1c13e02bf1b4a9e74e0d6f9b35996a5be608"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/models.py",
+      "source_sha256": "c2b72005c25fb50e311706bb4990bca9d30a4ceff0fcda12937b706d93a19823",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/models.py",
+      "vendored_sha256": "c2b72005c25fb50e311706bb4990bca9d30a4ceff0fcda12937b706d93a19823"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/generative.py",
+      "source_sha256": "6ccbbb7a19e3d536b01417f80e6bbfe6bbfb0e874fdf41c923f235208c30e78e",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/generative.py",
+      "vendored_sha256": "6ccbbb7a19e3d536b01417f80e6bbfe6bbfb0e874fdf41c923f235208c30e78e"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/preprocessing.py",
+      "source_sha256": "a8b17c56d2a901540085c2a1f9778f90778e9f0e372c580af1e8eb4be4a1d56d",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/preprocessing.py",
+      "vendored_sha256": "a8b17c56d2a901540085c2a1f9778f90778e9f0e372c580af1e8eb4be4a1d56d"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/sampling.py",
+      "source_sha256": "f9ee9357b9646b820324340bf9ae17af99a666896c582d7d5d0f61185ad91497",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/sampling.py",
+      "vendored_sha256": "f9ee9357b9646b820324340bf9ae17af99a666896c582d7d5d0f61185ad91497"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/losses.py",
+      "source_sha256": "a6650c4871edcb1e27df618eac14024e39a3b606f29dafecdbb41331ed139c8c",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/losses.py",
+      "vendored_sha256": "a6650c4871edcb1e27df618eac14024e39a3b606f29dafecdbb41331ed139c8c"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/metrics.py",
+      "source_sha256": "17c48794e5f79a345f4c0f879acc6608acb9c40925f578f30178bdcf80595912",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/metrics.py",
+      "vendored_sha256": "17c48794e5f79a345f4c0f879acc6608acb9c40925f578f30178bdcf80595912"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/resources.py",
+      "source_sha256": "d9146e4805795f3870c699135345a0815e9b03b76c2163c3fe4180a7a0ad22d6",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/resources.py",
+      "vendored_sha256": "d9146e4805795f3870c699135345a0815e9b03b76c2163c3fe4180a7a0ad22d6"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/revision_r1/rng.py",
+      "source_sha256": "ce8895b6fd26872b9ef92d7795b762a9220c362eed0bbe582891047dc9067cb4",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/rng.py",
+      "vendored_sha256": "ce8895b6fd26872b9ef92d7795b762a9220c362eed0bbe582891047dc9067cb4"
+    },
+    {
+      "byte_identical": true,
+      "source_path": "revision_R1/scripts/live_progress.py",
+      "source_sha256": "79af4433b85ecf2158de087cf9d5bd5baf9c2dfec4b145e7cac0a9e3458f52bc",
+      "vendored_path": "temporal_ember_pilot/vendor/revision_r1/live_progress.py",
+      "vendored_sha256": "79af4433b85ecf2158de087cf9d5bd5baf9c2dfec4b145e7cac0a9e3458f52bc"
+    },
+    {
+      "source_path": "revision_R1/BUILD_MANIFEST.json",
+      "source_sha256": "efe2abdd64397623cbc7f6c936b240bf72eb8c651179b963c041c6a716b301ba",
+      "vendored_path": null
+    },
+    {
+      "source_path": "revision_R1/PACKAGE_MANIFEST.json",
+      "source_sha256": "ef61c661bbf32a68a4a9caef2af575852cf990cd220c150a3fe15f635562f725",
+      "vendored_path": null
+    }
+  ],
+  "runner_source_note": "The verified randomized runner is identified by SHA-256 above and is not copied or modified. temporal_ember_pilot/runner.py is independent causal orchestration; it uses the byte-identical vendored model, preprocessing, sampling, GAN, loss, metric, RNG, and config modules. Main-matrix schedules, state, and paths remain separate.",
+  "schema_version": 1,
+  "source_release": "revision_R1.0.1"
+}

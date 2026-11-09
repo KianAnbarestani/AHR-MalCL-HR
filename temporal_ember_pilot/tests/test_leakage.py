@@ -51,6 +51,7 @@ class LeakageTests(unittest.TestCase):
         for family, month in [("old", 1), ("skipped", 2), ("new_a", 3), ("later", 4)]:
             rows.extend(_row(f"{family}-{i}", month, family) for i in range(16))
         manifest = build_manifest(rows, initial_family_limit=1, admission_family_limit=1)
+        self.assertEqual(window_partitions(manifest, "2018-02_03")["acquisition_ids"], [])
         self.assertNotIn("skipped", manifest["admitted_families"])
         before_apr = window_partitions(manifest, "2018-04_05")
         lookup = {row["sha256"]: row for row in manifest["rows"]}
@@ -73,6 +74,23 @@ class LeakageTests(unittest.TestCase):
         self.assertEqual(febmar["scaler_fit_ids"], febmar["fit_ids"])
         self.assertTrue(set(febmar["scaler_fit_ids"]).isdisjoint(future))
         self.assertTrue(set(febmar["evaluation_ids"]).isdisjoint(train))
+
+    def test_every_window_view_is_current_or_past_training_only(self):
+        rows = []
+        for month, family in [(1, "a"), (2, "b"), (4, "c"), (6, "d"), (8, "e"), (10, "f")]:
+            rows.extend(_row(f"{family}-{i}", month, family) for i in range(32))
+        manifest = build_manifest(rows, initial_family_limit=1, admission_family_limit=1)
+        lookup = {row["sha256"]: row for row in manifest["rows"]}
+        for index, window_id in enumerate(WINDOW_IDS):
+            parts = window_partitions(manifest, window_id)
+            train = [lookup[sample_id] for sample_id in parts["train_ids"]]
+            fit = [lookup[sample_id] for sample_id in parts["scaler_fit_ids"]]
+            scoring = [lookup[sample_id] for sample_id in parts["evaluation_ids"]]
+            self.assertTrue(all(row["window_index"] == index and row["split"] == "train" for row in train))
+            self.assertTrue(all(row["window_index"] <= index and row["split"] == "train" for row in fit))
+            self.assertTrue(all(row["window_index"] == index and row["split"] == "heldout" for row in scoring))
+            expected_acquisition = [] if index <= 1 else manifest["admissions"][WINDOW_IDS[index - 1]]
+            self.assertEqual(set(parts["acquisition_families"]), set(expected_acquisition))
 
 
 if __name__ == "__main__":

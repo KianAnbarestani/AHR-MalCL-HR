@@ -191,7 +191,9 @@ def window_partitions(manifest: Mapping, window_id: str) -> dict:
     if index == 0:
         scoring_ids = [row["sha256"] for row in current_rows
                        if row["split"] == "heldout" and row["family"] in known_after]
-    new_previous = set(manifest["admissions"][window_ids[index - 1]]) if index > 0 else set()
+    # January's top-50 are the initial cohort, so they have no acquisition
+    # metric. Acquisition begins for families admitted at the first update.
+    new_previous = set(manifest["admissions"][window_ids[index - 1]]) if index > 1 else set()
     acquisition_ids = [row["sha256"] for row in current_rows
                        if row["split"] == "heldout" and row["family"] in new_previous]
     fit_ids = [row["sha256"] for row in rows
@@ -210,5 +212,6 @@ def window_partitions(manifest: Mapping, window_id: str) -> dict:
         "evaluation_ids": sorted(scoring_ids),
         "scoring_ids": sorted(scoring_ids),
         "acquisition_ids": sorted(acquisition_ids),
+        "acquisition_families": sorted(new_previous),
         "planned_current_ids": sorted(train_ids),
     }
