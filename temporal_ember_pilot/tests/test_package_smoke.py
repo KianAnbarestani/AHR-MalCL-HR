@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from temporal_ember_pilot.checkpoint import load_checkpoint, save_checkpoint
+from temporal_ember_pilot.checkpoint import load_checkpoint, save_checkpoint, sha256_file
+from temporal_ember_pilot.config import FROZEN_SCHEDULE_SHA256, validate_run_matrix
 from temporal_ember_pilot.engine import StopRequested, capture_rng_state, run_window
 from temporal_ember_pilot.report import export_report
 from temporal_ember_pilot.stream import WINDOWS, WINDOW_IDS, build_manifest, manifest_sha256, window_partitions
@@ -106,11 +107,50 @@ class PackageSmokeTests(unittest.TestCase):
                 records.append({
                     "status": "completed", "experiment_id": "ahrmalcl_temporal_ember18v2_newfamily_v1",
                     "run_id": f"{arm}_seed{seed}", "arm": arm, "seed": seed,
-                    "manifest_sha256": manifest["manifest_sha256"], "schedule_sha256": "a" * 64,
+                    "manifest_sha256": manifest["manifest_sha256"], "schedule_sha256": FROZEN_SCHEDULE_SHA256,
                     "final_checkpoint_sha256": hashlib.sha256(f"checkpoint-{arm}-{seed}".encode()).hexdigest(),
                     "window_records": window_rows,
                 })
         return records
+
+    def _write_checkpointed_results(self, output_root, manifest):
+        configs = {config.run_id: config for config in validate_run_matrix()}
+        for result in self._result_records(manifest):
+            config = configs[result["run_id"]]
+            result["evaluations"] = {}
+            run_dir = Path(output_root) / "runs" / config.run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            for index, window_id in enumerate(WINDOW_IDS):
+                state = {
+                    "run_metadata": {
+                        "experiment_id": config.experiment_id,
+                        "run_id": config.run_id,
+                        "arm": config.arm,
+                        "seed": config.seed,
+                        "manifest_sha256": manifest["manifest_sha256"],
+                        "schedule_sha256": result["schedule_sha256"],
+                        "device_type": "cpu",
+                    },
+                    "stream_cursor": {
+                        "next_window_index": index + 1,
+                        "last_completed_window": index,
+                        "window_id": window_id,
+                        "phase": "completed",
+                        "batch_index": 0,
+                    },
+                    "training_state": {},
+                    "optimizer_state": {},
+                    "scaler_state": None,
+                    "anchor_state": {},
+                    "class_map": {},
+                    "gan_state": {},
+                    "rng_state": {},
+                    "window_records": result["window_records"][:index + 1],
+                    "evaluations": {},
+                }
+                save_checkpoint(run_dir / f"window_{index}.pkl", state)
+            result["final_checkpoint_sha256"] = sha256_file(run_dir / f"window_{len(WINDOW_IDS) - 1}.pkl")
+            (run_dir / "result.json").write_text(json.dumps(result), encoding="utf-8")
 
     def test_checkpoint_resume_and_report_export_smoke(self):
         import numpy as np
@@ -179,11 +219,20 @@ class PackageSmokeTests(unittest.TestCase):
             self.assertEqual(continuous["scaler_state"], resumed["scaler_state"])
             self.assertEqual(continuous["anchor_state"], resumed["anchor_state"])
             self.assertEqual(continuous["class_map"], resumed["class_map"])
-            report = export_report(manifest, self._result_records(manifest), root / "report")
+            self._write_checkpointed_results(root, manifest)
+            result_path = root / "runs" / "full_hybrid_seed42" / "result.json"
+            corrupted = json.loads(result_path.read_text(encoding="utf-8"))
+            corrupted["run_id"] = "wrong-run-id"
+            corrupted["window_records"][2]["pre_update"]["macro_f1"] = 0.99
+            result_path.write_text(json.dumps(corrupted), encoding="utf-8")
+            report = export_report(manifest, root, root / "report")
             self.assertEqual(report["primary_result"]["window_count"], 5)
             self.assertEqual(len(report["runs"]), 9)
             self.assertTrue((root / "report" / "temporal_report.json").exists())
             self.assertTrue((root / "report" / "frozen_split_manifest.json.gz").exists())
+            repaired = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(repaired["run_id"], "full_hybrid_seed42")
+            self.assertEqual(repaired["window_records"][2]["pre_update"]["macro_f1"], 0.7)
 
     def test_notebook_has_four_ordered_steps_and_training_disabled(self):
         notebook_path = Path(__file__).parents[1] / "temporal_ember_pilot.ipynb"

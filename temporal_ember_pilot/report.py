@@ -11,7 +11,8 @@ import os
 from pathlib import Path
 import tempfile
 
-from .config import ARMS, EXPERIMENT_ID, SEEDS, validate_run_matrix
+from .checkpoint import load_latest_checkpoint, sha256_file
+from .config import ARMS, EXPERIMENT_ID, FROZEN_SCHEDULE_SHA256, SEEDS, validate_run_matrix
 from .stream import WINDOW_IDS, manifest_sha256, window_partitions
 
 
@@ -227,8 +228,8 @@ def _acquisition_rows(manifest: dict, by_pair: dict) -> list[dict]:
     return rows
 
 
-def export_report(manifest: dict, run_records, output_dir: str | Path) -> dict:
-    """Validate paired runs and export JSON/CSV plus the exact frozen manifest."""
+def _export_report_records(manifest: dict, run_records, output_dir: str | Path) -> dict:
+    """Validate paired in-memory records and export JSON/CSV plus the manifest."""
     records = list(run_records)
     by_pair = _validate_inputs(manifest, records)
     schedule_sha = next(iter({record["schedule_sha256"] for record in records}))
@@ -436,13 +437,86 @@ def _csv_bytes(fields: list[str], rows: list[dict]) -> bytes:
     return buffer.getvalue().encode("utf-8")
 
 
-def load_completed_run_records(output_root: str | Path) -> list[dict]:
-    """Load only result records from the isolated nine-run output root."""
+def _checkpoint_result_record(config, state: dict, checkpoint_path: Path,
+                              manifest_sha256: str | None = None,
+                              expected_schedule_sha256: str | None = None) -> dict:
+    metadata = state.get("run_metadata") or {}
+    identity = (metadata.get("experiment_id"), metadata.get("run_id"), metadata.get("arm"), metadata.get("seed"))
+    expected_identity = (config.experiment_id, config.run_id, config.arm, config.seed)
+    if identity != expected_identity:
+        raise ValueError(f"checkpoint identity differs from the approved run: {identity}")
+    observed_manifest = metadata.get("manifest_sha256")
+    if not observed_manifest or (manifest_sha256 is not None and observed_manifest != manifest_sha256):
+        raise ValueError("checkpoint manifest identity differs from the frozen manifest")
+    schedule_sha256 = metadata.get("schedule_sha256")
+    if not isinstance(schedule_sha256, str) or len(schedule_sha256) != 64:
+        raise ValueError("checkpoint has no valid frozen schedule identity")
+    expected_schedule = FROZEN_SCHEDULE_SHA256 if expected_schedule_sha256 is None else expected_schedule_sha256
+    if schedule_sha256 != expected_schedule:
+        raise ValueError("checkpoint schedule identity differs from the release-frozen schedule")
+    cursor = state.get("stream_cursor") or {}
+    if (int(cursor.get("next_window_index", -1)) != len(WINDOW_IDS)
+            or int(cursor.get("last_completed_window", -1)) != len(WINDOW_IDS) - 1):
+        raise ValueError(f"run {config.run_id} has no completed final-window checkpoint")
+    window_records = state.get("window_records")
+    if not isinstance(window_records, list) or [row.get("window_id") for row in window_records] != list(WINDOW_IDS):
+        raise ValueError(f"checkpoint for {config.run_id} lacks all six frozen window records")
+    evaluations = state.get("evaluations")
+    if not isinstance(evaluations, dict):
+        raise ValueError(f"checkpoint for {config.run_id} lacks evaluation state")
+    return {
+        "schema_version": 1,
+        "status": "completed",
+        "experiment_id": config.experiment_id,
+        "run_id": config.run_id,
+        "arm": config.arm,
+        "seed": config.seed,
+        "manifest_sha256": observed_manifest,
+        "schedule_sha256": schedule_sha256,
+        "final_checkpoint_sha256": sha256_file(checkpoint_path),
+        "window_records": window_records,
+        "evaluations": evaluations,
+    }
+
+
+def ensure_result_record(result_path: str | Path, config, state: dict,
+                         checkpoint_path: str | Path, manifest_sha256: str | None = None,
+                         expected_schedule_sha256: str | None = None) -> dict:
+    """Rebuild a missing or altered result JSON from its completed checkpoint."""
+    result_path = Path(result_path)
+    record = _checkpoint_result_record(
+        config, state, Path(checkpoint_path), manifest_sha256,
+        expected_schedule_sha256,
+    )
+    try:
+        existing = json.loads(result_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        existing = None
+    if existing != record:
+        content = (json.dumps(record, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
+        _atomic_bytes(result_path, content)
+    return record
+
+
+def load_completed_run_records(output_root: str | Path, manifest: dict | None = None) -> list[dict]:
+    """Verify or rebuild every result from its final checkpoint before reporting."""
     root = Path(output_root) / "runs"
     records = []
     for config in validate_run_matrix():
-        path = root / config.run_id / "result.json"
-        if not path.exists():
-            raise FileNotFoundError(f"missing completed run result: {path}")
-        records.append(json.loads(path.read_text(encoding="utf-8")))
+        run_dir = root / config.run_id
+        latest = load_latest_checkpoint(run_dir)
+        if latest is None:
+            raise FileNotFoundError(f"missing completed-window checkpoint for run {config.run_id}: {run_dir}")
+        checkpoint_path, state = latest
+        record = ensure_result_record(
+            run_dir / "result.json", config, state, checkpoint_path,
+            None if manifest is None else manifest.get("manifest_sha256"), FROZEN_SCHEDULE_SHA256,
+        )
+        records.append(record)
     return records
+
+
+def export_report(manifest: dict, output_root: str | Path, output_dir: str | Path) -> dict:
+    """Verify result JSON against final checkpoints, then export the paired report."""
+    records = load_completed_run_records(output_root, manifest)
+    return _export_report_records(manifest, records, output_dir)

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from temporal_ember_pilot.report import export_report
+from temporal_ember_pilot.report import _export_report_records
 from temporal_ember_pilot.stream import WINDOW_IDS, manifest_sha256
 from temporal_ember_pilot.config import ARMS, EXPERIMENT_ID, SEEDS
 
@@ -159,7 +159,7 @@ class ReportTests(unittest.TestCase):
     def test_primary_is_equal_window_paired_difference_with_each_seed_shown(self):
         manifest = _manifest()
         with tempfile.TemporaryDirectory() as tmp:
-            report = export_report(manifest, _records(manifest), tmp)
+            report = _export_report_records(manifest, _records(manifest), tmp)
         primary = report["primary_result"]
         self.assertEqual(primary["window_ids"], list(WINDOW_IDS[1:]))
         self.assertEqual(set(primary["per_seed"]), {str(seed) for seed in SEEDS})
@@ -175,7 +175,7 @@ class ReportTests(unittest.TestCase):
     def test_january_postfit_is_separate_and_acquisition_reports_sparse_and_october_unavailable(self):
         manifest = _manifest()
         with tempfile.TemporaryDirectory() as tmp:
-            report = export_report(manifest, _records(manifest), tmp)
+            report = _export_report_records(manifest, _records(manifest), tmp)
         first = report["runs"][0]["windows"][0]
         self.assertIsNone(first["pre_update_macro_f1"])
         self.assertIsNotNone(first["january_postfit_macro_f1"])
@@ -190,7 +190,7 @@ class ReportTests(unittest.TestCase):
     def test_report_exports_counts_budget_and_frozen_manifest(self):
         manifest = _manifest()
         with tempfile.TemporaryDirectory() as tmp:
-            report = export_report(manifest, _records(manifest), tmp)
+            report = _export_report_records(manifest, _records(manifest), tmp)
             self.assertTrue((Path(tmp) / "temporal_report.json").exists())
             self.assertTrue((Path(tmp) / "window_metrics.csv").exists())
             self.assertTrue((Path(tmp) / "new_family_acquisition.csv").exists())
@@ -205,9 +205,9 @@ class ReportTests(unittest.TestCase):
         rows = _records(manifest)
         rows[0]["window_records"][2]["scoring_ids_sha256"] = "d" * 64
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "scoring[- ]set"):
-            export_report(manifest, rows, tmp)
+            _export_report_records(manifest, rows, tmp)
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "exactly"):
-            export_report(manifest, _records(manifest)[:-1], tmp)
+            _export_report_records(manifest, _records(manifest)[:-1], tmp)
 
     def test_rejects_anchor_budget_mismatch_between_paired_hybrid_arms(self):
         manifest = _manifest()
@@ -215,7 +215,7 @@ class ReportTests(unittest.TestCase):
         anchor = next(row for row in rows if row["run_id"] == "anchor_only_seed42")
         anchor["window_records"][2]["planned_replay"]["anchor"] += 1
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "anchor budgets differ"):
-            export_report(manifest, rows, tmp)
+            _export_report_records(manifest, rows, tmp)
 
 
 if __name__ == "__main__":

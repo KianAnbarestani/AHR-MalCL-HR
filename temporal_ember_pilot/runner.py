@@ -146,6 +146,26 @@ def _torch_numpy():
     return np, torch
 
 
+def _configure_deterministic_backend(torch) -> dict[str, bool]:
+    """Set the backend flags that are part of the pilot's resume contract."""
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    return {
+        "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
+        "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+    }
+
+
+def _runtime_version_metadata(np, torch, sklearn, lief) -> dict[str, str]:
+    return {
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "torch": str(torch.__version__),
+        "scikit_learn": sklearn.__version__,
+        "lief": str(lief.__version__),
+    }
+
+
 def _cpu_tree(value, torch):
     if torch.is_tensor(value):
         return value.detach().cpu().clone()
@@ -265,8 +285,7 @@ def _new_state(config: PilotRunConfig, manifest: dict, schedule: dict, device) -
     torch.manual_seed(streams.dropout_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(streams.dropout_seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    deterministic_backend = _configure_deterministic_backend(torch)
     defaults = config.verified_defaults
     jan_families = manifest["admissions"][WINDOW_IDS[0]]
     class_map = {family: class_id for class_id, family in enumerate(jan_families)}
@@ -291,13 +310,8 @@ def _new_state(config: PilotRunConfig, manifest: dict, schedule: dict, device) -
             "manifest_sha256": manifest["manifest_sha256"],
             "schedule_sha256": schedule["schedule_sha256"],
             "device_type": torch.device(device).type,
-            "runtime_versions": {
-                "python": platform.python_version(),
-                "numpy": np.__version__,
-                "torch": str(torch.__version__),
-                "scikit_learn": sklearn.__version__,
-                "lief": str(lief.__version__),
-            },
+            "deterministic_backend": deterministic_backend,
+            "runtime_versions": _runtime_version_metadata(np, torch, sklearn, lief),
             "verified_config": defaults.payload(),
             "rng_stream_identity": _rng_stream_identity(streams),
         },
@@ -401,6 +415,12 @@ def _update_scaler(state: dict, manifest: dict, index: int, parts: dict, store):
 
 
 def _load_run_state(config, manifest, schedule, run_dir, device):
+    np, torch = _torch_numpy()
+    import lief
+    import sklearn
+
+    deterministic_backend = _configure_deterministic_backend(torch)
+    runtime_versions = _runtime_version_metadata(np, torch, sklearn, lief)
     loaded = load_latest_checkpoint(run_dir)
     if loaded is None:
         return _new_state(config, manifest, schedule, device)
@@ -415,9 +435,15 @@ def _load_run_state(config, manifest, schedule, run_dir, device):
     expected_rng_identity = _rng_stream_identity(_rng_streams(config))
     if meta.get("rng_stream_identity") != expected_rng_identity:
         raise ValueError("checkpoint named RNG stream identity differs from this run")
-    import torch
+    if meta.get("runtime_versions") != runtime_versions:
+        raise ValueError(
+            f"resume runtime versions differ from the saved run: saved={meta.get('runtime_versions')}, "
+            f"active={runtime_versions}; restore the original runtime versions before resuming"
+        )
     if meta.get("device_type") != torch.device(device).type:
         raise ValueError("resume device type differs from the saved run; resume with the same CPU/GPU mode")
+    if meta.get("deterministic_backend") != deterministic_backend:
+        raise ValueError("resume deterministic backend settings differ from the saved run")
     restore_rng_state(state["rng_state"], state.get("numpy_rng_generators", {}))
     return state
 
@@ -522,13 +548,11 @@ def _run_one(config, manifest, schedule, store, output_root, *, device, progress
     state = _load_run_state(config, manifest, schedule, run_dir, device)
     result_path = run_dir / "result.json"
     latest = load_latest_checkpoint(run_dir)
-    if latest and state["stream_cursor"]["next_window_index"] == len(WINDOW_IDS) and result_path.exists():
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-        latest_sha = sha256_file(latest[0])
-        if (result.get("status") == "completed" and result.get("manifest_sha256") == manifest["manifest_sha256"]
-                and result.get("schedule_sha256") == schedule["schedule_sha256"]
-                and result.get("final_checkpoint_sha256") == latest_sha):
-            return {"run_id": config.run_id, "status": "skipped_finished"}
+    if latest and state["stream_cursor"]["next_window_index"] == len(WINDOW_IDS):
+        from .report import ensure_result_record
+
+        ensure_result_record(result_path, config, state, latest[0], manifest["manifest_sha256"])
+        return {"run_id": config.run_id, "status": "skipped_finished"}
 
     classifier, generator, critic, defaults = _build_models(config, state, device)
     progress_line = progress_line or ProgressLine()
@@ -780,20 +804,9 @@ def _run_one(config, manifest, schedule, store, output_root, *, device, progress
         )
 
     final_checkpoint = run_dir / f"window_{len(WINDOW_IDS) - 1}.pkl"
-    result = {
-        "schema_version": 1,
-        "status": "completed",
-        "experiment_id": config.experiment_id,
-        "run_id": config.run_id,
-        "arm": config.arm,
-        "seed": config.seed,
-        "manifest_sha256": manifest["manifest_sha256"],
-        "schedule_sha256": schedule["schedule_sha256"],
-        "final_checkpoint_sha256": sha256_file(final_checkpoint),
-        "window_records": state["window_records"],
-        "evaluations": state["evaluations"],
-    }
-    _atomic_json(result_path, result)
+    from .report import ensure_result_record
+
+    ensure_result_record(result_path, config, state, final_checkpoint, manifest["manifest_sha256"])
     return {"run_id": config.run_id, "status": "completed", "result_path": str(result_path)}
 
 
@@ -855,17 +868,6 @@ def run_production_matrix(
     progress_line = progress_line or ProgressLine()
     results = []
     for config in validate_run_matrix():
-        run_dir = output_root / "runs" / config.run_id
-        latest = load_latest_checkpoint(run_dir)
-        result_path = run_dir / "result.json"
-        if latest and latest[1]["stream_cursor"]["next_window_index"] == len(WINDOW_IDS) and result_path.exists():
-            prior = json.loads(result_path.read_text(encoding="utf-8"))
-            if (prior.get("status") == "completed"
-                    and prior.get("manifest_sha256") == manifest["manifest_sha256"]
-                    and prior.get("schedule_sha256") == schedule["schedule_sha256"]
-                    and prior.get("final_checkpoint_sha256") == sha256_file(latest[0])):
-                results.append({"run_id": config.run_id, "status": "skipped_finished"})
-                continue
         results.append(_run_one(config, manifest, schedule, store, output_root,
                                 device=target_device, progress_line=progress_line,
                                 progress_registry=progress_registry))

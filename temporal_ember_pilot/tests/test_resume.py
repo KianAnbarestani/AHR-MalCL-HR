@@ -10,7 +10,10 @@ from temporal_ember_pilot.engine import (
 )
 from temporal_ember_pilot.config import ARMS, EXPERIMENT_ID, SEEDS, validate_run_matrix
 from temporal_ember_pilot.data import load_manifest
-from temporal_ember_pilot.runner import load_or_freeze_budget_schedule, run_production_matrix
+from temporal_ember_pilot.runner import (
+    _load_run_state, _rng_stream_identity, _rng_streams,
+    load_or_freeze_budget_schedule, run_production_matrix,
+)
 
 
 def _state(seed=42):
@@ -44,6 +47,21 @@ def _state(seed=42):
         "gan_state": {"weights": [0.1], "steps": 1},
         "rng_state": capture_rng_state(),
         "metrics": [],
+    }
+
+
+def _runtime_versions(torch):
+    import lief
+    import numpy as np
+    import platform
+    import sklearn
+
+    return {
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "torch": str(torch.__version__),
+        "scikit_learn": sklearn.__version__,
+        "lief": str(lief.__version__),
     }
 
 
@@ -143,6 +161,93 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(schedule["schedule_sha256"], "1d7ec52ff9988b6991106da05a9d96329c5179d71d1a934ce1fb431d4bce9170")
             self.assertEqual(load_or_freeze_budget_schedule(manifest, tmp), schedule)
             self.assertTrue((Path(tmp) / "frozen_budget_schedule.json").exists())
+
+    def test_fresh_resume_restores_and_checks_deterministic_backend_settings(self):
+        import torch
+
+        config = validate_run_matrix()[0]
+        manifest = {"manifest_sha256": "a" * 64}
+        schedule = {"schedule_sha256": "b" * 64}
+        state = _state()
+        state["numpy_rng_generators"] = {}
+        state["run_metadata"] = {
+            "experiment_id": config.experiment_id,
+            "run_id": config.run_id,
+            "arm": config.arm,
+            "seed": config.seed,
+            "manifest_sha256": manifest["manifest_sha256"],
+            "schedule_sha256": schedule["schedule_sha256"],
+            "device_type": "cpu",
+            "rng_stream_identity": _rng_stream_identity(_rng_streams(config)),
+            "runtime_versions": _runtime_versions(torch),
+            "deterministic_backend": {
+                "cudnn_deterministic": True,
+                "cudnn_benchmark": False,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            save_checkpoint(Path(tmp) / "window_0.pkl", state)
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.benchmark = True
+            _load_run_state(config, manifest, schedule, tmp, "cpu")
+            self.assertTrue(torch.backends.cudnn.deterministic)
+            self.assertFalse(torch.backends.cudnn.benchmark)
+
+    def test_resume_rejects_checkpoint_with_different_backend_settings(self):
+        import torch
+
+        config = validate_run_matrix()[0]
+        manifest = {"manifest_sha256": "a" * 64}
+        schedule = {"schedule_sha256": "b" * 64}
+        state = _state()
+        state["numpy_rng_generators"] = {}
+        state["run_metadata"] = {
+            "experiment_id": config.experiment_id,
+            "run_id": config.run_id,
+            "arm": config.arm,
+            "seed": config.seed,
+            "manifest_sha256": manifest["manifest_sha256"],
+            "schedule_sha256": schedule["schedule_sha256"],
+            "device_type": "cpu",
+            "rng_stream_identity": _rng_stream_identity(_rng_streams(config)),
+            "runtime_versions": _runtime_versions(torch),
+            "deterministic_backend": {
+                "cudnn_deterministic": False,
+                "cudnn_benchmark": False,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            save_checkpoint(Path(tmp) / "window_0.pkl", state)
+            with self.assertRaisesRegex(ValueError, "deterministic backend"):
+                _load_run_state(config, manifest, schedule, tmp, "cpu")
+
+    def test_resume_rejects_changed_runtime_versions(self):
+        import torch
+
+        config = validate_run_matrix()[0]
+        manifest = {"manifest_sha256": "a" * 64}
+        schedule = {"schedule_sha256": "b" * 64}
+        state = _state()
+        state["numpy_rng_generators"] = {}
+        state["run_metadata"] = {
+            "experiment_id": config.experiment_id,
+            "run_id": config.run_id,
+            "arm": config.arm,
+            "seed": config.seed,
+            "manifest_sha256": manifest["manifest_sha256"],
+            "schedule_sha256": schedule["schedule_sha256"],
+            "device_type": "cpu",
+            "rng_stream_identity": _rng_stream_identity(_rng_streams(config)),
+            "runtime_versions": {**_runtime_versions(torch), "torch": "different-version"},
+            "deterministic_backend": {
+                "cudnn_deterministic": True,
+                "cudnn_benchmark": False,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            save_checkpoint(Path(tmp) / "window_0.pkl", state)
+            with self.assertRaisesRegex(ValueError, "runtime versions differ"):
+                _load_run_state(config, manifest, schedule, tmp, "cpu")
 
     def test_stop_resume_matches_uninterrupted_training_optimizer_cursor_and_rng(self):
         window = {"window_id": "2018-02_03", "window_index": 1}
