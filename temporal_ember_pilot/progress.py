@@ -1,4 +1,9 @@
-"""Single-line console progress renderer and pilot-local progress JSON."""
+"""Single-line pilot progress using the verified R1 progress dimensions.
+
+The display keeps run/window/phase/epoch/batch fields, while this independent
+temporal runner uses its own pilot-only status JSON rather than R1's registry.
+The byte-identical R1 live-progress formatter is vendored for provenance.
+"""
 
 from __future__ import annotations
 

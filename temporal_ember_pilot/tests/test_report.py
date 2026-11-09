@@ -122,9 +122,21 @@ def _records(manifest):
                     "scoring_ids_sha256": score_id_sha,
                     "classifier_updates": 7 + index,
                     "planned_pool": {"full_hybrid": 400, "current": 200, "anchor": 100, "generated": 100},
-                    "realized_pool": {"total": 375, "current": 200, "anchor": 100, "generated": 75},
-                    "realized_replay": {"anchor": 100, "generated": 75},
-                    "generated_replay_output_count": 75,
+                    "realized_pool": {
+                        "total": 200 + (100 if arm in {"full_hybrid", "anchor_only"} else 0) + (75 if arm == "full_hybrid" else 0),
+                        "current": 200,
+                        "anchor": 100 if arm in {"full_hybrid", "anchor_only"} else 0,
+                        "generated": 75 if arm == "full_hybrid" else 0,
+                    },
+                    "planned_replay": {
+                        "anchor": 100 if arm in {"full_hybrid", "anchor_only"} else 0,
+                        "generated": 100 if arm == "full_hybrid" else 0,
+                    },
+                    "realized_replay": {
+                        "anchor": 100 if arm in {"full_hybrid", "anchor_only"} else 0,
+                        "generated": 75 if arm == "full_hybrid" else 0,
+                    },
+                    "generated_replay_output_count": 100 if arm == "full_hybrid" else 0,
                     "gan_compute_seconds": 1.0 if arm == "full_hybrid" else 0.0,
                     "gan_wall_seconds": 1.5 if arm == "full_hybrid" else 0.0,
                 })
@@ -196,6 +208,14 @@ class ReportTests(unittest.TestCase):
             export_report(manifest, rows, tmp)
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "exactly"):
             export_report(manifest, _records(manifest)[:-1], tmp)
+
+    def test_rejects_anchor_budget_mismatch_between_paired_hybrid_arms(self):
+        manifest = _manifest()
+        rows = _records(manifest)
+        anchor = next(row for row in rows if row["run_id"] == "anchor_only_seed42")
+        anchor["window_records"][2]["planned_replay"]["anchor"] += 1
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "anchor budgets differ"):
+            export_report(manifest, rows, tmp)
 
 
 if __name__ == "__main__":

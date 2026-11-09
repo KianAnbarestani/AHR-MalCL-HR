@@ -104,6 +104,18 @@ def _validate_inputs(manifest: dict, run_records: list[dict]) -> dict[tuple[str,
         raise ValueError("report matrix is incomplete; expected exactly the three arms by seeds 42, 43, and 44")
     if len(schedule_hashes) != 1:
         raise ValueError("all nine runs must share one frozen classifier-update schedule")
+    for seed in SEEDS:
+        full_rows = by_pair[("full_hybrid", seed)]["window_records"]
+        anchor_rows = by_pair[("anchor_only", seed)]["window_records"]
+        for index, (full, anchor) in enumerate(zip(full_rows, anchor_rows)):
+            full_planned = full.get("planned_replay") or {}
+            anchor_planned = anchor.get("planned_replay") or {}
+            full_realized = full.get("realized_replay") or {}
+            anchor_realized = anchor.get("realized_replay") or {}
+            if int(full_planned.get("anchor", -1)) != int(anchor_planned.get("anchor", -2)):
+                raise ValueError(f"Full Hybrid and Anchor-only planned anchor budgets differ in {WINDOW_IDS[index]}")
+            if int(full_realized.get("anchor", -1)) != int(anchor_realized.get("anchor", -2)):
+                raise ValueError(f"Full Hybrid and Anchor-only realized anchor budgets differ in {WINDOW_IDS[index]}")
 
     score_hash_by_window = {}
     update_count_by_window = {}
@@ -231,6 +243,9 @@ def export_report(manifest: dict, run_records, output_dir: str | Path) -> dict:
                 january = _metric_summary(row.get("january_post_fit"))
                 retention = _metric_summary(row.get("old_family_retention"))
                 acquisition = row.get("new_family_acquisition") or {}
+                planned_replay = row.get("planned_replay")
+                if not isinstance(planned_replay, dict):
+                    raise ValueError(f"run {record['run_id']} lacks arm-specific planned replay counts")
                 window = {
                     "window_id": row["window_id"],
                     "window_index": index,
@@ -262,8 +277,8 @@ def export_report(manifest: dict, run_records, output_dir: str | Path) -> dict:
                     "planned_pool": row.get("planned_pool", {}),
                     "realized_pool": row.get("realized_pool", {}),
                     "planned_replay": {
-                        "anchor": int(row.get("planned_pool", {}).get("anchor", 0)),
-                        "generated": int(row.get("planned_pool", {}).get("generated", 0)),
+                        "anchor": int(planned_replay.get("anchor", 0)),
+                        "generated": int(planned_replay.get("generated", 0)),
                     },
                     "realized_replay": row.get("realized_replay", {}),
                     "generated_replay_output_count": int(row.get("generated_replay_output_count", 0)),

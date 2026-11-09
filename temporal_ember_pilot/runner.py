@@ -742,6 +742,12 @@ def _run_one(config, manifest, schedule, store, output_root, *, device, progress
                     "anchor": int(planned["planned_anchor_rows"]),
                     "generated": int(planned["planned_generated_rows"]),
                 },
+                "planned_replay": {
+                    "anchor": int(planned["planned_anchor_rows"])
+                    if config.arm in {"full_hybrid", "anchor_only"} else 0,
+                    "generated": int(planned["planned_generated_rows"])
+                    if config.arm == "full_hybrid" else 0,
+                },
                 "realized_pool": actual_pool_counts,
                 "realized_replay": {"anchor": realized_anchor_count, "generated": realized_generated_count},
                 "generated_replay_output_count": generated_output_count,

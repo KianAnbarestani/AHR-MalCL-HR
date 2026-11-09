@@ -10,7 +10,7 @@ from temporal_ember_pilot.engine import (
 )
 from temporal_ember_pilot.config import ARMS, EXPERIMENT_ID, SEEDS, validate_run_matrix
 from temporal_ember_pilot.data import load_manifest
-from temporal_ember_pilot.runner import load_or_freeze_budget_schedule
+from temporal_ember_pilot.runner import load_or_freeze_budget_schedule, run_production_matrix
 
 
 def _state(seed=42):
@@ -122,6 +122,10 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual({config.arm for config in configs}, set(ARMS))
         self.assertEqual({config.seed for config in configs}, set(SEEDS))
         self.assertTrue(all(config.experiment_id == EXPERIMENT_ID for config in configs))
+
+    def test_production_runner_is_disabled_without_explicit_opt_in(self):
+        with self.assertRaisesRegex(RuntimeError, "production training is disabled"):
+            run_production_matrix(archive_path="missing-archive", manifest_path="missing-manifest")
 
     def test_planned_budget_uses_fixed_hybrid_pool_quota(self):
         counts = planned_pool_counts(128, {"old_a": 40, "old_b": 200})
