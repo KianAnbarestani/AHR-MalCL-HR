@@ -18,7 +18,7 @@ The package does not contain production outputs or checkpoints. Codex did not la
 
 ## Launch in Colab
 
-1. Download `temporal_ember_pilot.zip`, `temporal_ember_pilot.zip.sha256`, and `temporal_ember_pilot.ipynb` from the handoff. Put all three files in `MyDrive/AHR-MalCL-temporal-ember-pilot/` without renaming them.
+1. Download `release/temporal_ember_pilot.zip` and its `release/temporal_ember_pilot.zip.sha256` sidecar, plus `temporal_ember_pilot.ipynb` from this package. Put all three files in `MyDrive/AHR-MalCL-temporal-ember-pilot/` without renaming them. The notebook checksum is also in `release/temporal_ember_pilot.ipynb.sha256`.
 2. Open the notebook in Colab. Choose a GPU runtime before enabling training. The initial feature store is about 7.1 GiB; allow room in Drive for the archive, feature store, and checkpoints. Audit alone runs on CPU.
 3. Run the notebook's **Setup** step and authorize the Drive mount. Setup verifies the ZIP checksum, extracts the standalone package, and installs the pinned data-vectorization dependencies. The output root is `MyDrive/AHR-MalCL-temporal-ember-pilot/outputs/ahrmalcl_temporal_ember18v2_newfamily_v1/`.
 4. Run **Audit**. If needed, it downloads the official archive to the pilot's `data/` folder, checks the published SHA-256, performs the CPU audit, and verifies that the resulting manifest equals the shipped frozen manifest.
