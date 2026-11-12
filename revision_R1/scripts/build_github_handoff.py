@@ -31,6 +31,8 @@ EXTRA_TESTS = (
     "test_runtime_compatibility.py",
     "test_storage_auth.py",
     "test_taskwise_matrix.py",
+    "test_worker_ranges.py",
+    "test_taskwise_merge.py",
 )
 EXTRA_FILES = (
     "CHECKPOINT_COMPATIBILITY.md",
@@ -52,6 +54,7 @@ SCRIPT_FILES = (
     "scripts/production_recovery.py",
     "scripts/storage_auth.py",
     "scripts/taskwise_matrix.py",
+    "scripts/taskwise_merge.py",
 )
 CONFIG_FILES = (
     "configs/legacy_v1_2_first_run_identity.json",
@@ -1932,17 +1935,51 @@ print(json.dumps({
     set_source(4, cell_d)
     set_source(5, '''# Cell E — Run 1 is already finalized and remains skipped.\nprint("ALREADY_FINALIZED_COMPLETED_RUN — Run 1 was imported from its verified existing registry entry.")\nprint("No training, model loading, result export, or registry rewrite occurs in this cell.")\n''')
 
-    cell_f = r'''# Cell F — the only launch/resume cell. Disabled by default.
+    cell_f = r'''# Cell F — inclusive worker range; launch/resume disabled by default.
+from pathlib import Path
 import json, time
-from scripts.taskwise_matrix import run_taskwise_matrix
+from scripts.taskwise_matrix import (
+    build_worker_assignments, first_unfinished_run, next_task_id,
+    prepare_matrix_progress, read_canonical_progress, run_taskwise_matrix,
+    select_worker_assignment, validate_matrix_progress, worker_local_paths,
+)
 
+START_RUN = 1   # Original worker: 1,60 resumes Run 44 from its existing progress.
+END_RUN = 60   # Other workers: 61,80 and 81,100, respectively; both ends inclusive.
 LAUNCH_MATRIX = False
-ACKNOWLEDGE_SINGLE_WORKER = False
+ACKNOWLEDGE_SINGLE_WORKER = False  # Only one worker per declared range/storage route.
+WORKER_ASSIGNMENTS = build_worker_assignments(LOGICAL_OUTPUT_ROOT, LOGICAL_CHECKPOINT_ROOT)
+_worker = select_worker_assignment(WORKER_ASSIGNMENTS, START_RUN, END_RUN)
+_worker_output, _worker_checkpoints = worker_local_paths(_worker, OUTPUT_ROOT, CHECKPOINT_ROOT)
+_worker_progress_path = _worker_output / 'matrix_progress.json'
+print(json.dumps({'worker': _worker, 'local_output_root': str(_worker_output),
+                  'local_checkpoint_root': str(_worker_checkpoints)}, indent=2), flush=True)
 if not LAUNCH_MATRIX:
-    print("NOT_LAUNCHED: set LAUNCH_MATRIX=True only after reviewing Cells C–E and confirming this is the only Colab worker.")
+    print("NOT_LAUNCHED: review the range/paths, then enable launch and acknowledge one worker for this assignment.")
 else:
     if ACKNOWLEDGE_SINGLE_WORKER is not True:
-        raise RuntimeError("Confirm that no other Colab worker is using this matrix; leases are intentionally not used.")
+        raise RuntimeError("Confirm no other worker is using this range or its storage routes.")
+    # Cell C's original roots remain unchanged, so rerunning F cannot nest routes.
+    STORAGE_ADAPTER.bind_root(_worker['output_root'], _worker_output)
+    STORAGE_ADAPTER.bind_root(_worker['checkpoint_root'], _worker_checkpoints)
+    _original = read_canonical_progress(
+        MATRIX_PROGRESS_PATH, logical_progress_path=LOGICAL_MATRIX_PROGRESS_PATH,
+        storage_adapter=STORAGE_ADAPTER,
+    )
+    validate_matrix_progress(_original, RUNTIME_PLAN)
+    if _worker['worker_id'] == 'original':
+        _worker_progress = _original  # Never initialize or move the active original worker.
+    else:
+        _run1 = _original['runs'][0]
+        _worker_progress = prepare_matrix_progress(
+            RUNTIME_PLAN, local_progress_path=_worker_progress_path,
+            logical_progress_path=_worker['progress_path'], storage_adapter=STORAGE_ADAPTER,
+            run1_checkpoint_paths=[task['checkpoint_path'] for task in _run1['tasks']],
+            run1_registry_evidence=_run1['completion_provenance'],
+        )
+    _next = first_unfinished_run(_worker_progress, start_run=START_RUN, end_run=END_RUN)
+    print('Next in range:', None if _next is None else _next['run_index'],
+          'Task:', None if _next is None else next_task_id(_next), flush=True)
     _last_progress_print = 0.0
     def _matrix_console_progress(event):
         global _last_progress_print
@@ -1957,16 +1994,17 @@ else:
 
     MATRIX_RESULT = run_taskwise_matrix(
         RUNTIME_PLAN,
-        progress_path=MATRIX_PROGRESS_PATH,
-        logical_progress_path=LOGICAL_MATRIX_PROGRESS_PATH,
+        progress_path=_worker_progress_path,
+        logical_progress_path=_worker['progress_path'],
         data_roots=DATA_ROOTS, cache_root=CACHE_ROOT, preflight=PREFLIGHT,
         schedule_path=EFFECTIVE_SCHEDULE_PATH,
         schedule_manifest_path=EFFECTIVE_SCHEDULE_MANIFEST_PATH,
-        output_root=OUTPUT_ROOT, logical_output_root=LOGICAL_OUTPUT_ROOT,
-        checkpoint_root=CHECKPOINT_ROOT, logical_checkpoint_root=LOGICAL_CHECKPOINT_ROOT,
+        output_root=_worker_output, logical_output_root=_worker['output_root'],
+        checkpoint_root=_worker_checkpoints, logical_checkpoint_root=_worker['checkpoint_root'],
         storage_adapter=STORAGE_ADAPTER,
         launch_enabled=LAUNCH_MATRIX,
         acknowledge_single_worker=ACKNOWLEDGE_SINGLE_WORKER,
+        start_run=START_RUN, end_run=END_RUN, worker_assignments=WORKER_ASSIGNMENTS,
         device="cuda", progress_callback=_matrix_console_progress,
     )
     print(json.dumps(MATRIX_RESULT, sort_keys=True, indent=2, default=str))

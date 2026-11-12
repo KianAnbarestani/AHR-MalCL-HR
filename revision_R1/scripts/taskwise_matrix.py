@@ -148,8 +148,84 @@ def validate_matrix_progress(progress: dict[str, Any], plan: dict[str, Any]) -> 
         raise ValueError("Run 1 must remain imported as already complete from its existing registry")
 
 
-def first_unfinished_run(progress: dict[str, Any]) -> dict[str, Any] | None:
-    return next((row for row in progress["runs"] if not row["run_complete"]), None)
+def validate_run_range(start_run: int, end_run: int) -> None:
+    if (type(start_run) is not int or type(end_run) is not int
+            or not 1 <= start_run <= end_run <= RUN_COUNT):
+        raise ValueError("inclusive run range must be integers with 1 <= START_RUN <= END_RUN <= 100")
+
+
+def _lexical_path(value: str | Path) -> Path:
+    # Do not resolve mounted shared-folder shortcuts into physical target paths.
+    return Path(os.path.abspath(str(Path(value).expanduser())))
+
+
+def build_worker_assignments(logical_output_root: str | Path, logical_checkpoint_root: str | Path) -> list[dict[str, Any]]:
+    """Keep the original worker's exact routes; place new workers in sibling trees."""
+    output, checkpoint = _lexical_path(logical_output_root), _lexical_path(logical_checkpoint_root)
+    assignments = []
+    for start, end in ((1, 60), (61, 80), (81, 100)):
+        worker_id = "original" if start == 1 else f"runs_{start:03d}_{end:03d}"
+        worker_output = output if start == 1 else output.parent / "workers" / worker_id / "results"
+        worker_checkpoint = checkpoint if start == 1 else checkpoint.parent / "workers" / worker_id / "checkpoints"
+        assignments.append({
+            "worker_id": worker_id, "start_run": start, "end_run": end,
+            "progress_path": str(worker_output / PROGRESS_NAME),
+            "output_root": str(worker_output), "checkpoint_root": str(worker_checkpoint),
+        })
+    validate_worker_assignments(assignments)
+    return assignments
+
+
+def validate_worker_assignments(assignments: list[dict[str, Any]]) -> None:
+    if not isinstance(assignments, list) or not assignments:
+        raise ValueError("worker assignments must be a nonempty list")
+    seen = set()
+    for index, assignment in enumerate(assignments):
+        validate_run_range(assignment.get("start_run"), assignment.get("end_run"))
+        worker_id = assignment.get("worker_id")
+        if not isinstance(worker_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+", worker_id) or worker_id in seen:
+            raise ValueError("worker IDs must be unique safe names")
+        seen.add(worker_id)
+        paths = []
+        for field in ("progress_path", "output_root", "checkpoint_root"):
+            if not isinstance(assignment.get(field), str) or not Path(assignment[field]).is_absolute():
+                raise ValueError(f"worker {worker_id} requires an absolute {field}")
+            paths.append(_lexical_path(assignment[field]))
+        if paths[0].name != PROGRESS_NAME or paths[0].parent != paths[1]:
+            raise ValueError(f"worker {worker_id} progress must be output_root/{PROGRESS_NAME}")
+        if paths[1] == paths[2] or paths[1] in paths[2].parents or paths[2] in paths[1].parents:
+            raise ValueError(f"worker {worker_id} output/checkpoint paths overlap")
+        for other in assignments[:index]:
+            if max(assignment['start_run'], other['start_run']) <= min(assignment['end_run'], other['end_run']):
+                raise ValueError(f"worker ranges overlap: {other['worker_id']} / {worker_id}")
+            for path in paths:
+                for field in ("progress_path", "output_root", "checkpoint_root"):
+                    previous = _lexical_path(other[field])
+                    if path == previous or path in previous.parents or previous in path.parents:
+                        raise ValueError(f"worker storage paths overlap: {other['worker_id']} / {worker_id}: {path}")
+
+
+def select_worker_assignment(assignments: list[dict[str, Any]], start_run: int, end_run: int) -> dict[str, Any]:
+    validate_run_range(start_run, end_run)
+    validate_worker_assignments(assignments)
+    matches = [a for a in assignments if (a['start_run'], a['end_run']) == (start_run, end_run)]
+    if len(matches) != 1:
+        raise ValueError("START_RUN/END_RUN must match exactly one declared worker assignment")
+    return matches[0]
+
+
+def worker_local_paths(assignment: dict[str, Any], output_root: str | Path, checkpoint_root: str | Path) -> tuple[Path, Path]:
+    output, checkpoint = _lexical_path(output_root), _lexical_path(checkpoint_root)
+    if assignment['worker_id'] != 'original':
+        output = output.parent / 'workers' / assignment['worker_id'] / 'results'
+        checkpoint = checkpoint.parent / 'workers' / assignment['worker_id'] / 'checkpoints'
+    return output, checkpoint
+
+
+def first_unfinished_run(progress: dict[str, Any], *, start_run: int = 1, end_run: int = RUN_COUNT) -> dict[str, Any] | None:
+    validate_run_range(start_run, end_run)
+    return next((row for row in progress["runs"]
+                 if start_run <= row['run_index'] <= end_run and not row["run_complete"]), None)
 
 
 def first_unfinished_task(run: dict[str, Any]) -> dict[str, Any] | None:
@@ -441,21 +517,34 @@ def run_taskwise_matrix(
     storage_adapter, launch_enabled: bool = False, acknowledge_single_worker: bool = False,
     device: str = "cuda", progress_callback=None, fault_hook=None,
     bundle_loader=None, runner_fn=None,
+    start_run: int = 1, end_run: int = RUN_COUNT,
+    worker_assignments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Run/resume the first unfinished frozen run, persisting only task boundaries."""
+    """Run/resume unfinished frozen runs within an inclusive worker assignment."""
     from revision_r1 import runner as runner_module
     from revision_r1.config import make_run_config
     from scripts.production_workflow import validate_runtime_bound_plan
 
+    validate_run_range(start_run, end_run)
+    if worker_assignments is not None:
+        assignment = select_worker_assignment(worker_assignments, start_run, end_run)
+        for field, actual in (("progress_path", logical_progress_path),
+                              ("output_root", logical_output_root),
+                              ("checkpoint_root", logical_checkpoint_root)):
+            if _lexical_path(actual) != _lexical_path(assignment[field]):
+                raise ValueError(f"selected worker {field} differs from the declared assignment")
+    elif (start_run, end_run) != (1, RUN_COUNT):
+        raise ValueError("bounded workers require the full nonoverlapping worker_assignments declaration")
     validate_runtime_bound_plan(plan, schedule_path, schedule_manifest_path, preflight)
     progress = read_canonical_progress(
         progress_path, logical_progress_path=logical_progress_path, storage_adapter=storage_adapter,
     )
     validate_matrix_progress(progress, plan)
     if not launch_enabled:
-        return {"status": "NOT_LAUNCHED", "next_run": first_unfinished_run(progress), "progress_path": str(logical_progress_path)}
+        return {"status": "NOT_LAUNCHED", "next_run": first_unfinished_run(progress, start_run=start_run, end_run=end_run),
+                "start_run": start_run, "end_run": end_run, "progress_path": str(logical_progress_path)}
     if acknowledge_single_worker is not True:
-        raise RuntimeError("explicitly confirm only one Colab worker is using this matrix")
+        raise RuntimeError("explicitly confirm only one Colab worker is using this assignment and its storage paths")
     if device != "cuda" or not torch.cuda.is_available():
         raise RuntimeError("production matrix execution requires an available CUDA device")
     storage_adapter.bind_root(logical_output_root, output_root)
@@ -466,7 +555,7 @@ def run_taskwise_matrix(
     checkpoint_base.mkdir(parents=True, exist_ok=True)
     callback = progress_callback or (lambda _event: None)
     load_bundle = bundle_loader or _load_bundle
-    run = first_unfinished_run(progress)
+    run = first_unfinished_run(progress, start_run=start_run, end_run=end_run)
     while run is not None:
         next_task = next_task_id(run)
         if next_task is None:
@@ -544,6 +633,8 @@ def run_taskwise_matrix(
         if completion_publication.get("status") not in {"PASS", "UNCHANGED_VERIFIED_METADATA"}:
             raise RuntimeError(f"Drive did not verify completed-run progress publication: {completion_publication}")
         callback({"status": "RUN_COMPLETE", "run_index": run["run_index"], "run_key": run["run_key"]})
-        run = first_unfinished_run(progress)
-    return {"status": "MATRIX_COMPLETE", "completed_runs": RUN_COUNT,
+        run = first_unfinished_run(progress, start_run=start_run, end_run=end_run)
+    return {"status": "MATRIX_COMPLETE" if (start_run, end_run) == (1, RUN_COUNT) else "RANGE_COMPLETE",
+            "start_run": start_run, "end_run": end_run,
+            "completed_runs": sum(row['run_complete'] for row in progress['runs'][start_run - 1:end_run]),
             "progress_path": str(logical_progress_path)}
